@@ -1098,6 +1098,12 @@ static float  g_dpiFix = 1.f;              /* 1 = no scaling applied      */
  * once g_devW is 1200 there is nothing left to say whether that was 800 at
  * 150% or 1200 at 100%, so the second rebuild would scale it again. */
 static int   g_baseW = 0, g_baseH = 0;
+/* variablewinsize(): the window carries WS_THICKFRAME | WS_MAXIMIZEBOX
+ * so the user can drag its border and hit the maximise button.  Read by
+ * initgraph() when the window is created, so calling the setter before
+ * initgraph() needs no extra work, and calling it afterwards rebuilds
+ * the frame of the live window instead. */
+static bool  g_varWinSize = false;
 
 /* Whether fixhighdpi(true) is in force.  Held separately from g_dpiFix
  * because at 100% the factor is legitimately 1.f, which would be
@@ -1303,6 +1309,13 @@ static void gxFillMouse(ExMessage* m, UINT msg, LPARAM l, int wheel) {
     m->rbutton = (GetKeyState(VK_RBUTTON) < 0);
 }
 
+/* WM_SIZE has to rebuild the canvas, but gxResizeCanvas() is defined far
+ * below, next to the rest of the resize code.  Declared here so the call
+ * in gxWndProc() is not an implicit one - an implicit declaration is
+ * typed int(void), which then clashes with the real static definition
+ * ("static declaration follows non-static declaration"). */
+static void gxResizeCanvas(int w, int h);
+
 static LRESULT CALLBACK gxWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     ExMessage em;
     switch (m) {
@@ -1378,6 +1391,39 @@ static LRESULT CALLBACK gxWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_SETFOCUS: case WM_KILLFOCUS: {
         memset(&em, 0, sizeof(em));
         em.message = (USHORT)m;
+        gxMsgPush(&em);
+        return 0;
+    }
+    case WM_SIZE: {
+        /* Reachable in two ways: the user dragging a border (only when
+         * variablewinsize(true) gave the window one), and setwinsize() /
+         * fixhighdpi() moving it programmatically.  Either way the window
+         * has already changed, so the canvas has to follow it.
+         *
+         * SIZE_MINIMIZED reports a 0x0 client area - shrinking the canvas
+         * to that would throw the picture away and then fail to allocate,
+         * so it is skipped and the old size is kept until the window is
+         * restored, at which point WM_SIZE arrives again. */
+        if (g_glReady && g_hwnd && w != SIZE_MINIMIZED) {
+            int nw = (int)LOWORD(l), nh = (int)HIWORD(l);
+            if (nw >= 1 && nh >= 1) {
+                gxResizeCanvas(nw, nh);
+                /* Keep the logical size in step: it is what a rebuilt
+                 * window starts from, and what setwinsize() left behind is
+                 * now stale. */
+                g_baseW = (int)((float)nw / g_dpiFix + 0.5f);
+                g_baseH = (int)((float)nh / g_dpiFix + 0.5f);
+            }
+        }
+        memset(&em, 0, sizeof(em));
+        em.message = (USHORT)WM_SIZE;
+        /* Nothing else is filled in.  The size deliberately does NOT ride
+         * in x / y: ExMessage has no width / height field, and stuffing an
+         * unrelated field would make the struct mean something different
+         * here than it does everywhere else.  Read the new size with
+         * getwidth() / getheight() - they report the LOGICAL extent, which
+         * is the number a resize handler wants, and when the resize was
+         * skipped (minimised) they report the size that was kept. */
         gxMsgPush(&em);
         return 0;
     }
@@ -6243,6 +6289,66 @@ static MOUSEMSG gxGetMsgMouse(BYTE filter) {
     return m;
 }
 
+/* variablewinsize(): the WM_SIZE watchers.
+ *
+ * Pure convenience - nothing here that peekmessage(&m, EX_WINDOW) and a
+ * test against WM_SIZE cannot already do - but EX_WINDOW also covers
+ * WM_MOVE, WM_SETFOCUS, WM_KILLFOCUS and WM_CLOSE, so the caller has to
+ * remember to compare m.message against WM_SIZE, and that is the one step
+ * everybody forgets.
+ *
+ * Deliberately no ExMessage anywhere in the signature: this call answers
+ * one question only - has a resize arrived yet - and the thing the caller
+ * actually wants, the new size, is what getwidth() / getheight() report
+ * right afterwards.  Handing back an ExMessage would mean smuggling the
+ * size in through some unrelated field, since ExMessage has no width /
+ * height, and that is a worse API than just reading getwidth().
+ *
+ * Removal follows gxPeekEx(): everything in front of the match goes too,
+ * so the queue keeps its order. */
+static bool gxPeekVarMsg(bool remove) {
+    int i;
+    gxPump();
+    for (i = 0; i < g_msgCount; i++) {
+        ExMessage* e = gxMsgAt(i);
+        if (e->message == (USHORT)WM_SIZE) {
+            if (remove) {
+                while (g_msgCount > 0) {
+                    ExMessage* h2 = gxMsgAt(0);
+                    bool same = (h2 == e);
+                    gxMsgPop();
+                    if (same) break;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The blocking half.  Waits for a WM_SIZE and nothing else - which means
+ * it waits forever if the window never changes size, i.e. when
+ * variablewinsize() is off and nothing calls setwinsize() / fixhighdpi().
+ * That is the same contract getmessage() has, but it is a much easier way
+ * to hang a program, so gxPeekVarMsg() is the one to reach for in a loop
+ * that also has to keep drawing.
+ *
+ * Returns nothing on purpose: a blocking call has no interesting answer to
+ * hand back - it either waited, or the window went away - and the thing the
+ * caller actually wants, the new size, is what getwidth() / getheight()
+ * report afterwards.  The matched message is consumed, and so is anything
+ * queued in front of it, which is what gxPeekVarMsg() has always done.
+ *
+ * No ExMessage is handed back either - see gxPeekVarMsg(). */
+static void gxWaitVarMsg(void) {
+    for (;;) {
+        gxPump();
+        if (gxPeekVarMsg(true)) return;
+        if (!g_hwnd) return;            /* no window: never block */
+        WaitMessage();
+    }
+}
+
 static void gx_flushmsg_all(void) { gxMsgInit(); gxPump(); gxMsgInit(); }
 GX_INLINE void FlushMouseMsgBuffer(void) { gx_flushmsg_all(); }
 GX_INLINE bool MouseHit(void) {
@@ -7153,6 +7259,10 @@ static HWND gxInitGraph(int w, int h) {
     /* EX_NOMINIMIZE removes the button, INIT_MINIMIZE (easygl) only starts
      * the window iconified - the two are unrelated. */
     if (g_initFlag & NOMINIMIZE) style &= ~WS_MINIMIZEBOX;
+    /* variablewinsize(true) called before initgraph(): build the window
+     * with the frame already on, so there is no redraw on startup.  It wins
+     * over EX_NOMINIMIZE on the maximise button - see the note there. */
+    if (g_varWinSize) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
     rc.left = 0; rc.top = 0; rc.right = w; rc.bottom = h;
     AdjustWindowRect(&rc, style, FALSE);
     g_hwnd = CreateWindowExA(0, "GX_OpenGL_Window", "OpenGL", style,
@@ -7402,6 +7512,10 @@ static void setaspectratio(float sx, float sy) {
  * It lives next to the DPI code because that is what needed it first
  * (fixhighdpi() changes the window size), but it is a general facility. */
 static void gxResizeMainWindow(int w, int h);
+/* The canvas half of a resize, with no SetWindowPos(): gxWndProc()
+ * calls it from WM_SIZE, where the window has already changed and
+ * moving it again would re-enter this code forever. */
+static void gxResizeCanvas(int w, int h);
 GX_INLINE void setwinsize(int w, int h) {
     /* The logical size, so it is what a later rebuild scales from. */
     g_baseW = w; g_baseH = h;
@@ -7429,10 +7543,152 @@ GX_INLINE void getwindevsize(int* w, int* h) {
     if (h) *h = g_devH;
 }
 
-static void gxResizeMainWindow(int w, int h) {
-    DWORD style;
-    RECT rc;
-    if (!g_glReady || !g_hwnd) return;
+/* Give the window a resizable frame (WS_THICKFRAME | WS_MAXIMIZEBOX), or
+ * take it away again.
+ *
+ * EXPERIMENTAL.  It works, but it makes the window size something the
+ * program no longer controls, and everything in this library was written
+ * on the assumption that initgraph() settles the size once and for all.
+ * Read the notes below before using it.
+ *
+ * May be called before or after initgraph():
+ *   - before: the flag is remembered and the window is created with the
+ *     frame already in place, so there is no visible flicker;
+ *   - after:  the frame of the live window is changed with SetWindowLong()
+ *     + SWP_FRAMECHANGED.  The client area keeps its size, so no resize
+ *     happens on this call.
+ *
+ * What the program has to do
+ * --------------------------
+ *   int w, h;
+ *   getwinsize(&w, &h);        - the current LOGICAL size, every frame
+ *
+ * The canvas is rebuilt to the new size, so getwinsize() / getwindevsize()
+ * and getwidth() / getheight() all follow the window.  Nothing is scaled:
+ * the picture is not stretched to fit, the drawing surface simply becomes
+ * bigger or smaller, so layout has to be computed from the current size
+ * rather than from the numbers passed to initgraph().  A program that
+ * caches those numbers once will draw into the wrong place after a resize.
+ *
+ * The canvas is cleared to the background colour - see gxResizeCanvas() for
+ * why it is the whole canvas and not only the part the window gained.  In
+ * other words a resize discards the picture, so anything drawn outside the
+ * main loop has to be drawn again.  In RENDER_AUTO (the default) a loop that
+ * redraws every frame needs no extra code.
+ *
+ * A WM_SIZE is pushed to the message queue on every resize, so a program
+ * that wants an event instead of polling can watch for it with
+ * peekmessage(&m, EX_WINDOW) and compare m.message against WM_SIZE - or
+ * simply call peekvariablemsg() / waitvariablemsg(), which do exactly that.
+ * Neither one carries the size: read it with getwidth() / getheight().
+ *
+ * Order
+ * -----
+ *   Calling this BEFORE initgraph() is the clean way: the window is then
+ *   built with the frame already on, so nothing has to be re-measured.
+ *   Calling it afterwards still works - the frame grows outward so the
+ *   client area (and therefore the coordinate space) is kept - but it is
+ *   a second SetWindowPos() and, on a window that cannot grow, a canvas
+ *   rebuild.
+ *
+ * Limits
+ * ------
+ *   - Dragging a border puts DefWindowProc() into a modal loop that
+ *     suspends the program, so nothing is presented mid-drag; the frame is
+ *     repainted by the WM_PAINT handler and the picture resumes when the
+ *     drag ends.
+ *   - Nothing clamps the size.  A very small window makes g_devW / g_devH
+ *     small, which is legal but may make the content unreadable, and a
+ *     canvas has to be allocated at whatever size is asked for.
+ *   - The maximise button is turned on even when initgraph() was given
+ *     EX_NOMINIMIZE; this call is the more specific request and wins. */
+/* Make the live window's frame agree with g_varWinSize.  Split out of
+ * variablewinsize() because a rebuilt window needs the frame back too: it
+ * is a per-window property exactly like vsync, MSAA, the image filter and
+ * the DPI fix, so gxApplyWindowState() - the "reapply everything after a
+ * rebuild" hook - calls this along with them.  Without it the flag would
+ * only ever be honoured by the one CreateWindowEx() call inside
+ * gxInitGraph(), and any other rebuild would silently drop the frame.
+ *
+ * Idempotent, which is what makes it safe to run on every rebuild: when
+ * the style already matches, the rect asked for below is the one the
+ * window already has, so SetWindowPos() changes nothing, no WM_SIZE
+ * arrives and the canvas is left alone. */
+static void gxRestoreVarWin(void) {
+    LONG st;
+    RECT rc, cr;
+    if (!g_hwnd) return;          /* no window yet: initgraph() reads the flag */
+
+    st = GetWindowLongA(g_hwnd, GWL_STYLE);
+    if (g_varWinSize) st |=  (LONG)(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    else              st &= ~(LONG)(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    /* Already what was asked for: leave the window completely alone.  This
+     * is the case on every rebuild that did not change the setting, and it
+     * is what keeps gxApplyWindowState() from resizing a window that is
+     * already correct - a SetWindowPos() here would be harmless but it is
+     * one more round trip through the window manager on each initgraph(). */
+    if (st == GetWindowLongA(g_hwnd, GWL_STYLE)) return;
+    SetWindowLongA(g_hwnd, GWL_STYLE, st);
+
+    /* The frame is not the same thickness as the one it replaces: a window
+     * that had WS_CAPTION carried the fixed 3 px frame (WS_DLGFRAME comes
+     * along with WS_CAPTION), and WS_THICKFRAME swaps in the sizable 4 px
+     * one.  So changing the style changes the non-client area, and with
+     * NOMOVE | NOSIZE - which is what used to be passed here - the window
+     * rect stays put and the CLIENT AREA shrinks by the difference on every
+     * side.
+     *
+     * That leaves the canvas and the surface it is presented into a few
+     * pixels apart, and because the GL viewport is anchored at the
+     * bottom-left the strip the canvas no longer reaches shows up along the
+     * top and the right - painted with the window class background, which
+     * is a black brush.  It survives until something really resizes the
+     * window, because only WM_SIZE resyncs the two.
+     *
+     * Two things fix it.  First, ask for a window rect that yields the SAME
+     * client area under the NEW style, so the frame grows outward instead
+     * of eating into the picture; that keeps the coordinate space the
+     * program is already using.  Second, re-measure afterwards and rebuild
+     * the canvas to whatever the window manager actually handed back - a
+     * maximised window or one pinned against the screen edge cannot grow,
+     * and in that case the canvas has to follow the client instead. */
+    SetRect(&rc, 0, 0, g_devW > 0 ? g_devW : 1, g_devH > 0 ? g_devH : 1);
+    AdjustWindowRect(&rc, (DWORD)st, FALSE);
+    SetWindowPos(g_hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE |
+                 SWP_FRAMECHANGED);
+
+    if (g_glReady && GetClientRect(g_hwnd, &cr)) {
+        int nw = cr.right - cr.left, nh = cr.bottom - cr.top;
+        if (nw >= 1 && nh >= 1 && (nw != g_devW || nh != g_devH)) {
+            gxResizeCanvas(nw, nh);
+            /* Same bookkeeping the WM_SIZE handler does: the logical size
+             * has to follow the device size, or getwidth() lies. */
+            g_baseW = (int)((float)nw / g_dpiFix + 0.5f);
+            g_baseH = (int)((float)nh / g_dpiFix + 0.5f);
+        }
+    }
+}
+
+GX_INLINE void variablewinsize(bool enable) {
+    g_varWinSize = (enable != 0);
+    /* No window yet: initgraph() reads g_varWinSize while it builds the
+     * window, so the frame is in place from the start and nothing has to be
+     * re-measured.  With a window already up, change it in place. */
+    gxRestoreVarWin();
+}
+
+/* The get side of variablewinsize(): whether the window currently carries
+ * a resizable frame.  Reflects the last variablewinsize() call - it is the
+ * flag, not a query of the live window style, so it is true from the moment
+ * variablewinsize(true) returns even before initgraph() builds the window.
+ *
+ * No arguments, so it needs no overload and lives out here where both the
+ * C and the C++ half of the header can see it. */
+GX_INLINE bool getvariablewinsize(void) { return g_varWinSize; }
+
+static void gxResizeCanvas(int w, int h) {
+    if (!g_glReady) return;
     if (w < 1 || h < 1) return;
     if (w == g_devW && h == g_devH) return;     /* nothing to do */
 
@@ -7447,22 +7703,38 @@ static void gxResizeMainWindow(int w, int h) {
     g_canvasTarget.w = w;
     g_canvasTarget.h = h;
 
+    gxUpdateProj();
+    gxMsaaCreate();               /* picks the new canvas size up itself  */
+    gxBindTarget();
+    /* glTexImage2D() redefined the ALL of the storage, so the whole canvas
+     * is undefined again - not just the strip the window gained.  Painting
+     * only the new area would leave the old one holding whatever the driver
+     * handed back, so the clear covers everything.  Consequence: a resize
+     * throws the picture away and the program has to redraw, which is what
+     * EasyX does too.  Same reason as the clear in initgraph(): no
+     * speckles, and in the background colour. */
+    gxClearFbo(g_canvasTarget.fbo, g_canvasTarget.w, g_canvasTarget.h,
+               g_bkColor, 1.f);
+    if (g_glReady) glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+}
+
+static void gxResizeMainWindow(int w, int h) {
+    DWORD style;
+    RECT rc;
+    if (!g_glReady || !g_hwnd) return;
+    if (w < 1 || h < 1) return;
+    if (w == g_devW && h == g_devH) return;     /* nothing to do */
+
     style = (DWORD)GetWindowLongA(g_hwnd, GWL_STYLE);
     SetRect(&rc, 0, 0, w, h);
     AdjustWindowRect(&rc, style, FALSE);
     SetWindowPos(g_hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-    gxUpdateProj();
-    gxMsaaCreate();               /* picks the new canvas size up itself  */
-    gxBindTarget();
-    /* glTexImage2D() redefined the storage, so it is undefined again - and
-     * with MSAA on so is the renderbuffer just created above.  Same reason
-     * as the clear in initgraph(): no speckles, and in the background
-     * colour rather than in whatever the driver handed back. */
-    gxClearFbo(g_canvasTarget.fbo, g_canvasTarget.w, g_canvasTarget.h,
-               g_bkColor, 1.f);
-    if (g_glReady) glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    /* SetWindowPos() is synchronous: WM_SIZE has already run and rebuilt
+     * the canvas by the time it returns, so this is only a fallback for the
+     * case where the window did not actually move (same size, or a failed
+     * call).  gxResizeCanvas() returns at once when the size is unchanged. */
+    gxResizeCanvas(w, h);
 }
 
 /* On a scaled display a logical unit is still one 96 dpi pixel unless the
@@ -7756,6 +8028,11 @@ static bool getvsync(void) { return g_vsyncOn; }
 /* Called once the context exists, and again after every recreate: push the
  * requested settings that live on per-window objects back onto them. */
 static void gxApplyWindowState(void) {
+    /* First, because it can change the client area and everything below
+     * sizes off it: gxRestoreDpiFix() resizes the window, and it has to
+     * resize to the size the window really has once the frame is the one
+     * the program asked for.  A no-op when the style already matches. */
+    gxRestoreVarWin();
     setvsync(g_reqVsync);
     gxMsaaCreate();
     /* Same treatment as vsync and MSAA: a rebuilt context must come back
@@ -9030,6 +9307,21 @@ static inline MOUSEMSG  getmessage(MOUSEMSG* m, int filter) {
     return gxGetMsgMouseFromF(m, (BYTE)filter);
 }
 
+/* variablewinsize(): the WM_SIZE watchers.  peekvariablemsg() is the one
+ * for a render loop - it never blocks, and it answers with a bool: has a
+ * resize arrived yet.  waitvariablemsg() is the blocking half and returns
+ * nothing at all; it just parks the thread until the window changes size,
+ * which never happens if variablewinsize() is off.
+ *
+ * peekvariablemsg() with no argument just answers "has one arrived yet",
+ * leaving the message in the queue; peekvariablemsg(true) also removes it.
+ * No ExMessage is involved - the new size is what getwidth() / getheight()
+ * report afterwards. */
+static inline bool peekvariablemsg()              { return gxPeekVarMsg(false); }
+static inline bool peekvariablemsg(bool rmv)      { return gxPeekVarMsg(rmv); }
+
+static inline void waitvariablemsg()               { gxWaitVarMsg(); }
+
 /* SetWorkingImage(&img) draws into the IMAGE; SetWorkingImage() with no
  * argument goes back to the window. */
 static inline void SetWorkingImage(IMAGE* pImg) { gxSetWorkingImage(pImg); }
@@ -9330,6 +9622,19 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
         const MOUSEMSG*:  gxGetMsgMouseFromF((MOUSEMSG*)(f), (BYTE)(size_t)(r)),\
         default:          gxGetMsgEx((BYTE)(size_t)(f)))
 #define getmessage(...) GX_DISPATCH(gx_gm_, __VA_ARGS__)
+
+/* variablewinsize(): the WM_SIZE watchers, C11 form.  Two shapes: no
+ * argument = has one arrived (leaves it queued), one argument = say whether
+ * to remove.  Both answer with a bool, and neither touches ExMessage - the
+ * new size is what getwidth() / getheight() report afterwards.
+ *
+ * waitvariablemsg() takes no argument and returns nothing - it just blocks
+ * until the window changes size. */
+#define gx_pvm_0()      gxPeekVarMsg(false)
+#define gx_pvm_1(r)     gxPeekVarMsg((r))
+#define peekvariablemsg(...) GX_DISPATCH(gx_pvm_, __VA_ARGS__)
+
+#define waitvariablemsg() gxWaitVarMsg()
 
 /* InputBox(out, nMaxCount, pPrompt, pTitle, pDefault, width, height,
  *          bHideCancelBtn) - eight arguments, and every trailing one optional:
