@@ -1,6 +1,8 @@
 # EasyGL_on_OpenGL
 EasyX features on OpenGL
 
+![](./icon.png)
+
 这是第三方兼容实现、与 EasyX 官方无关
 
 因学业原因，代码由AI代笔，为了解决编码问题把注释全搞成英文了。
