@@ -1,6 +1,7 @@
 # EasyGL_on_OpenGL
 EasyX features on OpenGL
 
+这是第三方兼容实现、与 EasyX 官方无关
 
 **easygl.h**
 
