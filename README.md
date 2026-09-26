@@ -1,7 +1,7 @@
 # EasyGL_on_OpenGL
 EasyX features on OpenGL
 
-![](./icon.png)
+![](https://github.com/IvoryEmpress17/EasyGL_on_OpenGL/blob/main/icon.png)
 
 这是第三方兼容实现、与 EasyX 官方无关
 
