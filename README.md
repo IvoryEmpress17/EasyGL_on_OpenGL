@@ -34,5 +34,8 @@ include 它，编译时链接 opengl32、gdi32、user32。
 
 
 TWXH
+这个IvoryEmpress17是我的github账号
+
+邮箱：3574403974@qq.com
 
 版本 20260926
