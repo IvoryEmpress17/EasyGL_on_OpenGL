@@ -5971,9 +5971,20 @@ static bool gxSaveImageFile(const WCHAR* file, const IMAGE* img) {
     int w, h, row;
     bool ok = false;
 
-    if (!gxImageOk(img) || img->width < 1 || img->height < 1) return false;
-    w = img->width; h = img->height;
-    px = gxReadTarget(img->fbo ? img->fbo : g_target->fbo, 0, 0, w, h);
+    /* A NULL image means "the drawing window", the same rule EasyX uses for
+     * saveimage(file) and saveimage(file, NULL).  It used to fall through to
+     * gxImageOk(NULL) == false, so the single argument form silently saved
+     * nothing at all. */
+    if (img) {
+        if (!gxImageOk(img) || img->width < 1 || img->height < 1) return false;
+        w = img->width; h = img->height;
+        px = gxReadTarget(img->fbo ? img->fbo : g_target->fbo, 0, 0, w, h);
+    } else {
+        if (!g_glReady || !g_target || g_target->w < 1 || g_target->h < 1)
+            return false;
+        w = g_target->w; h = g_target->h;
+        px = gxReadTarget(g_target->fbo, 0, 0, w, h);
+    }
     if (!px) return false;
     /* glReadPixels is bottom-up while a DIB section is bottom-up as well, so
      * the rows can be copied straight through after the R/B swap. */
@@ -9266,6 +9277,10 @@ static inline bool saveimage(const char* f)  { return gx_saveimg1(gxWiden(f)); }
 static inline bool saveimage(const WCHAR* f) { return gx_saveimg1(f); }
 static inline bool saveimage(const char* f, const IMAGE* img)  { return gx_saveimg2(gxWiden(f), img); }
 static inline bool saveimage(const WCHAR* f, const IMAGE* img) { return gx_saveimg2(f, img); }
+/* The reversed order - see the note above gx_si2r().  EasyX does not offer
+ * it; it is accepted here for the same reason the C macro does. */
+static inline bool saveimage(const IMAGE* img, const char* f)  { return gx_saveimg2(gxWiden(f), img); }
+static inline bool saveimage(const IMAGE* img, const WCHAR* f) { return gx_saveimg2(f, img); }
 
 static inline void putimage(int x, int y, const IMAGE* img) {
     gxPutImage3(x, y, img);
@@ -9605,12 +9620,34 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
         const char*:  gx_saveimg1(gxWiden((const char*)(f))),                  \
         WCHAR*:       gx_saveimg1((const WCHAR*)(f)),                          \
         const WCHAR*: gx_saveimg1((const WCHAR*)(f)))
-#define gx_si2(f, img)                                                        \
+/* saveimage(img, file) - the reversed order.
+ * EasyX only accepts (file, img), but getimage() takes the IMAGE first, so
+ * the swap is an easy slip - and the diagnostic for it was unreadable:
+ * "_Generic selector of type 'struct IMAGE *' is not compatible with any
+ * association".  Both orders are accepted instead; which one it is follows
+ * from the type of the FIRST argument, which is unambiguous because a file
+ * name is never an IMAGE and an IMAGE is never a file name.
+ * The trailing default: arms are never taken.  They exist because a
+ * _Generic whose selector matches no association is an error even in an
+ * arm that was not selected, and the arms that are not taken still have
+ * to type check.
+ */
+#define gx_si2r(img, f)                                                       \
     _Generic(((f) + 0),                                                        \
         char*:        gx_saveimg2(gxWiden((const char*)(f)), (img)),           \
         const char*:  gx_saveimg2(gxWiden((const char*)(f)), (img)),           \
         WCHAR*:       gx_saveimg2((const WCHAR*)(f), (img)),                   \
-        const WCHAR*: gx_saveimg2((const WCHAR*)(f), (img)))
+        const WCHAR*: gx_saveimg2((const WCHAR*)(f), (img)),                   \
+        default:      0)
+#define gx_si2(f, img)                                                        \
+    _Generic(((f) + 0),                                                        \
+        char*:        gx_saveimg2(gxWiden((const char*)(f)), (const IMAGE*)(img)), \
+        const char*:  gx_saveimg2(gxWiden((const char*)(f)), (const IMAGE*)(img)), \
+        WCHAR*:       gx_saveimg2((const WCHAR*)(f), (const IMAGE*)(img)),     \
+        const WCHAR*: gx_saveimg2((const WCHAR*)(f), (const IMAGE*)(img)),     \
+        IMAGE*:       gx_si2r((const IMAGE*)(f), (img)),                       \
+        const IMAGE*: gx_si2r((const IMAGE*)(f), (img)),                       \
+        default:      0)
 #define saveimage(...) GX_DISPATCH(gx_si, __VA_ARGS__)
 
 
