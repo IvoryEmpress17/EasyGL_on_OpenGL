@@ -9,6 +9,8 @@ EasyX features on OpenGL
 
 基本没bug了。
 
+最好在MinGW GCC上跑，别的我不确定跑不跑得了，理论上可以(C11)。
+
 **easygl.h**
 
 用 OpenGL 实现的 EasyX 兼容绘图库，纯头文件，C11 / C++ 通用。
