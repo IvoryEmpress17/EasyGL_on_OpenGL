@@ -27,7 +27,7 @@ include 它，编译时链接 opengl32、gdi32、user32。
 运行环境：Windows XP(sp3)(也许) 及以上，OpenGL 3.0 及以上。
 
 
-**easygl帮助文档.hta**（html）
+**easygl帮助文档.hta**（改成html就是网页了）
 
 帮助文档，Windows 双击打开。
 
