@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20260926
+#define EASYGL_H 20260927
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -413,11 +413,31 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20260926
-#define EASYGL_VERSION  "20260926"
+#define EASYGL_VER      20260927
+#define EASYGL_VERSION  "20260927"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
+#endif
+
+/* Several MinGW installs - and MSVC projects that set nothing at all - leave
+ * WINVER / _WIN32_WINNT at their 0x0400 default, which hides everything that
+ * arrived with Windows 2000: WM_UNICHAR, WS_EX_LAYERED, LWA_ALPHA and the
+ * layered window functions.  This header uses all of them, so raise both to
+ * 0x0501 (XP) when the user has not asked for something newer.  A value the
+ * user did supply is honoured and never lowered.  Without this, switching to
+ * an older GCC turns into "WM_UNICHAR undeclared" at gxMsgIsType(). */
+#ifndef WINVER
+#define WINVER 0x0501
+#elif WINVER < 0x0501
+#undef WINVER
+#define WINVER 0x0501
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0501
+#elif _WIN32_WINNT < 0x0501
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0501
 #endif
 
 #include <windows.h>
@@ -431,6 +451,30 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+
+/* Belt and braces for the block above.  It can only help when this file is
+ * the one that pulls in <windows.h>: if the user's own code includes it
+ * first, with a low WINVER, windows.h has already been read and refuses to be
+ * read again, so the prototypes and constants stay hidden.  Redefine the few
+ * identifiers this header actually uses that are gated on WINVER >= 0x0500.
+ * Each is guarded, so a correctly configured SDK is left completely alone.
+ * (WM_UNICHAR doubles as WM_IME_CHAR, which is why the value is 0x0109; the
+ * two are the same message in every SDK that declares them.) */
+#ifndef WM_UNICHAR
+#define WM_UNICHAR 0x0109
+#endif
+#ifndef UNICODE_NOCHAR
+#define UNICODE_NOCHAR 0xFFFF
+#endif
+#ifndef WS_EX_LAYERED
+#define WS_EX_LAYERED 0x00080000
+#endif
+#ifndef LWA_COLORKEY
+#define LWA_COLORKEY 0x00000001
+#endif
+#ifndef LWA_ALPHA
+#define LWA_ALPHA 0x00000002
+#endif
 
 /*======================================================================
  * Which C dialect, and what the EasyX style overloads may use
@@ -7960,6 +8004,41 @@ GX_INLINE void showcursor(void)  { while (ShowCursor(TRUE)  <  0) ; }
  * top level window after WS_EX_LAYERED is set, and that has to be done
  * once; SetLayeredWindowAttributes() with LWA_ALPHA then does the rest.
  * Fails silently on a window that cannot be layered. */
+
+/* SetLayeredWindowAttributes() / GetLayeredWindowAttributes() are declared by
+ * winuser.h only for _WIN32_WINNT >= 0x0500.  The WINVER block at the top of
+ * this file normally covers that, but it cannot when the user's own code
+ * includes <windows.h> first with a low WINVER - windows.h has an include
+ * guard and will not be read a second time, so the prototypes stay hidden and
+ * the calls below would be implicit declarations (an outright error in GCC 14
+ * and later).  Both are therefore resolved at run time through
+ * GetProcAddress(); they have been exported from user32.dll since Windows
+ * 2000, so they are always present. */
+typedef BOOL (WINAPI *GX_PFN_SetLayeredWindowAttributes)(HWND, COLORREF, BYTE, DWORD);
+typedef BOOL (WINAPI *GX_PFN_GetLayeredWindowAttributes)(HWND, COLORREF*, BYTE*, DWORD*);
+static GX_PFN_SetLayeredWindowAttributes gxGetSLWA(void) {
+    static GX_PFN_SetLayeredWindowAttributes pfn = NULL;
+    static int probed = 0;
+    if (!probed) {
+        probed = 1;
+        pfn = (GX_PFN_SetLayeredWindowAttributes)(void*)
+              GetProcAddress(GetModuleHandleA("user32.dll"),
+                             "SetLayeredWindowAttributes");
+    }
+    return pfn;
+}
+static GX_PFN_GetLayeredWindowAttributes gxGetGLWA(void) {
+    static GX_PFN_GetLayeredWindowAttributes pfn = NULL;
+    static int probed = 0;
+    if (!probed) {
+        probed = 1;
+        pfn = (GX_PFN_GetLayeredWindowAttributes)(void*)
+              GetProcAddress(GetModuleHandleA("user32.dll"),
+                             "GetLayeredWindowAttributes");
+    }
+    return pfn;
+}
+
 /* The parameter is a TRANSPARENCY, like every other alpha in this library:
  * 0 = the window is fully opaque, 255 = fully transparent (invisible).
  * Win32's SetLayeredWindowAttributes() wants the opposite (its bAlpha is
@@ -7967,18 +8046,23 @@ GX_INLINE void showcursor(void)  { while (ShowCursor(TRUE)  <  0) ; }
  * inversion gxAlphaOf() does for colours. */
 GX_INLINE void setwindowalpha(BYTE alpha) {
     BYTE opacity = (BYTE)(255 - (int)alpha);
+    GX_PFN_SetLayeredWindowAttributes pfn;
     if (!g_hwnd) return;
     SetWindowLongA(g_hwnd, GWL_EXSTYLE,
                    GetWindowLongA(g_hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
-    SetLayeredWindowAttributes(g_hwnd, 0, opacity, LWA_ALPHA);
+    pfn = gxGetSLWA();
+    if (pfn) pfn(g_hwnd, 0, opacity, LWA_ALPHA);
 }
 /* Returns the same transparency that setwindowalpha() takes: 0 = opaque,
  * 255 = invisible.  A window that is not layered at all is opaque, i.e. 0. */
 GX_INLINE BYTE getwindowalpha(void) {
     BYTE a = 255;
     DWORD f = 0;
+    GX_PFN_GetLayeredWindowAttributes pfn;
     if (!g_hwnd) return ALPHA_OPAQUE;
-    if (!GetLayeredWindowAttributes(g_hwnd, NULL, &a, &f)) return ALPHA_OPAQUE;
+    pfn = gxGetGLWA();
+    if (!pfn) return ALPHA_OPAQUE;
+    if (!pfn(g_hwnd, NULL, &a, &f)) return ALPHA_OPAQUE;
     if (!(f & LWA_ALPHA)) return ALPHA_OPAQUE;
     return (BYTE)(255 - (int)a);
 }
