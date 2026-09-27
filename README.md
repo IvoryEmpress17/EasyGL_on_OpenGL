@@ -1,11 +1,13 @@
 # EasyGL_on_OpenGL
 EasyX features on OpenGL
 
-这是第三方兼容实现、与 EasyX 官方无关
+这是第三方兼容实现、与 EasyX 官方无关，也和 Github 上别的同名项目无关。
 
-因学业原因，代码由AI代笔，为了解决编码问题把注释全搞成英文了。
+作者水平不好...
 
-基本没bug了。。。
+因学业原因，代码由 AI 代笔，为了解决雷霆编码问题把注释全搞成英文了。
+
+基本没bug了。
 
 **easygl.h**
 
@@ -23,9 +25,9 @@ include 它，编译时链接 opengl32、gdi32、user32。
 运行环境：Windows XP(sp3)(也许) 及以上，OpenGL 3.0 及以上。
 
 
-**easygl帮助文档.hta**
+**easygl帮助文档.hta**（html）
 
-帮助文档，双击打开。
+帮助文档，Windows 双击打开。
 
 
 **作者**
