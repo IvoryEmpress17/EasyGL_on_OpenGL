@@ -9530,11 +9530,42 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
                               GX_HAS_COMMA(GX_TRIGGER __VA_ARGS__ ()))
 
 #define GX_ARG_N(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
+
+/* Counting the arguments of one GX_DISPATCH() call.
+ *
+ * The hard part is telling "no argument at all" from "one argument": an
+ * empty __VA_ARGS__ behaves exactly like a single empty argument, so a
+ * plain positional counter cannot see the difference, and the usual
+ * TRIGGER trick (GX_HAS_COMMA(GX_TRIGGER __VA_ARGS__ ())) mistakes a
+ * *single argument whose first token is an opening parenthesis* for an
+ * empty list.  That is why GetImageBuffer(NULL) used to expand to
+ * gx_ibuf_0(NULL) and fail with
+ *     macro "gx_ibuf_0" passed 1 arguments, but takes just 0
+ * NULL expands to ((void*)0), so GX_TRIGGER really is followed by '('.
+ *
+ * No purely ISO C11 trick can tell those two apart, hence:
+ *   - GNU mode             -> ", ##__VA_ARGS__" (the comma disappears)
+ *   - GCC >= 8 / clang >= 9 -> __VA_OPT__
+ *   - anything else        -> the TRIGGER counter, with the limitation
+ *                             above: write GetImageBuffer() rather than
+ *                             GetImageBuffer(NULL) on such a compiler.
+ */
+#if defined(__GNUC__) && !defined(__STRICT_ANSI__)
+#define GX_NARG_PAD(...) 0, ##__VA_ARGS__
+#define GX_NARG_I(...)   GX_ARG_N(__VA_ARGS__)
+#define GX_NARG(...)     GX_NARG_I(GX_NARG_PAD(__VA_ARGS__),                  \
+                             15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,-1,-2)
+#elif (defined(__GNUC__) && __GNUC__ >= 8) ||                                 \
+      (defined(__clang__) && __clang_major__ >= 9)
+#define GX_NARG(...) GX_ARG_N(__VA_ARGS__ __VA_OPT__(,)                       \
+                             16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1, 0)
+#else
 #define GX_NARG1(...) GX_ARG_N(__VA_ARGS__, 16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1, 0)
 #define GX_NARG_IF(c, ...) GX_CAT2(GX_NARG_C, c)(__VA_ARGS__)
 #define GX_NARG_C1(...) 0            /* empty argument list            */
 #define GX_NARG_C0(...) GX_NARG1(__VA_ARGS__)
 #define GX_NARG(...) GX_NARG_IF(GX_ISE(__VA_ARGS__), __VA_ARGS__)
+#endif
 
 #define GX_DISPATCH(PREFIX, ...) GX_CAT2(PREFIX, GX_NARG(__VA_ARGS__))(__VA_ARGS__)
 
@@ -9804,11 +9835,12 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
 /* SetWorkingImage() / SetWorkingImage(&img): zero or one argument, which
  * a plain C function cannot offer.  NULL is what "no argument" means to
  * gxSetWorkingImage() - it clears the IMAGE and restores the window. */
-/* gx_swi_0 takes (...) on purpose: GX_NARG() cannot tell "no argument"
- * from "one argument that expands to a parenthesised expression", and
- * SetWorkingImage(NULL) is exactly that case - it counts as 0 and would
- * otherwise be handed to a macro that accepts none, which is a hard error.
- * The only value that can land here is NULL, and NULL means "the window". */
+/* gx_swi_0 still takes (...) even though GX_NARG() now counts correctly:
+ * on a compiler with neither ", ##__VA_ARGS__" nor __VA_OPT__ the old
+ * TRIGGER counter is used, and there SetWorkingImage(NULL) really does
+ * land on the zero-argument macro.  Absorbing the argument keeps that
+ * case compiling, and the result is the same either way - NULL is the
+ * only value that can land here and it means "the window". */
 #define gx_swi_0(...)   gxSetWorkingImage((IMAGE*)NULL)
 #define gx_swi_1(p)     gxSetWorkingImage((IMAGE*)(p))
 #define SetWorkingImage(...) GX_DISPATCH(gx_swi_, __VA_ARGS__)
