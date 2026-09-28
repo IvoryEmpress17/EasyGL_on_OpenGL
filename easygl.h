@@ -297,7 +297,7 @@
  *   - cleardevice() cleared to hard coded black instead of the current
  *     background colour, so setbkcolor(WHITE); cleardevice(); stayed
  *     black - and disagreed with the clear*() family, which always used
- *     g_bkColor.  It now clears with g_bkColor like EasyX.
+ *     g_gx_bkColor.  It now clears with g_gx_bkColor like EasyX.
  *   - gxImageAlloc() leaked the texture when framebuffer creation failed:
  *     the early return left img->tex set while the magic (the only thing
  *     that makes gxImageDestroy() free it) was still zero.
@@ -316,12 +316,12 @@
  *     been created showed whatever that memory last held - speckles that
  *     stayed until the program called cleardevice().  glTexImage2D(..., NULL)
  *     and glRenderbufferStorage*() both leave the contents undefined, so
- *     initgraph() and every window resize now clear the canvas to g_bkColor
+ *     initgraph() and every window resize now clear the canvas to g_gx_bkColor
  *     (after gxApplyWindowState() / gxMsaaCreate(), because with MSAA on it
  *     is the multisample renderbuffer that is drawn), and gxImageAlloc()
  *     clears a fresh IMAGE to opaque black.  EasyX hands both over already
  *     in the background colour.
- *   - cleardevice() cleared to hard coded black instead of g_bkColor.
+ *   - cleardevice() cleared to hard coded black instead of g_gx_bkColor.
  *   - setwinsize() and getwinsize() disagreed about units: the setter takes
  *     logical units and scales them by the DPI factor, while the getter
  *     reported raw device pixels, so setwinsize(1024, 768) followed by
@@ -758,14 +758,42 @@ typedef DWORD ACOLORREF;
  *====================================================================*/
 #ifndef GL_ARRAY_BUFFER
 #define GL_ARRAY_BUFFER          0x8892
+#endif
+/* Every constant below gets its own guard, for the same reason as the
+ * GL_VENDOR block further down: grouping them under a single #ifndef meant a
+ * system gl.h declaring VBOs but not, say, GL_STATIC_DRAW lost the whole
+ * block.  GL_STATIC_DRAW in particular is needed by gxmesh_setup(). */
+#ifndef GL_DYNAMIC_DRAW
 #define GL_DYNAMIC_DRAW          0x88E8
+#endif
+#ifndef GL_STATIC_DRAW
+#define GL_STATIC_DRAW           0x88E4
+#endif
+#ifndef GL_STREAM_DRAW
+#define GL_STREAM_DRAW           0x88E0
+#endif
+#ifndef GL_FRAGMENT_SHADER
 #define GL_FRAGMENT_SHADER       0x8B30
+#endif
+#ifndef GL_VERTEX_SHADER
 #define GL_VERTEX_SHADER         0x8B31
+#endif
+#ifndef GL_COMPILE_STATUS
 #define GL_COMPILE_STATUS        0x8B81
+#endif
+#ifndef GL_LINK_STATUS
 #define GL_LINK_STATUS           0x8B82
+#endif
+#ifndef GL_TEXTURE0
 #define GL_TEXTURE0              0x84C0
+#endif
+#ifndef GL_FRAMEBUFFER
 #define GL_FRAMEBUFFER           0x8D40
+#endif
+#ifndef GL_COLOR_ATTACHMENT0
 #define GL_COLOR_ATTACHMENT0     0x8CE0
+#endif
+#ifndef GL_FRAMEBUFFER_COMPLETE
 #define GL_FRAMEBUFFER_COMPLETE  0x8CD5
 #endif
 /* glGetString() selectors.  GL_VENDOR / GL_RENDERER / GL_VERSION come from
@@ -871,6 +899,10 @@ DECLGL(void, glUniform2f, GLint, GLfloat, GLfloat)
 DECLGL(void, glUniform3f, GLint, GLfloat, GLfloat, GLfloat)
 DECLGL(void, glUniform4f, GLint, GLfloat, GLfloat, GLfloat, GLfloat)
 DECLGL(void, glUniformMatrix4fv, GLint, GLsizei, GLboolean, const GLfloat*)
+DECLGL(void, glGenVertexArrays, GLsizei, GLuint*)
+DECLGL(void, glBindVertexArray, GLuint)
+DECLGL(void, glDeleteVertexArrays, GLsizei, const GLuint*)
+DECLGL(void, glGetVertexAttribiv, GLuint, GLenum, GLint*)
 DECLGL(void, glEnableVertexAttribArray, GLuint)
 DECLGL(void, glVertexAttribPointer, GLuint, GLint, GLenum, GLboolean, GLsizei, const void*)
 DECLGL(void, glActiveTexture, GLenum)
@@ -880,6 +912,7 @@ DECLGL(void, glFramebufferTexture2D, GLenum, GLenum, GLenum, GLuint, GLint)
 DECLGL(void, glGenRenderbuffers, GLsizei, GLuint*)
 DECLGL(void, glBindRenderbuffer, GLenum, GLuint)
 DECLGL(void, glDeleteRenderbuffers, GLsizei, const GLuint*)
+DECLGL(void, glRenderbufferStorage, GLenum, GLenum, GLsizei, GLsizei)
 DECLGL(void, glRenderbufferStorageMultisample, GLenum, GLsizei, GLenum, GLsizei, GLsizei)
 DECLGL(void, glFramebufferRenderbuffer, GLenum, GLenum, GLenum, GLuint)
 DECLGL(void, glBlitFramebuffer, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)
@@ -927,6 +960,11 @@ static void gxLoadGL(void) {
     LOADGL(glActiveTexture);         LOADGL(glGenFramebuffers);
     LOADGL(glBindFramebuffer);       LOADGL(glFramebufferTexture2D);
     LOADGL(glCheckFramebufferStatus); LOADGL(glDeleteFramebuffers);
+    LOADGL(glGenVertexArrays);
+    LOADGL(glBindVertexArray);
+    LOADGL(glDeleteVertexArrays);
+    LOADGL(glGetVertexAttribiv);
+    LOADGL(glRenderbufferStorage);
     LOADGL(glGenRenderbuffers);      LOADGL(glBindRenderbuffer);
     LOADGL(glDeleteRenderbuffers);   LOADGL(glFramebufferRenderbuffer);
     /* Three spellings exist for these two: GL 3.0 / ARB_framebuffer_object
@@ -1120,42 +1158,42 @@ GX_DEFINE_ARRAY(GxFontVec, FontRec)
  *====================================================================*/
 typedef struct GxTarget { GLuint fbo; GLuint tex; int w, h; } GxTarget;
 
-static HWND   g_hwnd  = NULL;
-static HDC    g_hdc   = NULL;
-static HGLRC  g_hglrc = NULL;
-static int    g_devW = 0, g_devH = 0;      /* current render target size  */
-static float  g_logW = 0, g_logH = 0;      /* logical size, EasyX space   */
-static float  g_scaleX = 1.f, g_scaleY = 1.f;
+static HWND   g_gx_hwnd  = NULL;
+static HDC    g_gx_hdc   = NULL;
+static HGLRC  g_gx_hglrc = NULL;
+static int    g_gx_devW = 0, g_gx_devH = 0;      /* current render target size  */
+static float  g_gx_logW = 0, g_gx_logH = 0;      /* logical size, EasyX space   */
+static float  g_gx_scaleX = 1.f, g_gx_scaleY = 1.f;
 /* fixhighdpi(): the factor setaspectratio() is multiplied by, and the
- * factors as the caller passed them.  g_scaleX / g_scaleY hold the
- * effective value (requested * g_dpiFix), which is what everything else in
+ * factors as the caller passed them.  g_gx_scaleX / g_gx_scaleY hold the
+ * effective value (requested * g_gx_dpiFix), which is what everything else in
  * the library reads, so the requested pair has to be kept separately to be
  * able to recompute when the factor changes. */
-static float  g_dpiFix = 1.f;              /* 1 = no scaling applied      */
+static float  g_gx_dpiFix = 1.f;              /* 1 = no scaling applied      */
 /* The window size the caller asked for, in LOGICAL units - what initgraph()
- * and setwinsize() were given.  The device size is this times g_dpiFix:
+ * and setwinsize() were given.  The device size is this times g_gx_dpiFix:
  *
- *     g_devW = g_baseW * g_dpiFix
+ *     g_gx_devW = g_gx_baseW * g_gx_dpiFix
  *
  * Kept because a rebuilt window comes back at the logical size and has to be
  * scaled up again, and scaling is not reversible from the device size alone -
- * once g_devW is 1200 there is nothing left to say whether that was 800 at
+ * once g_gx_devW is 1200 there is nothing left to say whether that was 800 at
  * 150% or 1200 at 100%, so the second rebuild would scale it again. */
-static int   g_baseW = 0, g_baseH = 0;
+static int   g_gx_baseW = 0, g_gx_baseH = 0;
 /* variablewinsize(): the window carries WS_THICKFRAME | WS_MAXIMIZEBOX
  * so the user can drag its border and hit the maximise button.  Read by
  * initgraph() when the window is created, so calling the setter before
  * initgraph() needs no extra work, and calling it afterwards rebuilds
  * the frame of the live window instead. */
-static bool  g_varWinSize = false;
+static bool  g_gx_varWinSize = false;
 
-/* Whether fixhighdpi(true) is in force.  Held separately from g_dpiFix
+/* Whether fixhighdpi(true) is in force.  Held separately from g_gx_dpiFix
  * because at 100% the factor is legitimately 1.f, which would be
  * indistinguishable from "off"; gxApplyWindowState() needs to know which
  * one it is.  Default off, so an existing program is unaffected. */
-static bool   g_dpiFixOn = false;
-static float  g_reqScaleX = 1.f, g_reqScaleY = 1.f;
-static float  g_originX = 0.f, g_originY = 0.f;  /* physical pixel offset */
+static bool   g_gx_dpiFixOn = false;
+static float  g_gx_reqScaleX = 1.f, g_gx_reqScaleY = 1.f;
+static float  g_gx_originX = 0.f, g_gx_originY = 0.f;  /* physical pixel offset */
 /* The canvas transform, parked while an IMAGE is the working target.
  *
  * An IMAGE has a fixed pixel size, so it is drawn into at 1:1 - EasyX
@@ -1167,13 +1205,13 @@ static float  g_originX = 0.f, g_originY = 0.f;  /* physical pixel offset */
  * 160 x 160 image at 1.5x draws 240 x 240 into a 160 x 160 surface, and the
  * part that does not fit is cut off - the image ends up showing only its
  * top left corner.  fixhighdpi() is what makes that reachable in practice. */
-static float  g_canvasScaleX = 1.f, g_canvasScaleY = 1.f;
-static float  g_canvasOriginX = 0.f, g_canvasOriginY = 0.f;
+static float  g_gx_canvasScaleX = 1.f, g_gx_canvasScaleY = 1.f;
+static float  g_gx_canvasOriginX = 0.f, g_gx_canvasOriginY = 0.f;
 /* The origin as setorigin() was given it, kept for the same reason as
- * g_reqScaleX / Y: the effective value is the request times the DPI
+ * g_gx_reqScaleX / Y: the effective value is the request times the DPI
  * factor, and fixhighdpi() has to be able to re-derive it. */
-static float  g_reqOriginX = 0.f, g_reqOriginY = 0.f;
-static float  g_proj[16];
+static float  g_gx_reqOriginX = 0.f, g_gx_reqOriginY = 0.f;
+static float  g_gx_proj[16];
 
 /* EasyX keeps a global "hwnd" that the host program declares and that
  * initgraph() fills in.  It cannot just be assigned here: the host declares
@@ -1190,62 +1228,62 @@ static float  g_proj[16];
 extern HWND hwnd;
 #endif
 
-static bool  g_glReady = false;
-static bool  g_userClosed = false;
-static bool  g_forceExit = true;          /* false with INIT_NOFORCEEXIT */
-static int   g_renderMode = RENDER_AUTO; /* EasyX default: draw == show   */
-static bool  g_presentPending = false;   /* gxAutoPresent() owes a frame    */
-static bool  g_batchDraw = false;        /* inside BeginBatchDraw() ... */
-static int   g_initFlag = INIT_DEFAULT;
+static bool  g_gx_glReady = false;
+static bool  g_gx_userClosed = false;
+static bool  g_gx_forceExit = true;          /* false with INIT_NOFORCEEXIT */
+static int   g_gx_renderMode = RENDER_AUTO; /* EasyX default: draw == show   */
+static bool  g_gx_presentPending = false;   /* gxAutoPresent() owes a frame    */
+static bool  g_gx_batchDraw = false;        /* inside BeginBatchDraw() ... */
+static int   g_gx_initFlag = INIT_DEFAULT;
 
-static GxTarget g_canvasTarget;           /* window sized off screen canvas */
-static GxTarget g_workTarget;             /* the IMAGE selected by SetWorkingImage */
-static GxTarget* g_target = &g_canvasTarget;
-static IMAGE*    g_workImg = NULL;
+static GxTarget g_gx_canvasTarget;           /* window sized off screen canvas */
+static GxTarget g_gx_workTarget;             /* the IMAGE selected by SetWorkingImage */
+static GxTarget* g_gx_target = &g_gx_canvasTarget;
+static IMAGE*    g_gx_workImg = NULL;
 /* EasyX style state */
-static LINESTYLE g_lineStyle;
-static FILLSTYLE g_fillStyle;
-static COLORREF  g_fillColor = WHITE;
-static COLORREF  g_lineColor = WHITE;
-static COLORREF  g_textColor = WHITE;
-static int       g_lineWidth = 1;   /* LOGICAL units (GDI pen semantics) */
-static COLORREF  g_bkColor   = BLACK;
-static int       g_bkMode    = TRANSPARENT;
-static int       g_rop2      = R2_COPYPEN;
-static int       g_polyMode  = ALTERNATE;
+static LINESTYLE g_gx_lineStyle;
+static FILLSTYLE g_gx_fillStyle;
+static COLORREF  g_gx_fillColor = WHITE;
+static COLORREF  g_gx_lineColor = WHITE;
+static COLORREF  g_gx_textColor = WHITE;
+static int       g_gx_lineWidth = 1;   /* LOGICAL units (GDI pen semantics) */
+static COLORREF  g_gx_bkColor   = BLACK;
+static int       g_gx_bkMode    = TRANSPARENT;
+static int       g_gx_rop2      = R2_COPYPEN;
+static int       g_gx_polyMode  = ALTERNATE;
 /* logical "current position", in double because the primitives below take
  * floating point coordinates now.  getx() / gety() still report an int,
  * because that is what EasyX returns. */
-static double    g_curX = 0, g_curY = 0;
-static bool      g_clipOn = false;
-static RECT      g_clipRect;
+static double    g_gx_curX = 0, g_gx_curY = 0;
+static bool      g_gx_clipOn = false;
+static RECT      g_gx_clipRect;
 
 /* text size multiplier (kept from the original easygl.h) */
-static float g_textScale = 1.f;
+static float g_gx_textScale = 1.f;
 
 /*--------------------------- message queue ----------------------------*/
 #define GX_MSGQ_CAP 256
-static ExMessage g_msgq[GX_MSGQ_CAP];
-static int g_msgHead = 0, g_msgTail = 0, g_msgCount = 0;
+static ExMessage g_gx_msgq[GX_MSGQ_CAP];
+static int g_gx_msgHead = 0, g_gx_msgTail = 0, g_gx_msgCount = 0;
 
-static void gxMsgInit(void) { g_msgHead = g_msgTail = g_msgCount = 0; }
+static void gxMsgInit(void) { g_gx_msgHead = g_gx_msgTail = g_gx_msgCount = 0; }
 
 static void gxMsgPush(const ExMessage* m) {
     if (!m) return;
-    g_msgq[g_msgTail] = *m;
-    g_msgTail = (g_msgTail + 1) % GX_MSGQ_CAP;
-    if (g_msgCount == GX_MSGQ_CAP) g_msgHead = (g_msgHead + 1) % GX_MSGQ_CAP;
-    else g_msgCount++;
+    g_gx_msgq[g_gx_msgTail] = *m;
+    g_gx_msgTail = (g_gx_msgTail + 1) % GX_MSGQ_CAP;
+    if (g_gx_msgCount == GX_MSGQ_CAP) g_gx_msgHead = (g_gx_msgHead + 1) % GX_MSGQ_CAP;
+    else g_gx_msgCount++;
 }
 
 static ExMessage* gxMsgAt(int i) {
-    return &g_msgq[(g_msgHead + i) % GX_MSGQ_CAP];
+    return &g_gx_msgq[(g_gx_msgHead + i) % GX_MSGQ_CAP];
 }
 
 static void gxMsgPop(void) {
-    if (g_msgCount == 0) return;
-    g_msgHead = (g_msgHead + 1) % GX_MSGQ_CAP;
-    g_msgCount--;
+    if (g_gx_msgCount == 0) return;
+    g_gx_msgHead = (g_gx_msgHead + 1) % GX_MSGQ_CAP;
+    g_gx_msgCount--;
 }
 
 static bool gxMsgIsType(UINT m, BYTE filter) {
@@ -1283,38 +1321,38 @@ static void gxOrtho(float m[16], float l, float r, float b, float t) {
 
 static void gxUpdateProj(void) {
     float ox, oy;
-    g_logW = g_devW / g_scaleX;
-    g_logH = g_devH / g_scaleY;
-    ox = (g_scaleX > 0.f) ? (g_originX / g_scaleX) : 0.f;
-    oy = (g_scaleY > 0.f) ? (g_originY / g_scaleY) : 0.f;
-    gxOrtho(g_proj, -ox, g_logW - ox, g_logH - oy, -oy);
+    g_gx_logW = g_gx_devW / g_gx_scaleX;
+    g_gx_logH = g_gx_devH / g_gx_scaleY;
+    ox = (g_gx_scaleX > 0.f) ? (g_gx_originX / g_gx_scaleX) : 0.f;
+    oy = (g_gx_scaleY > 0.f) ? (g_gx_originY / g_gx_scaleY) : 0.f;
+    gxOrtho(g_gx_proj, -ox, g_gx_logW - ox, g_gx_logH - oy, -oy);
 }
 
 /* Re-select the active render target.  Has to run whenever an IMAGE is
  * resized or re-created while it is the working image, otherwise the cached
  * FBO / width / height keep pointing at a deleted framebuffer. */
 static void gxSyncWorkTarget(void) {
-    if (g_workImg && gxImageOk(g_workImg)) {
-        g_workTarget.fbo = g_workImg->fbo;
-        g_workTarget.tex = g_workImg->tex;
-        g_workTarget.w   = g_workImg->width;
-        g_workTarget.h   = g_workImg->height;
-        g_target = &g_workTarget;
+    if (g_gx_workImg && gxImageOk(g_gx_workImg)) {
+        g_gx_workTarget.fbo = g_gx_workImg->fbo;
+        g_gx_workTarget.tex = g_gx_workImg->tex;
+        g_gx_workTarget.w   = g_gx_workImg->width;
+        g_gx_workTarget.h   = g_gx_workImg->height;
+        g_gx_target = &g_gx_workTarget;
         /* The IMAGE is 1:1: its pixels ARE the coordinate space.  The
-         * canvas transform stays parked in g_canvasScaleX / ... and is put
+         * canvas transform stays parked in g_gx_canvasScaleX / ... and is put
          * back below when the canvas is selected again. */
-        g_scaleX = g_scaleY = 1.f;
-        g_originX = g_originY = 0.f;
+        g_gx_scaleX = g_gx_scaleY = 1.f;
+        g_gx_originX = g_gx_originY = 0.f;
     } else {
-        g_workImg = NULL;
-        g_target  = &g_canvasTarget;
-        g_scaleX  = g_canvasScaleX;
-        g_scaleY  = g_canvasScaleY;
-        g_originX = g_canvasOriginX;
-        g_originY = g_canvasOriginY;
+        g_gx_workImg = NULL;
+        g_gx_target  = &g_gx_canvasTarget;
+        g_gx_scaleX  = g_gx_canvasScaleX;
+        g_gx_scaleY  = g_gx_canvasScaleY;
+        g_gx_originX = g_gx_canvasOriginX;
+        g_gx_originY = g_gx_canvasOriginY;
     }
-    g_devW = g_target->w;
-    g_devH = g_target->h;
+    g_gx_devW = g_gx_target->w;
+    g_gx_devH = g_gx_target->h;
 }
 
 static void gxPresent(void);             /* defined in section 17 */
@@ -1332,12 +1370,12 @@ static void gxRestoreDpiFix(void);       /* defined in section 10c */
  * -0.5 to 0, i.e. it is not the inverse of the projection for negative
  * coordinates. */
 GX_INLINE int gxDevToLogX(int x) {
-    float s = (g_scaleX > 0.f) ? g_scaleX : 1.f;
-    return (int)floorf(((float)x - g_originX) / s);
+    float s = (g_gx_scaleX > 0.f) ? g_gx_scaleX : 1.f;
+    return (int)floorf(((float)x - g_gx_originX) / s);
 }
 GX_INLINE int gxDevToLogY(int y) {
-    float s = (g_scaleY > 0.f) ? g_scaleY : 1.f;
-    return (int)floorf(((float)y - g_originY) / s);
+    float s = (g_gx_scaleY > 0.f) ? g_gx_scaleY : 1.f;
+    return (int)floorf(((float)y - g_gx_originY) / s);
 }
 
 static void gxFillMouse(ExMessage* m, UINT msg, LPARAM l, int wheel) {
@@ -1364,8 +1402,8 @@ static LRESULT CALLBACK gxWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     ExMessage em;
     switch (m) {
     case WM_CLOSE:
-        if (g_forceExit) {
-            g_userClosed = true;
+        if (g_gx_forceExit) {
+            g_gx_userClosed = true;
             DestroyWindow(h);
         } else {
             memset(&em, 0, sizeof(em));
@@ -1390,7 +1428,7 @@ static LRESULT CALLBACK gxWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
          * last frame here so it stays correct - the picture is frozen
          * because the program itself is not running, which no library can
          * change on a single threaded window. */
-        if (g_glReady && !g_batchDraw && g_renderMode == RENDER_AUTO)
+        if (g_gx_glReady && !g_gx_batchDraw && g_gx_renderMode == RENDER_AUTO)
             gxPresent();
         return 0;
     }
@@ -1448,15 +1486,15 @@ static LRESULT CALLBACK gxWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
          * to that would throw the picture away and then fail to allocate,
          * so it is skipped and the old size is kept until the window is
          * restored, at which point WM_SIZE arrives again. */
-        if (g_glReady && g_hwnd && w != SIZE_MINIMIZED) {
+        if (g_gx_glReady && g_gx_hwnd && w != SIZE_MINIMIZED) {
             int nw = (int)LOWORD(l), nh = (int)HIWORD(l);
             if (nw >= 1 && nh >= 1) {
                 gxResizeCanvas(nw, nh);
                 /* Keep the logical size in step: it is what a rebuilt
                  * window starts from, and what setwinsize() left behind is
                  * now stale. */
-                g_baseW = (int)((float)nw / g_dpiFix + 0.5f);
-                g_baseH = (int)((float)nh / g_dpiFix + 0.5f);
+                g_gx_baseW = (int)((float)nw / g_gx_dpiFix + 0.5f);
+                g_gx_baseH = (int)((float)nh / g_gx_dpiFix + 0.5f);
             }
         }
         memset(&em, 0, sizeof(em));
@@ -1480,9 +1518,9 @@ static void gxPump(void) {
     /* Show the frame gxAutoPresent() still owes.  Every caller is about to
      * wait for input, and a throttled present would otherwise stay
      * invisible until the next event arrives. */
-    if (g_presentPending && g_renderMode == RENDER_AUTO &&
-        !g_batchDraw && g_glReady) {
-        g_presentPending = false;
+    if (g_gx_presentPending && g_gx_renderMode == RENDER_AUTO &&
+        !g_gx_batchDraw && g_gx_glReady) {
+        g_gx_presentPending = false;
         gxFlush();
         gxPresent();
     }
@@ -1491,7 +1529,7 @@ static void gxPump(void) {
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
-    if (g_userClosed) exit(0);   /* only the X button (or ESC) exits */
+    if (g_gx_userClosed) exit(0);   /* only the X button (or ESC) exits */
 }
 
 /*======================================================================
@@ -1517,7 +1555,7 @@ static HWND gxConsoleWindow(void) {
  * still the black window EasyX hides, so redirection is not tested here. */
 static bool gxHasConsole(void) { return gxConsoleWindow() != NULL; }
 
-static bool g_consoleHidden = false;
+static bool g_gx_consoleHidden = false;
 
 /* Hide / show the console.  This deliberately hides the window instead of
  * detaching the process from it: detaching would break printf(), output to
@@ -1527,7 +1565,7 @@ static void gxConsoleShow(bool show) {
     HWND cw = gxConsoleWindow();
     if (!cw) return;
     ShowWindow(cw, show ? SW_SHOW : SW_HIDE);
-    g_consoleHidden = !show;
+    g_gx_consoleHidden = !show;
 }
 
 /* EasyX has no counterpart; these are easygl extensions so a program can
@@ -1554,7 +1592,7 @@ static void hideconsole(void) { gxConsoleShow(false); }
 static int gx_kbhit(void) {
     int i;
     gxPump();
-    for (i = 0; i < g_msgCount; i++) {
+    for (i = 0; i < g_gx_msgCount; i++) {
         ExMessage* e = gxMsgAt(i);
         if (e->message == WM_CHAR) return 1;
     }
@@ -1565,13 +1603,13 @@ static int gx_getch(void) {
     for (;;) {
         int i;
         gxPump();
-        for (i = 0; i < g_msgCount; i++) {
+        for (i = 0; i < g_gx_msgCount; i++) {
             ExMessage* e = gxMsgAt(i);
             if (e->message == WM_CHAR) {
                 int res = (int)e->ch;
                 /* Drop everything up to and including this key, so a
                  * WM_CHAR that was already waiting is not read twice. */
-                while (g_msgCount > 0) {
+                while (g_gx_msgCount > 0) {
                     ExMessage* h2 = gxMsgAt(0);
                     bool same = (h2 == e);
                     gxMsgPop();
@@ -1597,7 +1635,7 @@ static int gx_getch(void) {
 /*======================================================================
  *  6. Shaders, program, batch renderer
  *====================================================================*/
-static GLuint g_prog = 0, g_vbo = 0, g_blitVbo = 0;
+static GLuint g_gx_prog = 0, g_gx_vbo = 0, g_gx_blitVbo = 0;
 /* Index buffer for quad runs, plus the pattern it is filled with.
  * A quad is 4 vertices and 6 indices; the pattern repeats for every quad in
  * the buffer, so it only depends on the absolute vertex index and can be
@@ -1605,37 +1643,37 @@ static GLuint g_prog = 0, g_vbo = 0, g_blitVbo = 0;
  *     quad j (vertices 4j..4j+3) -> 4j, 4j+1, 4j+2,  4j, 4j+2, 4j+3
  * which is exactly the two triangles the old 6 vertex version emitted.
  * GL_UNSIGNED_INT, not _SHORT: a single frame may pass 65536 vertices. */
-static GLuint        g_ibo = 0;
-static unsigned int* g_idx = NULL;
-static size_t        g_idxQuads = 0;   /* how many quads g_idx holds    */
-static size_t        g_iboQuads = 0;   /* how many the GL buffer can hold */
-static size_t        g_iboUpTo  = 0;   /* how many of those are uploaded   */
+static GLuint        g_gx_ibo = 0;
+static unsigned int* g_gx_idx = NULL;
+static size_t        g_gx_idxQuads = 0;   /* how many quads g_gx_idx holds    */
+static size_t        g_gx_iboQuads = 0;   /* how many the GL buffer can hold */
+static size_t        g_gx_iboUpTo  = 0;   /* how many of those are uploaded   */
 /* True while the batch being built is a run of quads.  Mixing the two in one
  * command is impossible - the index pattern would walk off the end of a fan -
  * so gxV() and gxQuad*() each end the batch before switching. */
-static bool g_quadRun = false;
+static bool g_gx_quadRun = false;
 /* How many Vtx the vertex buffer was last allocated for.  glBufferData()
  * re-allocates the store every call, and the driver may either really
  * reallocate or stall waiting for the GPU to finish with the old one.
  * Keeping the capacity lets gxFlush() use glBufferSubData() instead, which
  * only copies into storage that is already there - the common path (the
  * buffer is reused frame after frame) makes no allocation at all. */
-static size_t g_vboCap = 0;
-static GLuint g_fbo = 0, g_canvasTex = 0, g_atlasTex = 0;
-static GLuint g_hatchTex[6];
-static GLint  g_uProj = -1, g_uUseTex = -1, g_uPatScale = -1, g_uNoBlend = -1;
-static GLint  g_uPatOff = -1, g_uAlpha = -1;
+static size_t g_gx_vboCap = 0;
+static GLuint g_gx_fbo = 0, g_gx_canvasTex = 0, g_gx_atlasTex = 0;
+static GLuint g_gx_hatchTex[6];
+static GLint  g_gx_uProj = -1, g_gx_uUseTex = -1, g_gx_uPatScale = -1, g_gx_uNoBlend = -1;
+static GLint  g_gx_uPatOff = -1, g_gx_uAlpha = -1;
 /* The corner opacity uniform, see GX_FS. */
-static GLint  g_uVertA = -1;
+static GLint  g_gx_uVertA = -1;
 /* miximagec() / miximagei().  uTex2 is a SAMPLER, so it holds a texture
  * unit number (1) rather than a texture; it is set once at link time. */
-static GLint  g_uTex2 = -1, g_uMixMode = -1, g_uMixW = -1, g_uMixColor = -1;
+static GLint  g_gx_uTex2 = -1, g_gx_uMixMode = -1, g_gx_uMixW = -1, g_gx_uMixColor = -1;
 
 /* A full screen pass the caller compiles themselves, see setpostshader().
- * 0 means "none": gxPresent() then draws with g_prog exactly as it always
+ * 0 means "none": gxPresent() then draws with g_gx_prog exactly as it always
  * did, so the feature costs nothing until it is used. */
-static GLuint g_postProg = 0;
-static GLint  g_postProj = -1, g_postTex = -1, g_postTexel = -1, g_postTime = -1;
+static GLuint g_gx_postProg = 0;
+static GLint  g_gx_postProj = -1, g_gx_postTex = -1, g_gx_postTexel = -1, g_gx_postTime = -1;
 
 static const char* GX_VS =
     "#version 120\n"
@@ -1720,42 +1758,42 @@ static void gxCreateProgram(void) {
     char buf[512];
     vs = gxCompile(GL_VERTEX_SHADER, GX_VS);
     fs = gxCompile(GL_FRAGMENT_SHADER, GX_FS);
-    g_prog = glCreateProgram();
-    glAttachShader(g_prog, vs);
-    glAttachShader(g_prog, fs);
-    glBindAttribLocation(g_prog, 0, "aPos");
-    glBindAttribLocation(g_prog, 1, "aColor");
-    glBindAttribLocation(g_prog, 2, "aUV");
-    glLinkProgram(g_prog);
-    glGetProgramiv(g_prog, GL_LINK_STATUS, &ok);
+    g_gx_prog = glCreateProgram();
+    glAttachShader(g_gx_prog, vs);
+    glAttachShader(g_gx_prog, fs);
+    glBindAttribLocation(g_gx_prog, 0, "aPos");
+    glBindAttribLocation(g_gx_prog, 1, "aColor");
+    glBindAttribLocation(g_gx_prog, 2, "aUV");
+    glLinkProgram(g_gx_prog);
+    glGetProgramiv(g_gx_prog, GL_LINK_STATUS, &ok);
     if (!ok) {
         memset(buf, 0, sizeof(buf));
-        glGetProgramInfoLog(g_prog, 511, NULL, buf);
+        glGetProgramInfoLog(g_gx_prog, 511, NULL, buf);
         MessageBoxA(NULL, buf, "Program Error", MB_OK);
     }
     glDeleteShader(vs);
     glDeleteShader(fs);
-    glUseProgram(g_prog);
-    g_uProj = glGetUniformLocation(g_prog, "uProj");
-    g_uUseTex = glGetUniformLocation(g_prog, "uUseTex");
-    g_uPatScale = glGetUniformLocation(g_prog, "uPatScale");
-    g_uNoBlend  = glGetUniformLocation(g_prog, "uNoBlend");
-    g_uPatOff   = glGetUniformLocation(g_prog, "uPatOff");
-    g_uAlpha    = glGetUniformLocation(g_prog, "uAlpha");
-    g_uVertA    = glGetUniformLocation(g_prog, "uVertA");
-    g_uTex2     = glGetUniformLocation(g_prog, "uTex2");
-    g_uMixMode  = glGetUniformLocation(g_prog, "uMixMode");
-    g_uMixW     = glGetUniformLocation(g_prog, "uMixW");
-    g_uMixColor = glGetUniformLocation(g_prog, "uMixColor");
-    glUniform1i(glGetUniformLocation(g_prog, "uTex"), 0);
+    glUseProgram(g_gx_prog);
+    g_gx_uProj = glGetUniformLocation(g_gx_prog, "uProj");
+    g_gx_uUseTex = glGetUniformLocation(g_gx_prog, "uUseTex");
+    g_gx_uPatScale = glGetUniformLocation(g_gx_prog, "uPatScale");
+    g_gx_uNoBlend  = glGetUniformLocation(g_gx_prog, "uNoBlend");
+    g_gx_uPatOff   = glGetUniformLocation(g_gx_prog, "uPatOff");
+    g_gx_uAlpha    = glGetUniformLocation(g_gx_prog, "uAlpha");
+    g_gx_uVertA    = glGetUniformLocation(g_gx_prog, "uVertA");
+    g_gx_uTex2     = glGetUniformLocation(g_gx_prog, "uTex2");
+    g_gx_uMixMode  = glGetUniformLocation(g_gx_prog, "uMixMode");
+    g_gx_uMixW     = glGetUniformLocation(g_gx_prog, "uMixW");
+    g_gx_uMixColor = glGetUniformLocation(g_gx_prog, "uMixColor");
+    glUniform1i(glGetUniformLocation(g_gx_prog, "uTex"), 0);
     /* Without this uTex2 defaults to unit 0, so miximagei() would sample
      * the FIRST image twice and the cross fade would do nothing at all. */
-    glUniform1i(g_uTex2, 1);
-    glUniform1i(g_uVertA, 0);
-    glUniform2f(g_uPatScale, 1.f / 8.f, -1.f / 8.f);
-    glUniform2f(g_uPatOff, 0.f, 0.f);
-    glUniform1f(g_uAlpha, 1.f);
-    glUniform1i(g_uNoBlend, 0);
+    glUniform1i(g_gx_uTex2, 1);
+    glUniform1i(g_gx_uVertA, 0);
+    glUniform2f(g_gx_uPatScale, 1.f / 8.f, -1.f / 8.f);
+    glUniform2f(g_gx_uPatOff, 0.f, 0.f);
+    glUniform1f(g_gx_uAlpha, 1.f);
+    glUniform1i(g_gx_uNoBlend, 0);
 }
 
 /*======================================================================
@@ -1767,7 +1805,7 @@ static void gxCreateProgram(void) {
  *  colour grading, blur, scanlines, vignettes, distortion, or a field
  *  computed per pixel on the GPU.
  *
- *  It deliberately does NOT touch g_prog, so every EasyX drawing call
+ *  It deliberately does NOT touch g_gx_prog, so every EasyX drawing call
  *  (circle, putimage, outtextxy ...) keeps its own well defined behaviour.
  *  Replacing that program would mean reimplementing the uUseTex branches
  *  that solid fills, textures, hatch patterns and text all depend on.
@@ -1788,9 +1826,9 @@ static void gxCreateProgram(void) {
  *  compatibility profile context, so use texture2D() and gl_FragColor.
  */
 static void gxPostDestroy(void) {
-    if (g_postProg) glDeleteProgram(g_postProg);
-    g_postProg = 0;
-    g_postProj = g_postTex = g_postTexel = g_postTime = -1;
+    if (g_gx_postProg) glDeleteProgram(g_gx_postProg);
+    g_gx_postProg = 0;
+    g_gx_postProj = g_gx_postTex = g_gx_postTexel = g_gx_postTime = -1;
 }
 
 /* Compile fsSrc as the post processing pass.  NULL or "" turns it off and
@@ -1800,10 +1838,10 @@ static bool setpostshader(const char* fsSrc) {
     GLuint vs, fs, prog;
     GLint ok = 0;
     char buf[512];
-    if (!g_glReady) return false;
+    if (!g_gx_glReady) return false;
     gxFlush();
     gxPostDestroy();
-    if (!fsSrc || !*fsSrc) { glUseProgram(g_prog); return true; }
+    if (!fsSrc || !*fsSrc) { glUseProgram(g_gx_prog); return true; }
 
     vs = gxCompile(GL_VERTEX_SHADER, GX_VS);
     fs = gxCompile(GL_FRAGMENT_SHADER, fsSrc);
@@ -1831,54 +1869,54 @@ static bool setpostshader(const char* fsSrc) {
         glDeleteProgram(prog);
         return false;
     }
-    g_postProg  = prog;
-    g_postProj  = glGetUniformLocation(prog, "uProj");
-    g_postTex   = glGetUniformLocation(prog, "uTex");
-    g_postTexel = glGetUniformLocation(prog, "uTexel");
-    g_postTime  = glGetUniformLocation(prog, "uTime");
+    g_gx_postProg  = prog;
+    g_gx_postProj  = glGetUniformLocation(prog, "uProj");
+    g_gx_postTex   = glGetUniformLocation(prog, "uTex");
+    g_gx_postTexel = glGetUniformLocation(prog, "uTexel");
+    g_gx_postTime  = glGetUniformLocation(prog, "uTime");
     glUseProgram(prog);
     /* uTex would default to unit 0 anyway, but say it: unit 0 is what the
      * canvas is bound to during the present. */
-    if (g_postTex >= 0) glUniform1i(g_postTex, 0);
-    glUseProgram(g_prog);
+    if (g_gx_postTex >= 0) glUniform1i(g_gx_postTex, 0);
+    glUseProgram(g_gx_prog);
     return true;
 }
 
 /* Location of one of the caller's own uniforms, or -1 if the shader does
  * not declare it (the compiler drops uniforms that are never read). */
 static int getpostloc(const char* name) {
-    if (!g_postProg || !name) return -1;
-    return (int)glGetUniformLocation(g_postProg, name);
+    if (!g_gx_postProg || !name) return -1;
+    return (int)glGetUniformLocation(g_gx_postProg, name);
 }
 
 /* Feed a uniform.  loc comes from getpostloc(); anything negative is
  * ignored, so a shader can be swapped without guarding every call. */
 static void setpost1f(int loc, float x) {
-    if (!g_postProg || loc < 0) return;
-    glUseProgram(g_postProg); glUniform1f((GLint)loc, x); glUseProgram(g_prog);
+    if (!g_gx_postProg || loc < 0) return;
+    glUseProgram(g_gx_postProg); glUniform1f((GLint)loc, x); glUseProgram(g_gx_prog);
 }
 static void setpost2f(int loc, float x, float y) {
-    if (!g_postProg || loc < 0) return;
-    glUseProgram(g_postProg); glUniform2f((GLint)loc, x, y); glUseProgram(g_prog);
+    if (!g_gx_postProg || loc < 0) return;
+    glUseProgram(g_gx_postProg); glUniform2f((GLint)loc, x, y); glUseProgram(g_gx_prog);
 }
 static void setpost3f(int loc, float x, float y, float z) {
-    if (!g_postProg || loc < 0) return;
-    glUseProgram(g_postProg); glUniform3f((GLint)loc, x, y, z); glUseProgram(g_prog);
+    if (!g_gx_postProg || loc < 0) return;
+    glUseProgram(g_gx_postProg); glUniform3f((GLint)loc, x, y, z); glUseProgram(g_gx_prog);
 }
 static void setpost4f(int loc, float x, float y, float z, float w) {
-    if (!g_postProg || loc < 0) return;
-    glUseProgram(g_postProg); glUniform4f((GLint)loc, x, y, z, w); glUseProgram(g_prog);
+    if (!g_gx_postProg || loc < 0) return;
+    glUseProgram(g_gx_postProg); glUniform4f((GLint)loc, x, y, z, w); glUseProgram(g_gx_prog);
 }
 static void setpost1i(int loc, int v) {
-    if (!g_postProg || loc < 0) return;
-    glUseProgram(g_postProg); glUniform1i((GLint)loc, v); glUseProgram(g_prog);
+    if (!g_gx_postProg || loc < 0) return;
+    glUseProgram(g_gx_postProg); glUniform1i((GLint)loc, v); glUseProgram(g_gx_prog);
 }
 
 /* Bind an IMAGE as an extra texture for the shader to sample.  Unit 0 is
  * the canvas, so use 1 and up, and point a sampler uniform at the same
  * number with setpost1i(). */
 static void setposttex(int unit, IMAGE* img) {
-    if (!g_postProg || unit < 1 || unit > 7) return;
+    if (!g_gx_postProg || unit < 1 || unit > 7) return;
     glActiveTexture((GLenum)(GL_TEXTURE0 + unit));
     glBindTexture(GL_TEXTURE_2D, img ? img->tex : 0);
     glActiveTexture(GL_TEXTURE0);
@@ -1904,37 +1942,37 @@ static void setposttex(int unit, IMAGE* img) {
 #define GX_BLEND_SCREEN  4
 #define GX_BLEND_NONE    5
 
-static GxVtxVec g_vbuf;
-static GxCmdVec g_cmds;
-static size_t   g_cmdStart = 0;
-static GLuint   g_curTex = 0;
-static int      g_curUseTex = 0;
-static int      g_curRop = R2_COPYPEN;
-static float    g_curAlpha = 1.f;        /* alpha of the running batch     */
-static float    g_alpha = 1.f;           /* setalpha(): default for drawing */
+static GxVtxVec g_gx_vbuf;
+static GxCmdVec g_gx_cmds;
+static size_t   g_gx_cmdStart = 0;
+static GLuint   g_gx_curTex = 0;
+static int      g_gx_curUseTex = 0;
+static int      g_gx_curRop = R2_COPYPEN;
+static float    g_gx_curAlpha = 1.f;        /* alpha of the running batch     */
+static float    g_gx_alpha = 1.f;           /* setalpha(): default for drawing */
 /* miximagec() / miximagei(): the second source of the cross fade and how far
  * to travel towards it.  Per command state, so changing any of it closes the
  * open batch - same as vertA. */
-static int    g_curMixMode = 0;      /* 0 off, 1 flat colour, 2 second image */
-static float  g_curMixW = 0.f;       /* 0 = all first source, 1 = all second */
-static float  g_curMixR = 0.f, g_curMixG = 0.f;
-static float  g_curMixB = 0.f, g_curMixA = 1.f;
-static GLuint g_curTex2 = 0;         /* the second image, on GL_TEXTURE1 */
+static int    g_gx_curMixMode = 0;      /* 0 off, 1 flat colour, 2 second image */
+static float  g_gx_curMixW = 0.f;       /* 0 = all first source, 1 = all second */
+static float  g_gx_curMixR = 0.f, g_gx_curMixG = 0.f;
+static float  g_gx_curMixB = 0.f, g_gx_curMixA = 1.f;
+static GLuint g_gx_curTex2 = 0;         /* the second image, on GL_TEXTURE1 */
 /* IMAGE texture filtering, see setimagefilter().  Declared here because
  * gxFlush() (section 6) reads it on every draw.
  * 0 = NEAREST (crisp, the default), 1 = LINEAR (smooth). */
-static int  g_imgFilter = 0;
-static float    g_curPatSx = 0.125f, g_curPatSy = -0.125f;
-static float    g_curPatOx = 0.f, g_curPatOy = 0.f;
-static int      g_curPatTile = 0;
-static int      g_curBlend = GX_BLEND_ALPHA;   /* of the running batch */
+static int  g_gx_imgFilter = 0;
+static float    g_gx_curPatSx = 0.125f, g_gx_curPatSy = -0.125f;
+static float    g_gx_curPatOx = 0.f, g_gx_curPatOy = 0.f;
+static int      g_gx_curPatTile = 0;
+static int      g_gx_curBlend = GX_BLEND_ALPHA;   /* of the running batch */
 /* IMAGE filtering is recorded PER COMMAND, exactly like tile / blend /
  * alpha, and applied unconditionally at draw time.  It cannot be a global
  * that gxFlush() re-reads, because the filter is a property of the texture
  * object: two commands sharing one texture that were queued before and
  * after a setimagefilter() call would otherwise both get the LAST value. */
-static int      g_curFilter = 0;               /* of the running batch   */
-static int      g_blend    = GX_BLEND_ALPHA;   /* setblendmode()        */
+static int      g_gx_curFilter = 0;               /* of the running batch   */
+static int      g_gx_blend    = GX_BLEND_ALPHA;   /* setblendmode()        */
 
 /* Corner opacity state, see GX_FS.  Like tile / blend / alpha it is
  * recorded per command: two commands queued either side of a change must
@@ -1944,13 +1982,13 @@ static int      g_blend    = GX_BLEND_ALPHA;   /* setblendmode()        */
  * use it take the four corner values as arguments, so leaving it on would
  * silently fade the next unrelated putimage().  Both clear it again before
  * returning. */
-static int      g_curVertA   = 0;              /* of the running batch */
+static int      g_gx_curVertA   = 0;              /* of the running batch */
 
 
 
 /* Apply the clip box.
  *
- * g_clipRect is stored in LOGICAL coordinates, so the clip region follows
+ * g_gx_clipRect is stored in LOGICAL coordinates, so the clip region follows
  * setorigin() and setaspectratio() exactly like every other EasyX
  * coordinate.  GetRgnBox() reports the bounding rectangle the GDI way, with
  * an exclusive right / bottom edge (CreateRectRgn(0,0,100,100) covers the
@@ -1958,34 +1996,34 @@ static int      g_curVertA   = 0;              /* of the running batch */
  * used, so a non rectangular HRGN clips to its rectangle. */
 static void gxApplyClip(void) {
     long x0, x1, y0, y1;
-    if (!g_glReady) return;
-    if (!g_clipOn) { glDisable(GL_SCISSOR_TEST); return; }
-    x0 = (long)floorf((float)g_clipRect.left   * g_scaleX + g_originX);
-    x1 = (long)ceilf ((float)g_clipRect.right  * g_scaleX + g_originX);
-    y0 = (long)floorf((float)g_clipRect.top    * g_scaleY + g_originY);
-    y1 = (long)ceilf ((float)g_clipRect.bottom * g_scaleY + g_originY);
+    if (!g_gx_glReady) return;
+    if (!g_gx_clipOn) { glDisable(GL_SCISSOR_TEST); return; }
+    x0 = (long)floorf((float)g_gx_clipRect.left   * g_gx_scaleX + g_gx_originX);
+    x1 = (long)ceilf ((float)g_gx_clipRect.right  * g_gx_scaleX + g_gx_originX);
+    y0 = (long)floorf((float)g_gx_clipRect.top    * g_gx_scaleY + g_gx_originY);
+    y1 = (long)ceilf ((float)g_gx_clipRect.bottom * g_gx_scaleY + g_gx_originY);
     /* Clamp before flipping: the old code only clamped x0 and the bottom
      * edge, so a region left of or above the target produced a negative
      * glScissor() width / height (GL_INVALID_VALUE, box ignored). */
     if (x0 < 0)      x0 = 0;
     if (y0 < 0)      y0 = 0;
-    if (x0 > g_devW) x0 = g_devW;
-    if (y0 > g_devH) y0 = g_devH;
+    if (x0 > g_gx_devW) x0 = g_gx_devW;
+    if (y0 > g_gx_devH) y0 = g_gx_devH;
     if (x1 < x0) x1 = x0;
     if (y1 < y0) y1 = y0;
-    if (x1 > g_devW) x1 = g_devW;
-    if (y1 > g_devH) y1 = g_devH;
+    if (x1 > g_gx_devW) x1 = g_gx_devW;
+    if (y1 > g_gx_devH) y1 = g_gx_devH;
     glEnable(GL_SCISSOR_TEST);
     /* glScissor() counts y from the bottom of the render target. */
-    glScissor((GLint)x0, (GLint)((long)g_devH - y1),
+    glScissor((GLint)x0, (GLint)((long)g_gx_devH - y1),
               (GLsizei)(x1 - x0), (GLsizei)(y1 - y0));
 }
 
 static void gxBindTarget(void) {
-    if (!g_glReady) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, g_target->fbo);
-    glViewport(0, 0, g_target->w, g_target->h);
-    glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (!g_gx_glReady) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target->fbo);
+    glViewport(0, 0, g_gx_target->w, g_gx_target->h);
+    glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
     gxApplyClip();
 }
 
@@ -2070,15 +2108,15 @@ static void gxSetBlendEquation(int mode) {
 
 static void gxSetRopState(int rop2) {
     int rop = gxRop2Fix(rop2);
-    if (!g_glReady) return;
+    if (!g_gx_glReady) return;
     /* Outside R2_COPYPEN blending is off, so a textured fragment has to be
      * alpha tested (uNoBlend) - otherwise every glyph or transparent pixel
      * would be painted as an opaque block. */
-    glUniform1i(g_uNoBlend, (rop == R2_COPYPEN) ? 0 : 1);
+    glUniform1i(g_gx_uNoBlend, (rop == R2_COPYPEN) ? 0 : 1);
     if (rop == R2_COPYPEN) {
         glDisable(GL_COLOR_LOGIC_OP);
         glEnable(GL_BLEND);
-        gxSetBlendEquation(g_curBlend);
+        gxSetBlendEquation(g_gx_curBlend);
     } else {
         glDisable(GL_BLEND);
         glEnable(GL_COLOR_LOGIC_OP);
@@ -2087,31 +2125,31 @@ static void gxSetRopState(int rop2) {
 }
 
 static void gxEndCmd(void) {
-    if (g_vbuf.size > g_cmdStart) {
+    if (g_gx_vbuf.size > g_gx_cmdStart) {
         GLCmd c;
-        c.first = g_cmdStart;
-        c.count = g_vbuf.size - g_cmdStart;
-        c.tex = g_curTex;
-        c.useTex = g_curUseTex;
-        c.rop = g_curRop;
-        c.alpha = g_curAlpha;
-        c.psx = g_curPatSx;
-        c.psy = g_curPatSy;
-        c.pox = g_curPatOx;
-        c.poy = g_curPatOy;
-        c.tile = g_curPatTile;
-        c.blend = g_curBlend;
-        c.filter = g_curFilter;
-        c.vertA = g_curVertA;
-        c.mixMode = g_curMixMode;
-        c.mixW = g_curMixW;
-        c.tex2 = g_curTex2;
-        c.mixR = g_curMixR; c.mixG = g_curMixG;
-        c.mixB = g_curMixB; c.mixA = g_curMixA;
-        /* g_quadRun still describes the batch that is being closed here:
+        c.first = g_gx_cmdStart;
+        c.count = g_gx_vbuf.size - g_gx_cmdStart;
+        c.tex = g_gx_curTex;
+        c.useTex = g_gx_curUseTex;
+        c.rop = g_gx_curRop;
+        c.alpha = g_gx_curAlpha;
+        c.psx = g_gx_curPatSx;
+        c.psy = g_gx_curPatSy;
+        c.pox = g_gx_curPatOx;
+        c.poy = g_gx_curPatOy;
+        c.tile = g_gx_curPatTile;
+        c.blend = g_gx_curBlend;
+        c.filter = g_gx_curFilter;
+        c.vertA = g_gx_curVertA;
+        c.mixMode = g_gx_curMixMode;
+        c.mixW = g_gx_curMixW;
+        c.tex2 = g_gx_curTex2;
+        c.mixR = g_gx_curMixR; c.mixG = g_gx_curMixG;
+        c.mixB = g_gx_curMixB; c.mixA = g_gx_curMixA;
+        /* g_gx_quadRun still describes the batch that is being closed here:
          * gxV() and gxQuadMode() both end it BEFORE flipping the flag. */
-        c.quads = g_quadRun ? 1 : 0;
-        GxCmdVec_pushv(&g_cmds, c);
+        c.quads = g_gx_quadRun ? 1 : 0;
+        GxCmdVec_pushv(&g_gx_cmds, c);
     }
     /* Round the next batch up to a multiple of 4 vertices.
      *
@@ -2120,43 +2158,43 @@ static void gxEndCmd(void) {
      * of 4 - otherwise the pattern would read the previous batch's vertices.
      * At most three padding vertices per batch, and they sit between the two
      * commands, so no command covers them and they are never drawn. */
-    while ((g_vbuf.size & 3u) != 0u) {
-        Vtx* t = GxVtxVec_push(&g_vbuf);
+    while ((g_gx_vbuf.size & 3u) != 0u) {
+        Vtx* t = GxVtxVec_push(&g_gx_vbuf);
         t->x = t->y = 0.f;
         t->r = t->g = t->b = t->a = 0.f;
         t->u = t->v = 0.f;
     }
-    g_cmdStart = g_vbuf.size;
+    g_gx_cmdStart = g_gx_vbuf.size;
 }
 
 /* Grow the precomputed index pattern to cover at least "quads" quads. */
 static void gxEnsureIdx(size_t quads) {
     size_t cap, j;
-    if (quads <= g_idxQuads) return;
-    cap = (g_idxQuads == 0) ? 1024 : g_idxQuads;
+    if (quads <= g_gx_idxQuads) return;
+    cap = (g_gx_idxQuads == 0) ? 1024 : g_gx_idxQuads;
     while (cap < quads) {
         if (cap > ((size_t)-1) / 2) { cap = quads; break; }
         cap *= 2;
     }
     {
-        unsigned int* p = (unsigned int*)realloc(g_idx, cap * 6u * sizeof(unsigned int));
+        unsigned int* p = (unsigned int*)realloc(g_gx_idx, cap * 6u * sizeof(unsigned int));
         if (!p) { MessageBoxA(NULL, "Out of memory (index buffer)", "Error", MB_OK); exit(1); }
-        g_idx = p;
+        g_gx_idx = p;
     }
-    for (j = g_idxQuads; j < cap; j++) {
+    for (j = g_gx_idxQuads; j < cap; j++) {
         unsigned int b = (unsigned int)(j * 4u);
-        g_idx[j * 6u + 0] = b;     g_idx[j * 6u + 1] = b + 1u;
-        g_idx[j * 6u + 2] = b + 2u;
-        g_idx[j * 6u + 3] = b;     g_idx[j * 6u + 4] = b + 2u;
-        g_idx[j * 6u + 5] = b + 3u;
+        g_gx_idx[j * 6u + 0] = b;     g_gx_idx[j * 6u + 1] = b + 1u;
+        g_gx_idx[j * 6u + 2] = b + 2u;
+        g_gx_idx[j * 6u + 3] = b;     g_gx_idx[j * 6u + 4] = b + 2u;
+        g_gx_idx[j * 6u + 5] = b + 3u;
     }
-    g_idxQuads = cap;
+    g_gx_idxQuads = cap;
 }
 
 GX_INLINE void gxSetRop(int rop) {
-    if (rop != g_curRop) {
+    if (rop != g_gx_curRop) {
         gxEndCmd();
-        g_curRop = rop;
+        g_gx_curRop = rop;
     }
 }
 
@@ -2165,30 +2203,30 @@ GX_INLINE void gxSetRop(int rop) {
 GX_INLINE void gxSetAlpha(float a) {
     if (a < 0.f) a = 0.f;
     if (a > 1.f) a = 1.f;
-    if (a != g_curAlpha) {
+    if (a != g_gx_curAlpha) {
         gxEndCmd();
-        g_curAlpha = a;
+        g_gx_curAlpha = a;
     }
 }
 
 GX_INLINE void gxSetPat(float sx, float sy, float ox, float oy, int tile) {
-    if (sx != g_curPatSx || sy != g_curPatSy ||
-        ox != g_curPatOx || oy != g_curPatOy ||
-        tile != g_curPatTile) {
+    if (sx != g_gx_curPatSx || sy != g_gx_curPatSy ||
+        ox != g_gx_curPatOx || oy != g_gx_curPatOy ||
+        tile != g_gx_curPatTile) {
         gxEndCmd();
-        g_curPatSx = sx;
-        g_curPatSy = sy;
-        g_curPatOx = ox;
-        g_curPatOy = oy;
-        g_curPatTile = tile;
+        g_gx_curPatSx = sx;
+        g_gx_curPatSy = sy;
+        g_gx_curPatOx = ox;
+        g_gx_curPatOy = oy;
+        g_gx_curPatTile = tile;
     }
 }
 
 static void gxSetTex(GLuint tex, int useTex) {
-    if (tex != g_curTex || useTex != g_curUseTex) {
+    if (tex != g_gx_curTex || useTex != g_gx_curUseTex) {
         gxEndCmd();
-        g_curTex = tex;
-        g_curUseTex = useTex;
+        g_gx_curTex = tex;
+        g_gx_curUseTex = useTex;
     }
 }
 
@@ -2196,18 +2234,18 @@ static void gxSetTex(GLuint tex, int useTex) {
  * command, so changing it has to close the batch that is still open. */
 GX_INLINE void gxSetBlend(int mode) {
     if (mode < 0 || mode > GX_BLEND_NONE) mode = GX_BLEND_ALPHA;
-    if (mode != g_curBlend) {
+    if (mode != g_gx_curBlend) {
         gxEndCmd();
-        g_curBlend = mode;
+        g_gx_curBlend = mode;
     }
 }
 
 GX_INLINE void setblendmode(int mode) {
-    g_blend = (mode >= GX_BLEND_ALPHA && mode <= GX_BLEND_NONE)
+    g_gx_blend = (mode >= GX_BLEND_ALPHA && mode <= GX_BLEND_NONE)
               ? mode : GX_BLEND_ALPHA;
-    gxSetBlend(g_blend);
+    gxSetBlend(g_gx_blend);
 }
-GX_INLINE int getblendmode(void) { return g_blend; }
+GX_INLINE int getblendmode(void) { return g_gx_blend; }
 
 /* implemented in section 18b (EasyX GetImageBuffer support) */
 static void gxSyncImgBufs(void);
@@ -2218,66 +2256,66 @@ static void gxFlush(void) {
     size_t i;
     /* Nothing to submit before initgraph() (or after closegraph()): the GL
      * entry points are not loaded yet, so just drop the batch. */
-    if (!g_glReady) {
-        GxVtxVec_clear(&g_vbuf);
-        GxCmdVec_clear(&g_cmds);
-        g_cmdStart = 0;
+    if (!g_gx_glReady) {
+        GxVtxVec_clear(&g_gx_vbuf);
+        GxCmdVec_clear(&g_gx_cmds);
+        g_gx_cmdStart = 0;
         return;
     }
     gxEndCmd();
     gxSyncImgBufs();      /* upload IMAGE buffers edited through GetImageBuffer() */
-    if (g_cmds.size == 0) { GxVtxVec_clear(&g_vbuf); g_cmdStart = 0; return; }
+    if (g_gx_cmds.size == 0) { GxVtxVec_clear(&g_gx_vbuf); g_gx_cmdStart = 0; return; }
     /* Upload the index pattern before drawing.  It only ever grows by being
      * appended to, so only the part that is new has to be sent; a frame that
      * reuses the same capacity uploads nothing at all. */
     {
         size_t maxV = 0, need;
-        for (i = 0; i < g_cmds.size; i++) {
-            if (g_cmds.data[i].quads) {
-                size_t end = g_cmds.data[i].first + g_cmds.data[i].count;
+        for (i = 0; i < g_gx_cmds.size; i++) {
+            if (g_gx_cmds.data[i].quads) {
+                size_t end = g_gx_cmds.data[i].first + g_gx_cmds.data[i].count;
                 if (end > maxV) maxV = end;
             }
         }
         need = (maxV + 3u) / 4u;
         if (need > 0) {
             gxEnsureIdx(need);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_ibo);
-            if (need > g_iboQuads) {
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_gx_ibo);
+            if (need > g_gx_iboQuads) {
                 glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                              (GLsizei)(need * 6u * sizeof(unsigned int)),
                              NULL, GL_DYNAMIC_DRAW);
-                g_iboQuads = need;
-                g_iboUpTo  = 0;      /* the store was reallocated */
+                g_gx_iboQuads = need;
+                g_gx_iboUpTo  = 0;      /* the store was reallocated */
             }
-            if (need > g_iboUpTo) {
+            if (need > g_gx_iboUpTo) {
                 glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,
-                                (GXGLintptr)(g_iboUpTo * 6u),
-                                (GXGLsizeiptr)((need - g_iboUpTo) * 6u
+                                (GXGLintptr)(g_gx_iboUpTo * 6u),
+                                (GXGLsizeiptr)((need - g_gx_iboUpTo) * 6u
                                                * sizeof(unsigned int)),
-                                g_idx + g_iboUpTo * 6u);
-                g_iboUpTo = need;
+                                g_gx_idx + g_gx_iboUpTo * 6u);
+                g_gx_iboUpTo = need;
             }
         }
     }
     gxBindTarget();
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_vbo);
     /* glBufferSubData() when the existing store is large enough, because
      * glBufferData() re-allocates.  Round the new capacity up so a buffer
      * that keeps growing by a few vertices per frame does not reallocate
      * on every one of them. */
-    if (g_vbuf.size > g_vboCap) {
-        size_t cap = (g_vboCap == 0) ? 4096 : g_vboCap;
-        while (cap < g_vbuf.size) {
-            if (cap > ((size_t)-1) / 2) { cap = g_vbuf.size; break; }
+    if (g_gx_vbuf.size > g_gx_vboCap) {
+        size_t cap = (g_gx_vboCap == 0) ? 4096 : g_gx_vboCap;
+        while (cap < g_gx_vbuf.size) {
+            if (cap > ((size_t)-1) / 2) { cap = g_gx_vbuf.size; break; }
             cap *= 2;
         }
         glBufferData(GL_ARRAY_BUFFER, (GLsizei)(cap * sizeof(Vtx)),
                      NULL, GL_DYNAMIC_DRAW);
-        g_vboCap = cap;
+        g_gx_vboCap = cap;
     }
-    if (g_vbuf.size != 0)
+    if (g_gx_vbuf.size != 0)
         glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        (GLsizei)(g_vbuf.size * sizeof(Vtx)), g_vbuf.data);
+                        (GLsizei)(g_gx_vbuf.size * sizeof(Vtx)), g_gx_vbuf.data);
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
@@ -2310,28 +2348,28 @@ static void gxFlush(void) {
         GLuint lastTex2 = 0;
         bool  first = true;
 
-        for (i = 0; i < g_cmds.size; i++) {
-            GLCmd* c = &g_cmds.data[i];
+        for (i = 0; i < g_gx_cmds.size; i++) {
+            GLCmd* c = &g_gx_cmds.data[i];
             if (first || c->rop != lastRop || c->blend != lastBlend) {
                 gxSetRopState(c->rop);
-                /* gxSetRopState() reads g_curBlend, so it has to be set
+                /* gxSetRopState() reads g_gx_curBlend, so it has to be set
                  * before the call rather than after it. */
-                g_curBlend = c->blend;
+                g_gx_curBlend = c->blend;
                 if (gxRop2Fix(c->rop) == R2_COPYPEN) gxSetBlendEquation(c->blend);
                 lastRop = c->rop; lastBlend = c->blend;
             } else {
-                g_curBlend = c->blend;
+                g_gx_curBlend = c->blend;
             }
             if (first || c->psx != lastPsx || c->psy != lastPsy) {
-                glUniform2f(g_uPatScale, c->psx, c->psy);
+                glUniform2f(g_gx_uPatScale, c->psx, c->psy);
                 lastPsx = c->psx; lastPsy = c->psy;
             }
             if (first || c->pox != lastPox || c->poy != lastPoy) {
-                glUniform2f(g_uPatOff, c->pox, c->poy);
+                glUniform2f(g_gx_uPatOff, c->pox, c->poy);
                 lastPox = c->pox; lastPoy = c->poy;
             }
             if (first || c->alpha != lastAlpha) {
-                glUniform1f(g_uAlpha, c->alpha);
+                glUniform1f(g_gx_uAlpha, c->alpha);
                 lastAlpha = c->alpha;
             }
             if (first || c->tex != lastTex) {
@@ -2370,26 +2408,26 @@ static void gxFlush(void) {
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
             }
             if (first || c->useTex != lastUseTex) {
-                glUniform1i(g_uUseTex, c->useTex);
+                glUniform1i(g_gx_uUseTex, c->useTex);
                 lastUseTex = c->useTex;
             }
             if (first || c->vertA != lastVertA) {
-                glUniform1i(g_uVertA, c->vertA);
+                glUniform1i(g_gx_uVertA, c->vertA);
                 lastVertA = c->vertA;
             }
             if (first || c->mixMode != lastMixMode) {
-                glUniform1i(g_uMixMode, c->mixMode);
+                glUniform1i(g_gx_uMixMode, c->mixMode);
                 lastMixMode = c->mixMode;
             }
             if (c->mixMode != 0) {
                 if (first || c->mixW != lastMixW) {
-                    glUniform1f(g_uMixW, c->mixW);
+                    glUniform1f(g_gx_uMixW, c->mixW);
                     lastMixW = c->mixW;
                 }
                 if (c->mixMode == 1
                     && (first || c->mixR != lastMixR || c->mixG != lastMixG
                         || c->mixB != lastMixB || c->mixA != lastMixA)) {
-                    glUniform4f(g_uMixColor, c->mixR, c->mixG,
+                    glUniform4f(g_gx_uMixColor, c->mixR, c->mixG,
                                 c->mixB, c->mixA);
                     lastMixR = c->mixR; lastMixG = c->mixG;
                     lastMixB = c->mixB; lastMixA = c->mixA;
@@ -2420,23 +2458,23 @@ static void gxFlush(void) {
             first = false;
         }
     }
-    GxCmdVec_clear(&g_cmds);
-    GxVtxVec_clear(&g_vbuf);
-    g_cmdStart = 0;
-    g_quadRun = false;      /* the next batch starts as a triangle list */
+    GxCmdVec_clear(&g_gx_cmds);
+    GxVtxVec_clear(&g_gx_vbuf);
+    g_gx_cmdStart = 0;
+    g_gx_quadRun = false;      /* the next batch starts as a triangle list */
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    g_curRop = g_rop2;
-    g_curAlpha = g_alpha;        /* invariant: the setalpha() level when idle */
-    g_curBlend = g_blend;        /* invariant: the setblendmode() mode too  */
-    g_curFilter = g_imgFilter;   /* invariant: the setimagefilter() mode    */
+    g_gx_curRop = g_gx_rop2;
+    g_gx_curAlpha = g_gx_alpha;        /* invariant: the setalpha() level when idle */
+    g_gx_curBlend = g_gx_blend;        /* invariant: the setblendmode() mode too  */
+    g_gx_curFilter = g_gx_imgFilter;   /* invariant: the setimagefilter() mode    */
     gxSetRopState(R2_COPYPEN);   /* invariant: plain blending when idle */
 }
 
 /*======================================================================
  *  6a. OpenGL context version
  *====================================================================*/
-static int g_reqGLMajor = 3, g_reqGLMinor = 3;   /* what initgraph() asks for */
-static int g_glMajor = 0, g_glMinor = 0;         /* what it actually got      */
+static int g_gx_reqGLMajor = 3, g_gx_reqGLMinor = 3;   /* what initgraph() asks for */
+static int g_gx_glMajor = 0, g_gx_glMinor = 0;         /* what it actually got      */
 
 /* Ask for a specific OpenGL context version.  Must be called BEFORE
  * initgraph(); once the context exists the request is ignored.
@@ -2464,85 +2502,85 @@ static int g_glMajor = 0, g_glMinor = 0;         /* what it actually got      */
  * Compare getglmajor()/getglminor() against what you asked for to find out
  * whether it took effect. */
 GX_INLINE void setglversion(int major, int minor) {
-    if (g_glReady) return;                  /* too late: context exists */
+    if (g_gx_glReady) return;                  /* too late: context exists */
     if (major < 1) major = 1;
     if (minor < 0) minor = 0;
-    g_reqGLMajor = major;
-    g_reqGLMinor = minor;
+    g_gx_reqGLMajor = major;
+    g_gx_reqGLMinor = minor;
 }
-GX_INLINE int getglmajor(void) { return g_glMajor; }
-GX_INLINE int getglminor(void) { return g_glMinor; }
+GX_INLINE int getglmajor(void) { return g_gx_glMajor; }
+GX_INLINE int getglminor(void) { return g_gx_glMinor; }
 
 /*======================================================================
  *  6b. Multisample anti aliasing (MSAA)
  *====================================================================*/
 /* The canvas is normally an FBO with a plain texture attached.  With MSAA
  * on it becomes an FBO with a multisampled RENDERBUFFER attached, and
- * g_canvasTarget.fbo - the one every draw call binds - points at that
+ * g_gx_canvasTarget.fbo - the one every draw call binds - points at that
  * instead.  Drawing code is untouched; the only thing that has to know is
  * anything that READS the canvas, because glReadPixels() and texture
  * sampling cannot touch a multisample attachment.  Those go through
  * gxReadFbo(), which resolves first. */
-static GLuint g_msaaFbo = 0, g_msaaRb = 0;
-static int    g_msaaW = 0, g_msaaH = 0;
-static int    g_aaSamples = 0;          /* requested level, 0 = off */
+static GLuint g_gx_msaaFbo = 0, g_gx_msaaRb = 0;
+static int    g_gx_msaaW = 0, g_gx_msaaH = 0;
+static int    g_gx_aaSamples = 0;          /* requested level, 0 = off */
 
 static void gxMsaaDestroy(void) {
-    if (g_canvasTarget.fbo && g_canvasTarget.fbo == g_msaaFbo)
-        g_canvasTarget.fbo = g_fbo;     /* never leave a dangling binding */
-    if (g_msaaRb)  { glDeleteRenderbuffers(1, &g_msaaRb);  g_msaaRb = 0; }
-    if (g_msaaFbo) { glDeleteFramebuffers(1, &g_msaaFbo);  g_msaaFbo = 0; }
-    g_msaaW = g_msaaH = 0;
-    glBindFramebuffer(GL_FRAMEBUFFER, g_canvasTarget.fbo);
+    if (g_gx_canvasTarget.fbo && g_gx_canvasTarget.fbo == g_gx_msaaFbo)
+        g_gx_canvasTarget.fbo = g_gx_fbo;     /* never leave a dangling binding */
+    if (g_gx_msaaRb)  { glDeleteRenderbuffers(1, &g_gx_msaaRb);  g_gx_msaaRb = 0; }
+    if (g_gx_msaaFbo) { glDeleteFramebuffers(1, &g_gx_msaaFbo);  g_gx_msaaFbo = 0; }
+    g_gx_msaaW = g_gx_msaaH = 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_canvasTarget.fbo);
 }
 
 static void gxMsaaCreate(void) {
-    int n = g_aaSamples;
-    if (!g_glReady || n < 2) return;
+    int n = g_gx_aaSamples;
+    if (!g_gx_glReady || n < 2) return;
     if (!glRenderbufferStorageMultisample || !glBlitFramebuffer) return;
-    if (g_canvasTarget.w < 1 || g_canvasTarget.h < 1) return;
+    if (g_gx_canvasTarget.w < 1 || g_gx_canvasTarget.h < 1) return;
     gxMsaaDestroy();        /* idempotent: it is called on every recreate */
-    glGenFramebuffers(1, &g_msaaFbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_msaaFbo);
-    glGenRenderbuffers(1, &g_msaaRb);
-    glBindRenderbuffer(GL_RENDERBUFFER, g_msaaRb);
+    glGenFramebuffers(1, &g_gx_msaaFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_msaaFbo);
+    glGenRenderbuffers(1, &g_gx_msaaRb);
+    glBindRenderbuffer(GL_RENDERBUFFER, g_gx_msaaRb);
     /* There is no query for "which counts work": an unsupported one simply
      * leaves the framebuffer incomplete.  So walk down from the request
      * (4 -> 2) and take the first that is accepted. */
     for (; n >= 2; n /= 2) {
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, (GLsizei)n, GL_RGBA8,
-                                         (GLsizei)g_canvasTarget.w,
-                                         (GLsizei)g_canvasTarget.h);
+                                         (GLsizei)g_gx_canvasTarget.w,
+                                         (GLsizei)g_gx_canvasTarget.h);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                  GL_RENDERBUFFER, g_msaaRb);
+                                  GL_RENDERBUFFER, g_gx_msaaRb);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
             break;
     }
     if (n < 2) { gxMsaaDestroy(); return; }   /* driver refuses: stay off */
-    g_msaaW = g_canvasTarget.w;
-    g_msaaH = g_canvasTarget.h;
-    g_canvasTarget.fbo = g_msaaFbo;
-    glBindFramebuffer(GL_FRAMEBUFFER, g_msaaFbo);
+    g_gx_msaaW = g_gx_canvasTarget.w;
+    g_gx_msaaH = g_gx_canvasTarget.h;
+    g_gx_canvasTarget.fbo = g_gx_msaaFbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_msaaFbo);
 }
 
 /* Fold the samples into the plain texture the rest of the library reads. */
 static void gxMsaaResolve(void) {
-    if (!g_msaaFbo || g_canvasTarget.fbo != g_msaaFbo) return;
-    if (g_msaaW != g_canvasTarget.w || g_msaaH != g_canvasTarget.h) {
+    if (!g_gx_msaaFbo || g_gx_canvasTarget.fbo != g_gx_msaaFbo) return;
+    if (g_gx_msaaW != g_gx_canvasTarget.w || g_gx_msaaH != g_gx_canvasTarget.h) {
         gxMsaaDestroy();                 /* canvas was resized: rebuild */
         gxMsaaCreate();
-        if (!g_msaaFbo) return;
+        if (!g_gx_msaaFbo) return;
     }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_msaaFbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_fbo);
-    glBlitFramebuffer(0, 0, g_msaaW, g_msaaH, 0, 0, g_msaaW, g_msaaH,
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_gx_msaaFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gx_fbo);
+    glBlitFramebuffer(0, 0, g_gx_msaaW, g_gx_msaaH, 0, 0, g_gx_msaaW, g_gx_msaaH,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_msaaFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_msaaFbo);
 }
 
 /* Every glBindFramebuffer() that is followed by a read goes through this. */
 GX_INLINE GLuint gxReadFbo(GLuint fbo) {
-    if (fbo && fbo == g_msaaFbo) { gxMsaaResolve(); return g_fbo; }
+    if (fbo && fbo == g_gx_msaaFbo) { gxMsaaResolve(); return g_gx_fbo; }
     return fbo;
 }
 
@@ -2550,12 +2588,12 @@ GX_INLINE GLuint gxReadFbo(GLuint fbo) {
  * aliasing off, 4 is the usual value, 8/16 cost more for little gain.
  * Safe to call before initgraph() - it takes effect once GL is up. */
 GX_INLINE void setaasamples(int n) {
-    g_aaSamples = (n < 0) ? 0 : n;
-    if (!g_glReady) return;
+    g_gx_aaSamples = (n < 0) ? 0 : n;
+    if (!g_gx_glReady) return;
     gxMsaaDestroy();
     gxMsaaCreate();
 }
-GX_INLINE int getaasamples(void) { return g_aaSamples; }
+GX_INLINE int getaasamples(void) { return g_gx_aaSamples; }
 
 /* RENDER_AUTO: show what has been drawn so far.  A time based throttle keeps
  * a tight loop from burning one SwapBuffers() per primitive, and an open
@@ -2563,18 +2601,18 @@ GX_INLINE int getaasamples(void) { return g_aaSamples; }
 static void gxAutoPresent(void) {
     static DWORD s_lastTick = 0;
     DWORD now;
-    if (g_renderMode != RENDER_AUTO || !g_glReady || g_batchDraw) return;
+    if (g_gx_renderMode != RENDER_AUTO || !g_gx_glReady || g_gx_batchDraw) return;
     now = GetTickCount();
     if (s_lastTick != 0 && (now - s_lastTick) < 8u) {
         /* Throttled - but do not drop the frame: gxPump() shows the one
          * that is owed before the caller blocks on input, otherwise the
          * last primitive of a burst would only appear after the next
          * mouse move or key press. */
-        g_presentPending = true;
+        g_gx_presentPending = true;
         return;
     }
     s_lastTick = now;
-    g_presentPending = false;
+    g_gx_presentPending = false;
     gxFlush();
     gxPresent();
 }
@@ -2586,7 +2624,7 @@ static void gxAutoPresent(void) {
 #define GX_FLUSH_VERTS 300000
 
 GX_INLINE void gxCheckFlush(void) {
-    if (g_vbuf.size > GX_FLUSH_VERTS) gxFlush();
+    if (g_gx_vbuf.size > GX_FLUSH_VERTS) gxFlush();
     gxAutoPresent();
 }
 
@@ -2610,9 +2648,9 @@ GX_INLINE float gxAlphaOf(COLORREF c) {
  * the four corner vertices, 0 = ignore it.  It is per command, so changing
  * it has to close the open batch, same as the other state setters. */
 GX_INLINE void gxSetVertA(int vertA) {
-    if (vertA != g_curVertA) {
+    if (vertA != g_gx_curVertA) {
         gxEndCmd();
-        g_curVertA = vertA;
+        g_gx_curVertA = vertA;
     }
 }
 
@@ -2625,7 +2663,7 @@ GX_INLINE void gxSetVertA(int vertA) {
 /* Lowest level: append one vertex and nothing else.  gxV() and gxQuad*() are
  * the two callers, and they are the ones that decide what the batch is. */
 GX_INLINE void gxVPush(float x, float y, COLORREF c, float u, float v) {
-    Vtx* t = GxVtxVec_push(&g_vbuf);
+    Vtx* t = GxVtxVec_push(&g_gx_vbuf);
     t->x = x; t->y = y;
     t->r = GX_BYTE_TO_FLOAT(GetRValue(c));
     t->g = GX_BYTE_TO_FLOAT(GetGValue(c));
@@ -2638,16 +2676,16 @@ GX_INLINE void gxVPush(float x, float y, COLORREF c, float u, float v) {
  * gxTri(), the polygon strips.  Not quads, so it ends a quad run first -
  * one command cannot hold both kinds. */
 GX_INLINE void gxV(float x, float y, COLORREF c, float u, float v) {
-    if (g_quadRun && g_vbuf.size > g_cmdStart) gxEndCmd();
-    g_quadRun = false;
+    if (g_gx_quadRun && g_gx_vbuf.size > g_gx_cmdStart) gxEndCmd();
+    g_gx_quadRun = false;
     gxVPush(x, y, c, u, v);
 }
 
 /* Start or continue a run of quads.  Ends whatever the batch was, so the
  * switch is always on a command boundary. */
 GX_INLINE void gxQuadMode(void) {
-    if (!g_quadRun && g_vbuf.size > g_cmdStart) gxEndCmd();
-    g_quadRun = true;
+    if (!g_gx_quadRun && g_gx_vbuf.size > g_gx_cmdStart) gxEndCmd();
+    g_gx_quadRun = true;
 }
 
 /* Axis aligned rectangle (continuous coordinates, right/bottom exclusive).
@@ -2695,7 +2733,7 @@ static GLuint gxGetHatchTex(int hatch) {
     int i;
     GLuint tex = 0;
     if (hatch < HS_HORIZONTAL || hatch > HS_DIAGCROSS) hatch = HS_HORIZONTAL;
-    if (g_hatchTex[hatch]) return g_hatchTex[hatch];
+    if (g_gx_hatchTex[hatch]) return g_gx_hatchTex[hatch];
     memset(px, 0, sizeof(px));
     for (i = 0; i < 64; i++) {
         int x = i % 8, y = i / 8;
@@ -2711,7 +2749,7 @@ static GLuint gxGetHatchTex(int hatch) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    g_hatchTex[hatch] = tex;
+    g_gx_hatchTex[hatch] = tex;
     return tex;
 }
 
@@ -2723,19 +2761,19 @@ static GLuint gxGetHatchTex(int hatch) {
 #define GX_ATLAS_BYTES ((size_t)GX_ATLAS_W * (size_t)GX_ATLAS_H * 4u)
 #define GX_CP_MASK 0x1FFFFFull
 
-static GxFontVec g_fonts;
-static unsigned char* g_atlas = NULL;
-static int  g_packX = 0, g_packY = 0, g_packRowH = 0;
-static HDC  g_fontDC = NULL;
-static LOGFONTA g_font;                 /* current font (ANSI face name) */
+static GxFontVec g_gx_fonts;
+static unsigned char* g_gx_atlas = NULL;
+static int  g_gx_packX = 0, g_gx_packY = 0, g_gx_packRowH = 0;
+static HDC  g_gx_fontDC = NULL;
+static LOGFONTA g_gx_font;                 /* current font (ANSI face name) */
 
 typedef struct GxStrSlot { char* key; int val; int used; } GxStrSlot;
 typedef struct GxStrMap  { GxStrSlot* slots; size_t cap; size_t count; } GxStrMap;
-static GxStrMap g_fontIds;
+static GxStrMap g_gx_fontIds;
 
 typedef struct GxGlyphSlot { unsigned long long key; Glyph val; int used; } GxGlyphSlot;
 typedef struct GxGlyphMap  { GxGlyphSlot* slots; size_t cap; size_t count; } GxGlyphMap;
-static GxGlyphMap g_glyphs;
+static GxGlyphMap g_gx_glyphs;
 
 static void gxStrMapFree(GxStrMap* m) {
     size_t i;
@@ -2853,16 +2891,16 @@ static void gxGlyphMapSet(GxGlyphMap* m, unsigned long long key, const Glyph* va
 }
 
 static void gxInitFontDefault(void) {
-    memset(&g_font, 0, sizeof(g_font));
-    g_font.lfHeight = 16;
-    g_font.lfWidth = 0;
-    g_font.lfWeight = FW_NORMAL;
-    g_font.lfCharSet = DEFAULT_CHARSET;
-    g_font.lfOutPrecision = OUT_DEFAULT_PRECIS;
-    g_font.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-    g_font.lfQuality = DEFAULT_QUALITY;
-    g_font.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
-    strcpy(g_font.lfFaceName, "System");
+    memset(&g_gx_font, 0, sizeof(g_gx_font));
+    g_gx_font.lfHeight = 16;
+    g_gx_font.lfWidth = 0;
+    g_gx_font.lfWeight = FW_NORMAL;
+    g_gx_font.lfCharSet = DEFAULT_CHARSET;
+    g_gx_font.lfOutPrecision = OUT_DEFAULT_PRECIS;
+    g_gx_font.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+    g_gx_font.lfQuality = DEFAULT_QUALITY;
+    g_gx_font.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
+    strcpy(g_gx_font.lfFaceName, "System");
 }
 
 /*--------------------------- codepage helpers --------------------------*/
@@ -2892,10 +2930,10 @@ static void gxInitFontDefault(void) {
 #ifndef GX_DEFAULT_CODEPAGE
 #define GX_DEFAULT_CODEPAGE CP_ACP
 #endif
-static UINT g_codePage = GX_DEFAULT_CODEPAGE;
+static UINT g_gx_codePage = GX_DEFAULT_CODEPAGE;
 
-GX_INLINE void setglcp(UINT cp) { g_codePage = cp ? cp : CP_ACP; }
-GX_INLINE UINT getglcp(void)    { return g_codePage; }
+GX_INLINE void setglcp(UINT cp) { g_gx_codePage = cp ? cp : CP_ACP; }
+GX_INLINE UINT getglcp(void)    { return g_gx_codePage; }
 
 static WCHAR* gxDupWideFromBytes(const char* s) {
     int n;
@@ -2903,12 +2941,12 @@ static WCHAR* gxDupWideFromBytes(const char* s) {
     if (!s) return NULL;
     /* Decode with the code page the program selected, which defaults to
      * the active ANSI code page (GBK, Big5, ...).  No UTF-8 attempt:
-     * see the note at g_codePage. */
+     * see the note at g_gx_codePage. */
 #ifdef GX_GUESS_UTF8
     n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
     if (n <= 0)
 #endif
-        n = MultiByteToWideChar(g_codePage, 0, s, -1, NULL, 0);
+        n = MultiByteToWideChar(g_gx_codePage, 0, s, -1, NULL, 0);
     if (n <= 0) { out = (WCHAR*)malloc(sizeof(WCHAR)); if (out) out[0] = 0; return out; }
     out = (WCHAR*)malloc((size_t)n * sizeof(WCHAR));
     if (!out) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); exit(1); }
@@ -2916,7 +2954,7 @@ static WCHAR* gxDupWideFromBytes(const char* s) {
     if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, n) <= 0)
 #endif
     {
-        if (MultiByteToWideChar(g_codePage, 0, s, -1, out, n) <= 0) out[0] = 0;
+        if (MultiByteToWideChar(g_gx_codePage, 0, s, -1, out, n) <= 0) out[0] = 0;
     }
     return out;
 }
@@ -2925,11 +2963,11 @@ static char* gxDupBytesFromWide(const WCHAR* w) {
     int n;
     char* out;
     if (!w) return NULL;
-    n = WideCharToMultiByte(g_codePage, 0, w, -1, NULL, 0, NULL, NULL);
+    n = WideCharToMultiByte(g_gx_codePage, 0, w, -1, NULL, 0, NULL, NULL);
     if (n <= 0) { out = (char*)malloc(1); if (out) out[0] = 0; return out; }
     out = (char*)malloc((size_t)n);
     if (!out) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); exit(1); }
-    if (WideCharToMultiByte(g_codePage, 0, w, -1, out, n, NULL, NULL) <= 0) out[0] = 0;
+    if (WideCharToMultiByte(g_gx_codePage, 0, w, -1, out, n, NULL, NULL) <= 0) out[0] = 0;
     return out;
 }
 
@@ -2989,38 +3027,38 @@ GX_INLINE unsigned long gxUtf16Next(const WCHAR* s, int i, int len, int* adv) {
 #define GLF_EASYX       1        /* alias: what GDI / EasyX look like */
 #define GLF_BLOCKY      1        /* alias: hard edges, one colour     */
 
-static int g_fontMode = GLF_INT;
+static int g_gx_fontMode = GLF_INT;
 
 /*------------------------------ glyph baking ---------------------------*/
 static unsigned char* gxEnsureAtlas(void) {
-    if (!g_atlas) {
-        g_atlas = (unsigned char*)malloc(GX_ATLAS_BYTES);
-        if (!g_atlas) { MessageBoxA(NULL, "Out of memory (glyph atlas)", "Error", MB_OK); exit(1); }
-        memset(g_atlas, 0, GX_ATLAS_BYTES);
+    if (!g_gx_atlas) {
+        g_gx_atlas = (unsigned char*)malloc(GX_ATLAS_BYTES);
+        if (!g_gx_atlas) { MessageBoxA(NULL, "Out of memory (glyph atlas)", "Error", MB_OK); exit(1); }
+        memset(g_gx_atlas, 0, GX_ATLAS_BYTES);
     }
-    return g_atlas;
+    return g_gx_atlas;
 }
 
 static void gxUploadAtlas(int x, int y, int w, int h, const unsigned char* src) {
-    if (!g_atlasTex) return;
-    glBindTexture(GL_TEXTURE_2D, g_atlasTex);
+    if (!g_gx_atlasTex) return;
+    glBindTexture(GL_TEXTURE_2D, g_gx_atlasTex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, src);
 }
 
 static void gxResetAtlas(void) {
     gxFlush();                 /* the atlas is dropped, so flush old draws */
-    gxGlyphMapClear(&g_glyphs);
-    g_packX = g_packY = g_packRowH = 0;
+    gxGlyphMapClear(&g_gx_glyphs);
+    g_gx_packX = g_gx_packY = g_gx_packRowH = 0;
     memset(gxEnsureAtlas(), 0, GX_ATLAS_BYTES);
-    if (g_atlasTex) {
-        glBindTexture(GL_TEXTURE_2D, g_atlasTex);
+    if (g_gx_atlasTex) {
+        glBindTexture(GL_TEXTURE_2D, g_gx_atlasTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, GX_ATLAS_W, GX_ATLAS_H, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, g_atlas);
+                     GL_RGBA, GL_UNSIGNED_BYTE, g_gx_atlas);
     }
 }
 
-GX_INLINE float gxInvScaleX(void) { return (g_scaleX > 0.f) ? (1.f / g_scaleX) : 1.f; }
-GX_INLINE float gxInvScaleY(void) { return (g_scaleY > 0.f) ? (1.f / g_scaleY) : 1.f; }
+GX_INLINE float gxInvScaleX(void) { return (g_gx_scaleX > 0.f) ? (1.f / g_gx_scaleX) : 1.f; }
+GX_INLINE float gxInvScaleY(void) { return (g_gx_scaleY > 0.f) ? (1.f / g_gx_scaleY) : 1.f; }
 
 /* Logical -> DEVICE pixel, the exact inverse used by the renderer:
  *   device = logical * scale + origin
@@ -3029,18 +3067,18 @@ GX_INLINE float gxInvScaleY(void) { return (g_scaleY > 0.f) ? (1.f / g_scaleY) :
  * [floorf(a*scale+origin), ceilf(b*scale+origin)).
  * (int) truncation is not usable here: it rounds -0.5 up to 0. */
 GX_INLINE int gxLogToDevX(float x) {
-    return (int)floorf(x * g_scaleX + g_originX);
+    return (int)floorf(x * g_gx_scaleX + g_gx_originX);
 }
 GX_INLINE int gxLogToDevY(float y) {
-    return (int)floorf(y * g_scaleY + g_originY);
+    return (int)floorf(y * g_gx_scaleY + g_gx_originY);
 }
 
-GX_INLINE void settextscale(float s) { g_textScale = (s > 0.05f && s < 20.f) ? s : 1.f; }
-GX_INLINE float gettextscale(void) { return g_textScale; }
+GX_INLINE void settextscale(float s) { g_gx_textScale = (s > 0.05f && s < 20.f) ? s : 1.f; }
+GX_INLINE float gettextscale(void) { return g_gx_textScale; }
 
 static int gxGetFontId(const LOGFONTA* lf) {
-    double sy = (g_scaleY > 0.f) ? (double)g_scaleY : 1.0;
-    double want = fabs((double)lf->lfHeight) * sy * (double)g_textScale + 0.5;
+    double sy = (g_gx_scaleY > 0.f) ? (double)g_gx_scaleY : 1.0;
+    double want = fabs((double)lf->lfHeight) * sy * (double)g_gx_textScale + 0.5;
     int px, id;
     char key[352];
     FontRec rec;
@@ -3054,15 +3092,15 @@ static int gxGetFontId(const LOGFONTA* lf) {
      * setfontrenderer() appeared to do nothing at all. */
     sprintf(key, "%s|%d|%d|%d|%d|%d|%d|%d", lf->lfFaceName, px,
             (int)lf->lfWeight, lf->lfItalic ? 1 : 0, (int)lf->lfCharSet,
-            lf->lfUnderline ? 1 : 0, lf->lfStrikeOut ? 1 : 0, g_fontMode);
-    if (gxStrMapGet(&g_fontIds, key, &id)) return id;
+            lf->lfUnderline ? 1 : 0, lf->lfStrikeOut ? 1 : 0, g_gx_fontMode);
+    if (gxStrMapGet(&g_gx_fontIds, key, &id)) return id;
 
     memset(&rec, 0, sizeof(rec));
     strcpy(rec.face, lf->lfFaceName);
     rec.pxH = px;
     rec.weight = (int)lf->lfWeight;
     rec.italic = lf->lfItalic ? true : false;
-    rec.mode = g_fontMode;
+    rec.mode = g_gx_fontMode;
 
     lf2 = *lf;
     lf2.lfHeight = (lf->lfHeight >= 0) ? px : -px;   /* EasyX: positive = cell height */
@@ -3072,13 +3110,13 @@ static int gxGetFontId(const LOGFONTA* lf) {
     /* GLF_INT asks GDI for an unhinted, non antialiased raster: glyphs come
      * out as pure ink or pure background, so a stem or a curve is drawn in
      * exactly one colour with no grey pixels along the edges. */
-    lf2.lfQuality = (g_fontMode == GLF_INT) ? NONANTIALIASED_QUALITY
+    lf2.lfQuality = (g_gx_fontMode == GLF_INT) ? NONANTIALIASED_QUALITY
                                             : ANTIALIASED_QUALITY;
     rec.hfont = CreateFontIndirectA(&lf2);
 
-    GxFontVec_pushv(&g_fonts, rec);
-    id = (int)g_fonts.size - 1;
-    gxStrMapSet(&g_fontIds, key, id);
+    GxFontVec_pushv(&g_gx_fonts, rec);
+    id = (int)g_gx_fonts.size - 1;
+    gxStrMapSet(&g_gx_fontIds, key, id);
     return id;
 }
 
@@ -3101,23 +3139,23 @@ static Glyph gxGetGlyph(int fid, unsigned long cp) {
     HDC memdc;
     WCHAR buf[4];
 
-    hit = gxGlyphMapFind(&g_glyphs, key);
+    hit = gxGlyphMapFind(&g_gx_glyphs, key);
     if (hit) return *hit;
 
-    if (!g_fontDC) g_fontDC = CreateCompatibleDC(NULL);
-    fr = &g_fonts.data[fid];
-    oldF = SelectObject(g_fontDC, fr->hfont);
-    GetTextMetricsW(g_fontDC, &tm);
+    if (!g_gx_fontDC) g_gx_fontDC = CreateCompatibleDC(NULL);
+    fr = &g_gx_fonts.data[fid];
+    oldF = SelectObject(g_gx_fontDC, fr->hfont);
+    GetTextMetricsW(g_gx_fontDC, &tm);
 
     nlen = gxUtf16Encode(cp, buf);
     buf[nlen] = 0;
     left = 0;
-    if (nlen == 1 && GetCharABCWidthsW(g_fontDC, buf[0], buf[0], &abc)) {
+    if (nlen == 1 && GetCharABCWidthsW(g_gx_fontDC, buf[0], buf[0], &abc)) {
         adv = abc.abcA + abc.abcB + abc.abcC;
         cw = abc.abcB + 4;
         left = abc.abcA;
     } else {
-        GetTextExtentPoint32W(g_fontDC, buf, nlen, &sz);
+        GetTextExtentPoint32W(g_gx_fontDC, buf, nlen, &sz);
         adv = (int)sz.cx;
         cw = (int)sz.cx + 4;
     }
@@ -3132,8 +3170,8 @@ static Glyph gxGetGlyph(int fid, unsigned long cp) {
     bi.bmiHeader.biPlanes = 1;
     bi.bmiHeader.biBitCount = 32;
     bi.bmiHeader.biCompression = BI_RGB;
-    dib = CreateDIBSection(g_fontDC, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    memdc = CreateCompatibleDC(g_fontDC);
+    dib = CreateDIBSection(g_gx_fontDC, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    memdc = CreateCompatibleDC(g_gx_fontDC);
     oldB = SelectObject(memdc, dib);
     /* A memory DC starts with the default (raster) font, so the font has to
      * be selected again - otherwise the ink is rasterised at ~16 px while
@@ -3166,17 +3204,17 @@ static Glyph gxGetGlyph(int fid, unsigned long cp) {
     SelectObject(memdc, oldB);
     DeleteDC(memdc);
     DeleteObject(dib);
-    SelectObject(g_fontDC, oldF);
+    SelectObject(g_gx_fontDC, oldF);
 
     gxEnsureAtlas();
-    if (g_packX + cw > GX_ATLAS_W) { g_packX = 0; g_packY += g_packRowH; g_packRowH = 0; }
-    if (g_packY + chh > GX_ATLAS_H) gxResetAtlas();
-    px = g_packX; py = g_packY;
-    g_packX += cw;
-    if (chh > g_packRowH) g_packRowH = chh;
+    if (g_gx_packX + cw > GX_ATLAS_W) { g_gx_packX = 0; g_gx_packY += g_gx_packRowH; g_gx_packRowH = 0; }
+    if (g_gx_packY + chh > GX_ATLAS_H) gxResetAtlas();
+    px = g_gx_packX; py = g_gx_packY;
+    g_gx_packX += cw;
+    if (chh > g_gx_packRowH) g_gx_packRowH = chh;
 
     for (row = 0; row < chh; row++)
-        memcpy(&g_atlas[((py + row) * GX_ATLAS_W + px) * 4],
+        memcpy(&g_gx_atlas[((py + row) * GX_ATLAS_W + px) * 4],
                &rgba[row * cw * 4], (size_t)cw * 4);
     gxUploadAtlas(px, py, cw, chh, rgba);
     free(rgba);
@@ -3190,7 +3228,7 @@ static Glyph gxGetGlyph(int fid, unsigned long cp) {
     gl.offX = (float)left - 2.f;
     gl.offY = -2.f;
     gl.adv = (float)adv;
-    gxGlyphMapSet(&g_glyphs, key, &gl);
+    gxGlyphMapSet(&g_gx_glyphs, key, &gl);
     return gl;
 }
 
@@ -3198,10 +3236,10 @@ static Glyph gxGetGlyph(int fid, unsigned long cp) {
 static int gxFontHeightLogical(int fid) {
     TEXTMETRICW tm;
     HGDIOBJ oldF;
-    if (!g_fontDC) g_fontDC = CreateCompatibleDC(NULL);
-    oldF = SelectObject(g_fontDC, g_fonts.data[fid].hfont);
-    GetTextMetricsW(g_fontDC, &tm);
-    SelectObject(g_fontDC, oldF);
+    if (!g_gx_fontDC) g_gx_fontDC = CreateCompatibleDC(NULL);
+    oldF = SelectObject(g_gx_fontDC, g_gx_fonts.data[fid].hfont);
+    GetTextMetricsW(g_gx_fontDC, &tm);
+    SelectObject(g_gx_fontDC, oldF);
     return (int)((double)tm.tmHeight * gxInvScaleY() + 0.5);
 }
 
@@ -3248,9 +3286,9 @@ static int gxFontHeightLogical(int fid) {
  * are applied), which is the only place a "pixel" is meaningful - the
  * same x in logical units is not a whole pixel at every scale. */
 GX_INLINE void setfontmode(int mode) {
-    g_fontMode = (mode == GLF_INT) ? GLF_INT : GLF_UNLIMITED;
+    g_gx_fontMode = (mode == GLF_INT) ? GLF_INT : GLF_UNLIMITED;
 }
-GX_INLINE int getfontmode(void) { return g_fontMode; }
+GX_INLINE int getfontmode(void) { return g_gx_fontMode; }
 
 /*======================================================================
  *  9. Text API (A = byte string, W = UTF-16 string)
@@ -3261,7 +3299,7 @@ static void gxMeasureW(const WCHAR* w, int len, int* outW, int* outH) {
     float adv = 0.f;
     int total = (len < 0) ? (int)wcslen(w) : len;
     if (!w || total <= 0) { if (outW) *outW = 0; if (outH) *outH = 0; return; }
-    fid = gxGetFontId(&g_font);
+    fid = gxGetFontId(&g_gx_font);
     for (i = 0; i < total; ) {
         unsigned long cp;
         float a;
@@ -3270,7 +3308,7 @@ static void gxMeasureW(const WCHAR* w, int len, int* outW, int* outH) {
         a = gxGetGlyph(fid, cp).adv;
         /* GLF_INT rounds each advance the same way the drawing loop does,
          * so textwidth() agrees with where the last glyph actually ends. */
-        adv += (g_fontMode == GLF_INT) ? floorf(a + 0.5f) : a;
+        adv += (g_gx_fontMode == GLF_INT) ? floorf(a + 0.5f) : a;
         i += step;
     }
     if (outW) *outW = (int)(adv * gxInvScaleX() + 0.5f);
@@ -3284,33 +3322,33 @@ static void gxDrawW(double x, double y, const WCHAR* w, int len) {
     float sx = 1.f, sy = 1.f, invXs = 1.f, invYs = 1.f;
     float devX = 0.f, devY = 0.f;
     int adv = 0, hgt = 0;
-    if (!w || total <= 0 || !g_glReady) return;
+    if (!w || total <= 0 || !g_gx_glReady) return;
     gxMeasureW(w, len, &adv, &hgt);
-    if (g_bkMode == OPAQUE) {
+    if (g_gx_bkMode == OPAQUE) {
         gxSetTex(0, 0);
-        gxQuad((float)x, (float)y, (float)(x + adv), (float)(y + hgt), g_bkColor);
+        gxQuad((float)x, (float)y, (float)(x + adv), (float)(y + hgt), g_gx_bkColor);
     }
-    fid = gxGetFontId(&g_font);
+    fid = gxGetFontId(&g_gx_font);
     /* Bake every glyph first so the vertex run below is not interrupted. */
     for (i = 0; i < total; ) {
         int step;
         gxGetGlyph(fid, gxUtf16Next(w, i, total, &step));
         i += step;
     }
-    gxSetTex(g_atlasTex, 1);
+    gxSetTex(g_gx_atlasTex, 1);
     invX = gxInvScaleX();
     invY = gxInvScaleY();
-    if (g_fontMode == GLF_INT) {
+    if (g_gx_fontMode == GLF_INT) {
         /* Accumulate the pen in DEVICE pixels.  gxInvScaleX/Y() fall back
          * to 1.f for a negative scale, which would break this mapping, so
          * the true reciprocal is used here: the projection really is
          * device = logical * scale + origin for any sign. */
-        sx = (g_scaleX != 0.f) ? g_scaleX : 1.f;
-        sy = (g_scaleY != 0.f) ? g_scaleY : 1.f;
+        sx = (g_gx_scaleX != 0.f) ? g_gx_scaleX : 1.f;
+        sy = (g_gx_scaleY != 0.f) ? g_gx_scaleY : 1.f;
         invXs = 1.f / sx;
         invYs = 1.f / sy;
-        devX = floorf((float)x * sx + g_originX);
-        devY = floorf((float)y * sy + g_originY);
+        devX = floorf((float)x * sx + g_gx_originX);
+        devY = floorf((float)y * sy + g_gx_originY);
     } else {
         penX = (float)x;
         penY = (float)y;
@@ -3321,12 +3359,12 @@ static void gxDrawW(double x, double y, const WCHAR* w, int len) {
         g = gxGetGlyph(fid, gxUtf16Next(w, i, total, &step));
         if (g.w > 0.f && g.h > 0.f) {
             float x0, y0, x1, y1;
-            COLORREF c = g_textColor;
-            if (g_fontMode == GLF_INT) {
+            COLORREF c = g_gx_textColor;
+            if (g_gx_fontMode == GLF_INT) {
                 /* device -> logical, so the projection lands the quad
                  * exactly back on the integer device pixel. */
-                x0 = (devX + g.offX - g_originX) * invXs;
-                y0 = (devY + g.offY - g_originY) * invYs;
+                x0 = (devX + g.offX - g_gx_originX) * invXs;
+                y0 = (devY + g.offY - g_gx_originY) * invYs;
                 x1 = x0 + g.w * invXs;
                 y1 = y0 + g.h * invYs;
             } else {
@@ -3337,7 +3375,7 @@ static void gxDrawW(double x, double y, const WCHAR* w, int len) {
             }
             gxQuadTex(x0, y0, x1, y1, g.u0, g.v0, g.u1, g.v1, c);
         }
-        if (g_fontMode == GLF_INT) devX += floorf(g.adv + 0.5f);
+        if (g_gx_fontMode == GLF_INT) devX += floorf(g.adv + 0.5f);
         else                       penX += g.adv * invX;
         i += step;
     }
@@ -3392,17 +3430,17 @@ static void outtextA(const char* str) {
     int adv = 0;
     if (!str || !*str) return;
     w = gxDupWideFromBytes(str);
-    gxDrawW(g_curX, g_curY, w, -1);
+    gxDrawW(g_gx_curX, g_gx_curY, w, -1);
     gxMeasureW(w, -1, &adv, NULL);
     free(w);
-    g_curX += adv;
+    g_gx_curX += adv;
 }
 static void outtextW(const WCHAR* str) {
     int adv = 0;
     if (!str || !*str) return;
-    gxDrawW(g_curX, g_curY, str, -1);
+    gxDrawW(g_gx_curX, g_gx_curY, str, -1);
     gxMeasureW(str, -1, &adv, NULL);
-    g_curX += adv;
+    g_gx_curX += adv;
 }
 
 /*======================================================================
@@ -3482,19 +3520,19 @@ GX_INLINE void gxSetPatLogical(float patW, float patH, int tile) {
     if (!(patW > 0.f)) patW = 1.f;
     if (!(patH > 0.f)) patH = 1.f;
     gxSetPat(1.f / patW, -1.f / patH,
-             g_originX * gxInvScaleX() / patW,
-             -g_originY * gxInvScaleY() / patH, tile);
+             g_gx_originX * gxInvScaleX() / patW,
+             -g_gx_originY * gxInvScaleY() / patH, tile);
 }
 
 static bool gxBeginFill(void) {
-    if (g_fillStyle.style == BS_NULL) return false;
-    if (g_fillStyle.style == BS_HATCHED) {
-        GLuint t = gxGetHatchTex((int)g_fillStyle.hatch);
+    if (g_gx_fillStyle.style == BS_NULL) return false;
+    if (g_gx_fillStyle.style == BS_HATCHED) {
+        GLuint t = gxGetHatchTex((int)g_gx_fillStyle.hatch);
         gxSetPatLogical(8.f, 8.f, 0);      /* hatch textures are REPEAT */
         gxSetTex(t, 3);
-    } else if ((g_fillStyle.style == BS_PATTERN || g_fillStyle.style == BS_DIBPATTERN)
-               && gxImageOk(g_fillStyle.ppattern)) {
-        IMAGE* im = g_fillStyle.ppattern;
+    } else if ((g_gx_fillStyle.style == BS_PATTERN || g_gx_fillStyle.style == BS_DIBPATTERN)
+               && gxImageOk(g_gx_fillStyle.ppattern)) {
+        IMAGE* im = g_gx_fillStyle.ppattern;
         if (im->width > 0 && im->height > 0) {
             /* An IMAGE texture is CLAMP (putimage() needs that), so the
              * draw has to switch it to REPEAT and back. */
@@ -3510,39 +3548,39 @@ static bool gxBeginFill(void) {
 }
 
 GX_INLINE void setfillcolor(COLORREF c) {
-    g_fillColor = c;   /* the style stays untouched, as in EasyX */
+    g_gx_fillColor = c;   /* the style stays untouched, as in EasyX */
 }
-GX_INLINE void setlinecolor(COLORREF c) { g_lineColor = c; }
+GX_INLINE void setlinecolor(COLORREF c) { g_gx_lineColor = c; }
 /* Persistent alpha for everything that follows, 0..255.  This is the knob
  * behind the a-prefixed calls; they set it for one primitive and put back
  * whatever was there.  EasyX has no equivalent. */
 GX_INLINE void setalpha(BYTE a) {
     /* a is a transparency: 0 = solid, 255 = invisible. */
-    g_alpha = (float)(255 - (int)a) / 255.f;
-    gxSetAlpha(g_alpha);
+    g_gx_alpha = (float)(255 - (int)a) / 255.f;
+    gxSetAlpha(g_gx_alpha);
 }
 GX_INLINE BYTE getalpha(void) {
-    /* g_alpha is GL coverage; turn it back into the transparency that
+    /* g_gx_alpha is GL coverage; turn it back into the transparency that
      * setalpha() takes, so getalpha() round-trips setalpha() exactly. */
-    int a = 255 - (int)(g_alpha * 255.f + 0.5f);
+    int a = 255 - (int)(g_gx_alpha * 255.f + 0.5f);
     return (BYTE)((a < 0) ? 0 : ((a > 255) ? 255 : a));
 }
 
-GX_INLINE void settextcolor(COLORREF c) { g_textColor = c; }
-GX_INLINE void setbkcolor(COLORREF c)   { g_bkColor = c; }
-GX_INLINE void setbkmode(int mode)      { g_bkMode = (mode == OPAQUE) ? OPAQUE : TRANSPARENT; }
-GX_INLINE COLORREF getfillcolor(void)   { return g_fillColor; }
-GX_INLINE COLORREF getlinecolor(void)   { return g_lineColor; }
-GX_INLINE COLORREF gettextcolor(void)   { return g_textColor; }
-GX_INLINE COLORREF getbkcolor(void)     { return g_bkColor; }
-GX_INLINE int getbkmode(void)           { return g_bkMode; }
+GX_INLINE void settextcolor(COLORREF c) { g_gx_textColor = c; }
+GX_INLINE void setbkcolor(COLORREF c)   { g_gx_bkColor = c; }
+GX_INLINE void setbkmode(int mode)      { g_gx_bkMode = (mode == OPAQUE) ? OPAQUE : TRANSPARENT; }
+GX_INLINE COLORREF getfillcolor(void)   { return g_gx_fillColor; }
+GX_INLINE COLORREF getlinecolor(void)   { return g_gx_lineColor; }
+GX_INLINE COLORREF gettextcolor(void)   { return g_gx_textColor; }
+GX_INLINE COLORREF getbkcolor(void)     { return g_gx_bkColor; }
+GX_INLINE int getbkmode(void)           { return g_gx_bkMode; }
 GX_INLINE void setrop2(int rop) {
-    g_rop2 = gxRop2Fix(rop);
-    gxSetRop(g_rop2);   /* gxSetRop() closes the command that is still open */
+    g_gx_rop2 = gxRop2Fix(rop);
+    gxSetRop(g_gx_rop2);   /* gxSetRop() closes the command that is still open */
 }
-GX_INLINE int getrop2(void)             { return g_rop2; }
-GX_INLINE void setpolyfillmode(int m)   { g_polyMode = (m == WINDING) ? WINDING : ALTERNATE; }
-GX_INLINE int getpolyfillmode(void)     { return g_polyMode; }
+GX_INLINE int getrop2(void)             { return g_gx_rop2; }
+GX_INLINE void setpolyfillmode(int m)   { g_gx_polyMode = (m == WINDING) ? WINDING : ALTERNATE; }
+GX_INLINE int getpolyfillmode(void)     { return g_gx_polyMode; }
 GX_INLINE void setorigin(double x, double y) {
     /* Vertices are queued in logical space and the projection is uploaded
      * when the batch is drawn, so anything still queued has to go out with
@@ -3555,17 +3593,17 @@ GX_INLINE void setorigin(double x, double y) {
      * it takes the DPI factor too - otherwise setorigin(300, 200) would put
      * the drawing at a third of the way into a window that
      * setaspectratio() had just made 1.5x bigger. */
-    g_reqOriginX    = (float)x;
-    g_reqOriginY    = (float)y;
-    g_canvasOriginX = (float)x * g_dpiFix;
-    g_canvasOriginY = (float)y * g_dpiFix;
-    if (!g_workImg) {
-        g_originX = g_canvasOriginX;
-        g_originY = g_canvasOriginY;
+    g_gx_reqOriginX    = (float)x;
+    g_gx_reqOriginY    = (float)y;
+    g_gx_canvasOriginX = (float)x * g_gx_dpiFix;
+    g_gx_canvasOriginY = (float)y * g_gx_dpiFix;
+    if (!g_gx_workImg) {
+        g_gx_originX = g_gx_canvasOriginX;
+        g_gx_originY = g_gx_canvasOriginY;
     }
     gxUpdateProj();
-    if (g_glReady) {
-        glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (g_gx_glReady) {
+        glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
         gxBindTarget();      /* re-apply the clip box for the new origin */
     }
 }
@@ -3576,12 +3614,12 @@ GX_INLINE void setorigin(double x, double y) {
  * in device pixels - the same convention getaspectratio() uses.  To get
  * what was passed in, divide by gethighdpiscale(). */
 GX_INLINE void getorigin(int* x, int* y) {
-    if (x) *x = (int)g_originX;
-    if (y) *y = (int)g_originY;
+    if (x) *x = (int)g_gx_originX;
+    if (y) *y = (int)g_gx_originY;
 }
-GX_INLINE void getfont(LOGFONTA* f) { if (f) *f = g_font; }
-GX_INLINE void setfont(const LOGFONTA* f) { if (f) g_font = *f; }
-GX_INLINE HWND GetHWnd(void) { return g_hwnd; }
+GX_INLINE void getfont(LOGFONTA* f) { if (f) *f = g_gx_font; }
+GX_INLINE void setfont(const LOGFONTA* f) { if (f) g_gx_font = *f; }
+GX_INLINE HWND GetHWnd(void) { return g_gx_hwnd; }
 
 /*======================================================================
  *  6b. DPI and dialog owner
@@ -3654,11 +3692,11 @@ static float gxInitScreenScale(void) {
     return m;
 }
 
-static float g_screenScale = 0.f;
+static float g_gx_screenScale = 0.f;
 
 GX_INLINE float getinitscreenscale(void) {
-    if (g_screenScale == 0.f) g_screenScale = gxInitScreenScale();
-    return g_screenScale;
+    if (g_gx_screenScale == 0.f) g_gx_screenScale = gxInitScreenScale();
+    return g_gx_screenScale;
 }
 
 /* The window a modal dialog should belong to.
@@ -3673,74 +3711,74 @@ GX_INLINE float getinitscreenscale(void) {
  * An owner also disables the window behind it while the dialog is up,
  * which is the behaviour a modal dialog is supposed to have. */
 static HWND gxDialogOwner(void) {
-    HWND h = g_hwnd;
+    HWND h = g_gx_hwnd;
     if (h) return h;
     h = gxConsoleWindow();
     if (h) return h;
     return NULL;
 }
-/* A negative aspect ratio flips an axis, so g_logW / g_logH are negative
+/* A negative aspect ratio flips an axis, so g_gx_logW / g_gx_logH are negative
  * while the logical window still spans that many units: report the size. */
-GX_INLINE int getwidth(void)  { return (int)(fabsf(g_logW) + 0.5f); }
-GX_INLINE int getheight(void) { return (int)(fabsf(g_logH) + 0.5f); }
-GX_INLINE int getx(void) { return (int)g_curX; }
-GX_INLINE int gety(void) { return (int)g_curY; }
-GX_INLINE void moveto(double x, double y) { g_curX = x; g_curY = y; }
-GX_INLINE void moverel(double dx, double dy) { g_curX += dx; g_curY += dy; }
-GX_INLINE void setrendermode(int mode) { g_renderMode = (mode == RENDER_AUTO) ? RENDER_AUTO : RENDER_MANUAL; }
-GX_INLINE int getrendermode(void) { return g_renderMode; }
+GX_INLINE int getwidth(void)  { return (int)(fabsf(g_gx_logW) + 0.5f); }
+GX_INLINE int getheight(void) { return (int)(fabsf(g_gx_logH) + 0.5f); }
+GX_INLINE int getx(void) { return (int)g_gx_curX; }
+GX_INLINE int gety(void) { return (int)g_gx_curY; }
+GX_INLINE void moveto(double x, double y) { g_gx_curX = x; g_gx_curY = y; }
+GX_INLINE void moverel(double dx, double dy) { g_gx_curX += dx; g_gx_curY += dy; }
+GX_INLINE void setrendermode(int mode) { g_gx_renderMode = (mode == RENDER_AUTO) ? RENDER_AUTO : RENDER_MANUAL; }
+GX_INLINE int getrendermode(void) { return g_gx_renderMode; }
 
 static void getlinestyle(LINESTYLE* pstyle) {
     if (!pstyle) return;
-    pstyle->style = g_lineStyle.style;
-    pstyle->thickness = g_lineStyle.thickness;
-    pstyle->puserstyle = g_lineStyle.puserstyle;
-    pstyle->userstylecount = g_lineStyle.userstylecount;
+    pstyle->style = g_gx_lineStyle.style;
+    pstyle->thickness = g_gx_lineStyle.thickness;
+    pstyle->puserstyle = g_gx_lineStyle.puserstyle;
+    pstyle->userstylecount = g_gx_lineStyle.userstylecount;
 }
 static void getfillstyle(FILLSTYLE* pstyle) {
     if (!pstyle) return;
-    pstyle->style = g_fillStyle.style;
-    pstyle->hatch = g_fillStyle.hatch;
-    pstyle->ppattern = g_fillStyle.ppattern;
+    pstyle->style = g_gx_fillStyle.style;
+    pstyle->hatch = g_gx_fillStyle.hatch;
+    pstyle->ppattern = g_gx_fillStyle.ppattern;
 }
 
 static void gxSetLineStyle1(int style) {
-    g_lineStyle.style = (DWORD)style;
-    g_lineStyle.thickness = 1;
-    g_lineStyle.puserstyle = NULL;
-    g_lineStyle.userstylecount = 0;
-    g_lineWidth = (int)g_lineStyle.thickness;
-    if (g_lineWidth < 1) g_lineWidth = 1;
+    g_gx_lineStyle.style = (DWORD)style;
+    g_gx_lineStyle.thickness = 1;
+    g_gx_lineStyle.puserstyle = NULL;
+    g_gx_lineStyle.userstylecount = 0;
+    g_gx_lineWidth = (int)g_gx_lineStyle.thickness;
+    if (g_gx_lineWidth < 1) g_gx_lineWidth = 1;
 }
 static void gxSetLineStyle2(int style, int thickness) {
-    g_lineStyle.style = (DWORD)style;
-    g_lineStyle.thickness = (DWORD)thickness;
-    g_lineStyle.puserstyle = NULL;
-    g_lineStyle.userstylecount = 0;
-    g_lineWidth = thickness < 1 ? 1 : thickness;   /* GDI maps width 0 to 1 */
+    g_gx_lineStyle.style = (DWORD)style;
+    g_gx_lineStyle.thickness = (DWORD)thickness;
+    g_gx_lineStyle.puserstyle = NULL;
+    g_gx_lineStyle.userstylecount = 0;
+    g_gx_lineWidth = thickness < 1 ? 1 : thickness;   /* GDI maps width 0 to 1 */
 }
 static void gxSetLineStyle3(int style, int thickness, const DWORD* puserstyle) {
     gxSetLineStyle2(style, thickness);
-    g_lineStyle.puserstyle = (DWORD*)puserstyle;
+    g_gx_lineStyle.puserstyle = (DWORD*)puserstyle;
 }
 static void gxSetLineStyle4(int style, int thickness, const DWORD* puserstyle,
                             DWORD userstylecount) {
     gxSetLineStyle3(style, thickness, puserstyle);
-    g_lineStyle.userstylecount = userstylecount;
+    g_gx_lineStyle.userstylecount = userstylecount;
 }
 static void gxSetLineStylePtr(const LINESTYLE* p) {
     if (!p) return;
-    g_lineStyle = *p;
-    g_lineWidth = (int)p->thickness;
-    if (g_lineWidth < 1) g_lineWidth = 1;
+    g_gx_lineStyle = *p;
+    g_gx_lineWidth = (int)p->thickness;
+    if (g_gx_lineWidth < 1) g_gx_lineWidth = 1;
 }
 static void gxSetFillStyle1(int style) {
     switch (style) {
     case BS_SOLID: case BS_NULL: case BS_HATCHED:
     case BS_PATTERN: case BS_DIBPATTERN:
-        g_fillStyle.style = style;
-        g_fillStyle.hatch = 0;
-        g_fillStyle.ppattern = NULL;
+        g_gx_fillStyle.style = style;
+        g_gx_fillStyle.hatch = 0;
+        g_gx_fillStyle.ppattern = NULL;
         return;
     default:
         /* EasyX also allows setfillstyle(<colour>) as a shortcut. */
@@ -3749,16 +3787,16 @@ static void gxSetFillStyle1(int style) {
     }
 }
 static void gxSetFillStyle2(int style, long hatch) {
-    g_fillStyle.style = style;
-    g_fillStyle.hatch = hatch;
-    g_fillStyle.ppattern = NULL;
+    g_gx_fillStyle.style = style;
+    g_gx_fillStyle.hatch = hatch;
+    g_gx_fillStyle.ppattern = NULL;
 }
 static void gxSetFillStyle3(int style, long hatch, IMAGE* ppattern) {
-    g_fillStyle.style = style;
-    g_fillStyle.hatch = hatch;
-    g_fillStyle.ppattern = ppattern;
+    g_gx_fillStyle.style = style;
+    g_gx_fillStyle.hatch = hatch;
+    g_gx_fillStyle.ppattern = ppattern;
 }
-static void gxSetFillStylePtr(const FILLSTYLE* p) { if (p) g_fillStyle = *p; }
+static void gxSetFillStylePtr(const FILLSTYLE* p) { if (p) g_gx_fillStyle = *p; }
 static void gxSetFillStyleColor(COLORREF c) { setfillcolor(c); }
 
 /*======================================================================
@@ -3774,13 +3812,13 @@ static COLORREF getpixel(int x, int y) {
     unsigned char px[4];
     int dx = gxLogToDevX((float)x);
     int dy = gxLogToDevY((float)y);
-    if (!g_glReady) return BLACK;
+    if (!g_gx_glReady) return BLACK;
     gxFlush();
-    glBindFramebuffer(GL_FRAMEBUFFER, gxReadFbo(g_target->fbo));
-    if (dx < 0 || dy < 0 || dx >= g_target->w || dy >= g_target->h) return BLACK;
+    glBindFramebuffer(GL_FRAMEBUFFER, gxReadFbo(g_gx_target->fbo));
+    if (dx < 0 || dy < 0 || dx >= g_gx_target->w || dy >= g_gx_target->h) return BLACK;
     memset(px, 0, sizeof(px));
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(dx, g_target->h - 1 - dy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glReadPixels(dx, g_gx_target->h - 1 - dy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     return RGB(px[0], px[1], px[2]);
 }
@@ -3790,8 +3828,8 @@ static COLORREF getpixel(int x, int y) {
  * at scale 3 a logical radius of 10 really is a 30 device pixel circle and
  * needs three times as many segments to stay smooth. */
 static int gxNSeg(float r) {
-    float s = (fabsf(g_scaleX) > fabsf(g_scaleY)) ? fabsf(g_scaleX)
-                                                  : fabsf(g_scaleY);
+    float s = (fabsf(g_gx_scaleX) > fabsf(g_gx_scaleY)) ? fabsf(g_gx_scaleX)
+                                                  : fabsf(g_gx_scaleY);
     int n;
     if (!(s > 0.f)) s = 1.f;
     if (r < 0.f) r = -r;
@@ -3828,7 +3866,7 @@ static void gxDisc(float cx, float cy, float R, COLORREF c) {
 /* Defined here (not in the stroke section) because gxThickLine() below reads
  * it and C++ has no tentative definitions, so it cannot be forward declared.
  * Default ROUND matches the round caps a GDI geometric pen draws. */
-static int g_strokeCap = GX_CAP_ROUND;
+static int g_gx_strokeCap = GX_CAP_ROUND;
 
 /* Half of a disc, centred on a segment end: (dx,dy) is the unit vector that
  * points OUT of the end, so the arc covers only what sticks out past the flat
@@ -3872,44 +3910,44 @@ static void gxCapHalf(float cx, float cy, float R,
  * setlinestyle(), like a geometric GDI pen.
  *====================================================================*/
 #define GX_DASH_MAX 32                  /* GDI caps a user array at 16 */
-static const DWORD g_dashPresetDASH[]       = { 3, 1 };
-static const DWORD g_dashPresetDOT[]        = { 1, 1 };
-static const DWORD g_dashPresetDASHDOT[]    = { 3, 1, 1, 1 };
-static const DWORD g_dashPresetDASHDOTDOT[] = { 3, 1, 1, 1, 1, 1 };
-static DWORD g_dashBuf[GX_DASH_MAX];
-static int   g_dashIdx = 0;             /* index into the pattern        */
-static float g_dashPos = 0.f;           /* distance used inside that dash */
+static const DWORD g_gx_dashPresetDASH[]       = { 3, 1 };
+static const DWORD g_gx_dashPresetDOT[]        = { 1, 1 };
+static const DWORD g_gx_dashPresetDASHDOT[]    = { 3, 1, 1, 1 };
+static const DWORD g_gx_dashPresetDASHDOTDOT[] = { 3, 1, 1, 1, 1, 1 };
+static DWORD g_gx_dashBuf[GX_DASH_MAX];
+static int   g_gx_dashIdx = 0;             /* index into the pattern        */
+static float g_gx_dashPos = 0.f;           /* distance used inside that dash */
 
 /* Active dash array, or NULL for a solid (or invisible) pen. */
 static const DWORD* gxDashPattern(int* outCount) {
     const DWORD* p = NULL;
     int n = 0, i;
     DWORD sum = 0;
-    switch ((int)(g_lineStyle.style & PS_STYLE_MASK)) {
+    switch ((int)(g_gx_lineStyle.style & PS_STYLE_MASK)) {
     case PS_DASH:
-        p = g_dashPresetDASH;       n = (int)(sizeof(g_dashPresetDASH) / sizeof(DWORD));
+        p = g_gx_dashPresetDASH;       n = (int)(sizeof(g_gx_dashPresetDASH) / sizeof(DWORD));
         break;
     case PS_DOT:
-        p = g_dashPresetDOT;        n = (int)(sizeof(g_dashPresetDOT) / sizeof(DWORD));
+        p = g_gx_dashPresetDOT;        n = (int)(sizeof(g_gx_dashPresetDOT) / sizeof(DWORD));
         break;
     case PS_DASHDOT:
-        p = g_dashPresetDASHDOT;    n = (int)(sizeof(g_dashPresetDASHDOT) / sizeof(DWORD));
+        p = g_gx_dashPresetDASHDOT;    n = (int)(sizeof(g_gx_dashPresetDASHDOT) / sizeof(DWORD));
         break;
     case PS_DASHDOTDOT:
-        p = g_dashPresetDASHDOTDOT; n = (int)(sizeof(g_dashPresetDASHDOTDOT) / sizeof(DWORD));
+        p = g_gx_dashPresetDASHDOTDOT; n = (int)(sizeof(g_gx_dashPresetDASHDOTDOT) / sizeof(DWORD));
         break;
     case PS_USERSTYLE:
-        if (g_lineStyle.puserstyle && g_lineStyle.userstylecount > 0) {
-            n = (int)g_lineStyle.userstylecount;
+        if (g_gx_lineStyle.puserstyle && g_gx_lineStyle.userstylecount > 0) {
+            n = (int)g_gx_lineStyle.userstylecount;
             if (n > 16) n = 16;
-            for (i = 0; i < n; i++) g_dashBuf[i] = g_lineStyle.puserstyle[i];
+            for (i = 0; i < n; i++) g_gx_dashBuf[i] = g_gx_lineStyle.puserstyle[i];
             /* GDI: an odd count makes the pattern reverse when it wraps,
              * which is the same as simply repeating it twice. */
             if (n & 1) {
-                for (i = 0; i < n; i++) g_dashBuf[n + i] = g_dashBuf[i];
+                for (i = 0; i < n; i++) g_gx_dashBuf[n + i] = g_gx_dashBuf[i];
                 n *= 2;
             }
-            p = g_dashBuf;
+            p = g_gx_dashBuf;
         }
         break;
     default:
@@ -3929,7 +3967,7 @@ GX_INLINE bool gxDashOn(void) {
 
 /* Start a new figure: GDI restarts the dash phase for every figure and
  * keeps it running across the segments of that figure. */
-GX_INLINE void gxDashReset(void) { g_dashIdx = 0; g_dashPos = 0.f; }
+GX_INLINE void gxDashReset(void) { g_gx_dashIdx = 0; g_gx_dashPos = 0.f; }
 
 /* One flat capped segment, no end caps, no dashing. */
 static void gxSegRaw(float x1, float y1, float x2, float y2, COLORREF c, float w) {
@@ -3961,7 +3999,7 @@ static void gxThickLine(float x1, float y1, float x2, float y2, COLORREF c,
     if (len < 0.0001f) {
         /* A degenerate segment only paints when the pen is not in a gap. */
         pat = gxDashPattern(&n);
-        if (!pat || (g_dashIdx & 1) == 0) gxDisc(x1, y1, hw, c);
+        if (!pat || (g_gx_dashIdx & 1) == 0) gxDisc(x1, y1, hw, c);
         return;
     }
     pat = gxDashPattern(&n);
@@ -3974,10 +4012,10 @@ static void gxThickLine(float x1, float y1, float x2, float y2, COLORREF c,
          * which reads as a dark round blob capping each end of the line. */
         if (caps && w >= 3.f) {
             float ux = dx / len, uy = dy / len;
-            if (g_strokeCap == GX_CAP_ROUND) {
+            if (g_gx_strokeCap == GX_CAP_ROUND) {
                 gxCapHalf(x1, y1, hw, -ux, -uy, c);
                 gxCapHalf(x2, y2, hw,  ux,  uy, c);
-            } else if (g_strokeCap == GX_CAP_SQUARE) {
+            } else if (g_gx_strokeCap == GX_CAP_SQUARE) {
                 /* A butt ribbon hw long, sharing the cross section edge. */
                 gxSegRaw(x1 - ux * hw, y1 - uy * hw, x1, y1, c, w);
                 gxSegRaw(x2, y2, x2 + ux * hw, y2 + uy * hw, c, w);
@@ -3992,23 +4030,23 @@ static void gxThickLine(float x1, float y1, float x2, float y2, COLORREF c,
         float t = 0.f;
         int guard = 0;
         while (t < len && guard++ < 200000) {
-            int   on   = ((g_dashIdx & 1) == 0);
-            float want = (float)pat[g_dashIdx] * unit;
-            float left = want - g_dashPos;
+            int   on   = ((g_gx_dashIdx & 1) == 0);
+            float want = (float)pat[g_gx_dashIdx] * unit;
+            float left = want - g_gx_dashPos;
             float step;
             if (left <= 0.f) {
                 /* Zero length entry: skip it, otherwise the loop stalls. */
-                g_dashPos = 0.f;
-                g_dashIdx = (g_dashIdx + 1) % n;
+                g_gx_dashPos = 0.f;
+                g_gx_dashIdx = (g_gx_dashIdx + 1) % n;
                 continue;
             }
             if (left > len - t) {
                 step = len - t;
-                g_dashPos += step;
+                g_gx_dashPos += step;
             } else {
                 step = left;
-                g_dashPos = 0.f;
-                g_dashIdx = (g_dashIdx + 1) % n;
+                g_gx_dashPos = 0.f;
+                g_gx_dashIdx = (g_gx_dashIdx + 1) % n;
             }
             if (on && step > 0.f)
                 gxSegRaw(x1 + ux * t,         y1 + uy * t,
@@ -4019,16 +4057,16 @@ static void gxThickLine(float x1, float y1, float x2, float y2, COLORREF c,
 }
 
 static void line(double x1, double y1, double x2, double y2) {
-    if (g_lineStyle.style == PS_NULL) return;
+    if (g_gx_lineStyle.style == PS_NULL) return;
     gxDashReset();
     gxSetTex(0, 0);
     gxThickLine((float)x1, (float)y1, (float)x2, (float)y2,
-                g_lineColor, (float)g_lineWidth, true);
-    g_curX = x2; g_curY = y2;
+                g_gx_lineColor, (float)g_gx_lineWidth, true);
+    g_gx_curX = x2; g_gx_curY = y2;
     gxCheckFlush();
 }
-static void lineto(double x, double y)  { line(g_curX, g_curY, x, y); }
-static void linerel(double dx, double dy){ line(g_curX, g_curY, g_curX + dx, g_curY + dy); }
+static void lineto(double x, double y)  { line(g_gx_curX, g_gx_curY, x, y); }
+static void linerel(double dx, double dy){ line(g_gx_curX, g_gx_curY, g_gx_curX + dx, g_gx_curY + dy); }
 
 /* The three EasyX naming families:
  *   rectangle()      - outline only, in the line colour
@@ -4047,7 +4085,7 @@ static void solidrectangle(double l, double t, double r, double b) {
     if (l > r) { tmp = l; l = r; r = tmp; }
     if (t > b) { tmp = t; t = b; b = tmp; }
     if (gxBeginFill())
-        gxQuad((float)l, (float)t, (float)(r + 1), (float)(b + 1), g_fillColor);
+        gxQuad((float)l, (float)t, (float)(r + 1), (float)(b + 1), g_gx_fillColor);
     gxCheckFlush();
 }
 /* Fill plus outline.  The outline goes on top, so it is not buried under
@@ -4058,9 +4096,9 @@ static void fillrectangle(double l, double t, double r, double b) {
 }
 
 static void rectangle(double l, double t, double r, double b) {
-    float w = (float)g_lineWidth;
-    COLORREF c = g_lineColor;
-    if (g_lineStyle.style == PS_NULL) return;
+    float w = (float)g_gx_lineWidth;
+    COLORREF c = g_gx_lineColor;
+    if (g_gx_lineStyle.style == PS_NULL) return;
     gxDashReset();
     gxSetTex(0, 0);
     {
@@ -4076,7 +4114,7 @@ static void rectangle(double l, double t, double r, double b) {
 
 static void solidcircle(double x, double y, double r) {
     if (r <= 0) return;
-    if (gxBeginFill()) gxDisc(x + 0.5f, y + 0.5f, r + 0.5f, g_fillColor);
+    if (gxBeginFill()) gxDisc(x + 0.5f, y + 0.5f, r + 0.5f, g_gx_fillColor);
     gxCheckFlush();
 }
 GX_INLINE void fillcircle(double x, double y, double r) {
@@ -4091,7 +4129,7 @@ static void gxEllipseArc(double l, double t, double r, double b, double a0, doub
 static void circle(double x, double y, double r) {
     float cx, cy, R, hw, ri, ro, pi, pii, po, po2;
     int n, i;
-    if (r <= 0 || g_lineStyle.style == PS_NULL) return;
+    if (r <= 0 || g_gx_lineStyle.style == PS_NULL) return;
     /* The ring below cannot be dashed, so a dashed circle is stroked as a
      * closed polyline instead (same centre and radius). */
     if (gxDashOn()) {
@@ -4100,7 +4138,7 @@ static void circle(double x, double y, double r) {
     }
     gxSetTex(0, 0);
     cx = x + 0.5f; cy = y + 0.5f; R = r + 0.5f;
-    hw = g_lineWidth * 0.5f;
+    hw = g_gx_lineWidth * 0.5f;
     ri = R - hw; ro = R + hw;
     if (ri < 0.f) ri = 0.f;
     n = gxNSeg(ro);
@@ -4110,7 +4148,7 @@ static void circle(double x, double y, double r) {
         float ca = cosf(a), sa = sinf(a);
         float qi = cx + ca * ri, qii = cy + sa * ri;
         float qo = cx + ca * ro, qo2 = cy + sa * ro;
-        gxQuad4(pi, pii, po, po2, qo, qo2, qi, qii, g_lineColor);
+        gxQuad4(pi, pii, po, po2, qo, qo2, qi, qii, g_gx_lineColor);
         pi = qi; pii = qii; po = qo; po2 = qo2;
     }
     gxCheckFlush();
@@ -4147,16 +4185,16 @@ static void gxSolidEllipseSector(double l, double t, double r, double b,
         for (i = 1; i <= n; i++) {
             double tt = a0 + (a1 - a0) * (double)i / (double)n;
             qx = cx + (float)(cos(tt) * rx); qy = cy + (float)(sin(tt) * ry);
-            gxV(cx, cy, g_fillColor, 0, 0);
-            gxV(px, py, g_fillColor, 0, 0);
-            gxV(qx, qy, g_fillColor, 0, 0);
+            gxV(cx, cy, g_gx_fillColor, 0, 0);
+            gxV(px, py, g_gx_fillColor, 0, 0);
+            gxV(qx, qy, g_gx_fillColor, 0, 0);
             px = qx; py = qy;
         }
         if (closed && (a1 - a0) < 6.28318530718) {
             qx = cx + (float)(cos(a1) * rx); qy = cy + (float)(sin(a1) * ry);
-            gxV(cx, cy, g_fillColor, 0, 0);
-            gxV(px, py, g_fillColor, 0, 0);
-            gxV(qx, qy, g_fillColor, 0, 0);
+            gxV(cx, cy, g_gx_fillColor, 0, 0);
+            gxV(px, py, g_gx_fillColor, 0, 0);
+            gxV(qx, qy, g_gx_fillColor, 0, 0);
         }
     }
     gxCheckFlush();
@@ -4164,12 +4202,12 @@ static void gxSolidEllipseSector(double l, double t, double r, double b,
 
 static void gxEllipseArc(double l, double t, double r, double b, double a0, double a1, bool withSpokes) {
     float cx, cy, rx, ry;
-    float w = (float)g_lineWidth;
+    float w = (float)g_gx_lineWidth;
     int n, i;
     float px, py, qx, qy;
     if (l > r) { double tmp = l; l = r; r = tmp; }
     if (t > b) { double tmp = t; t = b; b = tmp; }
-    if (g_lineStyle.style == PS_NULL) return;
+    if (g_gx_lineStyle.style == PS_NULL) return;
     gxDashReset();
     gxSetTex(0, 0);
     cx = (l + r + 1) * 0.5f; cy = (t + b + 1) * 0.5f;
@@ -4183,12 +4221,12 @@ static void gxEllipseArc(double l, double t, double r, double b, double a0, doub
     for (i = 1; i <= n; i++) {
         double tt = a0 + (a1 - a0) * (double)i / (double)n;
         qx = cx + (float)(cos(tt) * rx); qy = cy + (float)(sin(tt) * ry);
-        gxThickLine(px, py, qx, qy, g_lineColor, w, false);
+        gxThickLine(px, py, qx, qy, g_gx_lineColor, w, false);
         px = qx; py = qy;
     }
     if (withSpokes && (a1 - a0) < 6.28318530718) {
-        gxThickLine(cx, cy, cx + (float)(cos(a0) * rx), cy + (float)(sin(a0) * ry), g_lineColor, w, true);
-        gxThickLine(cx, cy, cx + (float)(cos(a1) * rx), cy + (float)(sin(a1) * ry), g_lineColor, w, true);
+        gxThickLine(cx, cy, cx + (float)(cos(a0) * rx), cy + (float)(sin(a0) * ry), g_gx_lineColor, w, true);
+        gxThickLine(cx, cy, cx + (float)(cos(a1) * rx), cy + (float)(sin(a1) * ry), g_gx_lineColor, w, true);
     }
     gxCheckFlush();
 }
@@ -4262,14 +4300,14 @@ static void gxRoundRect(double l, double t, double r, double b, double rw, doubl
     if (filled) {
         if (gxBeginFill()) {
             for (i = 1; i < n - 1; i++) {
-                gxV(ptsX[0], ptsY[0], g_fillColor, 0, 0);
-                gxV(ptsX[i], ptsY[i], g_fillColor, 0, 0);
-                gxV(ptsX[i + 1], ptsY[i + 1], g_fillColor, 0, 0);
+                gxV(ptsX[0], ptsY[0], g_gx_fillColor, 0, 0);
+                gxV(ptsX[i], ptsY[i], g_gx_fillColor, 0, 0);
+                gxV(ptsX[i + 1], ptsY[i + 1], g_gx_fillColor, 0, 0);
             }
         }
     } else {
-        if (g_lineStyle.style != PS_NULL) {
-            float w = (float)g_lineWidth;
+        if (g_gx_lineStyle.style != PS_NULL) {
+            float w = (float)g_gx_lineWidth;
             gxDashReset();
             gxSetTex(0, 0);
             {
@@ -4325,7 +4363,7 @@ GX_STATIC_ASSERT(sizeof(POINTF) == 2 * sizeof(float),
  * The old version fanned triangles from the centroid, which only works for
  * convex polygons: any concave vertex produced paint outside the shape (and
  * holes were filled too).  It also ignored setpolyfillmode() completely,
- * because g_polyMode was never read.
+ * because g_gx_polyMode was never read.
  *
  * One scanline step is one DEVICE pixel expressed in logical units
  * (gxInvScaleY()), so the fill is exact at any scale.  Spans are built from
@@ -4391,7 +4429,7 @@ static void gxPolyFillXY(const float* p, int n) {
                 }
                 xs[h + 1] = kx; dir[h + 1] = kd;
             }
-            if (g_polyMode == WINDING) {
+            if (g_gx_polyMode == WINDING) {
                 int   wind = 0;
                 float sx = 0.f;
                 for (k = 0; k < nx; k++) {
@@ -4400,17 +4438,17 @@ static void gxPolyFillXY(const float* p, int n) {
                     if (prev == 0 && wind != 0) {
                         sx = xs[k];
                     } else if (prev != 0 && wind == 0 && xs[k] > sx) {
-                        gxQuad(sx, yTop, xs[k], yBot, g_fillColor);
+                        gxQuad(sx, yTop, xs[k], yBot, g_gx_fillColor);
                     }
                 }
             } else {                                    /* ALTERNATE */
                 for (k = 0; k + 1 < nx; k += 2) {
                     if (xs[k + 1] > xs[k])
-                        gxQuad(xs[k], yTop, xs[k + 1], yBot, g_fillColor);
+                        gxQuad(xs[k], yTop, xs[k + 1], yBot, g_gx_fillColor);
                 }
             }
         }
-        if (((++rowN) & 255) == 0 && g_vbuf.size > 200000u) gxFlush();
+        if (((++rowN) & 255) == 0 && g_gx_vbuf.size > 200000u) gxFlush();
     }
     free(xs);
     free(dir);
@@ -4418,9 +4456,9 @@ static void gxPolyFillXY(const float* p, int n) {
 }
 
 static void gxPolyStrokeXY(const float* p, int n, bool closed) {
-    float w = (float)g_lineWidth;
+    float w = (float)g_gx_lineWidth;
     int i, lim = closed ? n : n - 1;
-    if (g_lineStyle.style == PS_NULL) return;
+    if (g_gx_lineStyle.style == PS_NULL) return;
     gxDashReset();
     gxSetTex(0, 0);
     gxStrokePathLine(p, n, closed);
@@ -4566,7 +4604,7 @@ static void solidpolygonf(const POINTF* pts, int n) {
 static void solidtriangle(double x1, double y1,
                           double x2, double y2,
                           double x3, double y3) {
-    COLORREF c = g_fillColor;
+    COLORREF c = g_gx_fillColor;
     if (!gxBeginFill()) return;
     gxV((float)x1, (float)y1, c, 0.f, 0.f);
     gxV((float)x2, (float)y2, c, 0.f, 0.f);
@@ -4631,17 +4669,17 @@ static void filltriangle(double x1, double y1,
 #define GX_STROKE_FOLD_EPS   1e-4f /* |cross| below this with dot<0 = fold  */
 #define GX_STROKE_MITER_MAX  4.f  /* a spike longer than this falls back to BEVEL */
 
-/* g_strokeCap is defined near gxThickLine() - see the note there. */
-static int g_strokeJoin = GX_JOIN_ROUND;
+/* g_gx_strokeCap is defined near gxThickLine() - see the note there. */
+static int g_gx_strokeJoin = GX_JOIN_ROUND;
 
 GX_INLINE void setstrokecap(int c) {
-    g_strokeCap = (c >= GX_CAP_BUTT && c <= GX_CAP_SQUARE) ? c : GX_CAP_ROUND;
+    g_gx_strokeCap = (c >= GX_CAP_BUTT && c <= GX_CAP_SQUARE) ? c : GX_CAP_ROUND;
 }
 GX_INLINE void setstrokejoin(int j) {
-    g_strokeJoin = (j >= GX_JOIN_MITER && j <= GX_JOIN_BEVEL) ? j : GX_JOIN_ROUND;
+    g_gx_strokeJoin = (j >= GX_JOIN_MITER && j <= GX_JOIN_BEVEL) ? j : GX_JOIN_ROUND;
 }
-GX_INLINE int getstrokecap(void)  { return g_strokeCap; }
-GX_INLINE int getstrokejoin(void) { return g_strokeJoin; }
+GX_INLINE int getstrokecap(void)  { return g_gx_strokeCap; }
+GX_INLINE int getstrokejoin(void) { return g_gx_strokeJoin; }
 
 /* Unit normal of one segment: the segment direction turned a quarter turn. */
 static void gxStrokeNormal(float ax, float ay, float* mx, float* my) {
@@ -4733,7 +4771,7 @@ static int gxStrokeOutline(const POINTF* sp, const POINTF* nm, int m,
     dlx /= l; dly /= l;
 
     /* ---- +n side, head -> tail ---- */
-    if (g_strokeCap == GX_CAP_SQUARE)
+    if (g_gx_strokeCap == GX_CAP_SQUARE)
         gxStrokePush(out, &n, ocap, sp[0].x + nm[0].x * hw - d0x * hw,
                                     sp[0].y + nm[0].y * hw - d0y * hw);
     gxStrokePush(out, &n, ocap, sp[0].x + nm[0].x * hw, sp[0].y + nm[0].y * hw);
@@ -4759,10 +4797,10 @@ static int gxStrokeOutline(const POINTF* sp, const POINTF* nm, int m,
         }
         gxStrokePush(out, &n, ocap, sp[i+1].x + m1x * hw, sp[i+1].y + m1y * hw);
         if (cr < -GX_STROKE_FOLD_EPS || gxStrokeIsFold(cr, dot)) {
-            if (g_strokeJoin == GX_JOIN_ROUND) {
+            if (g_gx_strokeJoin == GX_JOIN_ROUND) {
                 a0 = atan2f(m1y, m1x);
                 gxStrokeArc(out, &n, ocap, sp[i+1].x, sp[i+1].y, hw, a0, delta, segs);
-            } else if (g_strokeJoin == GX_JOIN_MITER) {
+            } else if (g_gx_strokeJoin == GX_JOIN_MITER) {
                 float ox, oy;
                 if (gxStrokeMiter(sp[i].x   + m1x*hw, sp[i].y   + m1y*hw, d1x, d1y,
                                   sp[i+2].x + m2x*hw, sp[i+2].y + m2y*hw, d2x, d2y,
@@ -4776,10 +4814,10 @@ static int gxStrokeOutline(const POINTF* sp, const POINTF* nm, int m,
                               sp[m-1].y + nm[nseg-1].y * hw);
 
     /* ---- round the tail ---- */
-    if (g_strokeCap == GX_CAP_ROUND) {
+    if (g_gx_strokeCap == GX_CAP_ROUND) {
         gxStrokeArc(out, &n, ocap, sp[m-1].x, sp[m-1].y, hw,
                     atan2f(nm[nseg-1].y, nm[nseg-1].x), -3.14159265f, GX_STROKE_CAP_SEGS);
-    } else if (g_strokeCap == GX_CAP_SQUARE) {
+    } else if (g_gx_strokeCap == GX_CAP_SQUARE) {
         gxStrokePush(out, &n, ocap, sp[m-1].x + nm[nseg-1].x*hw + dlx*hw,
                                     sp[m-1].y + nm[nseg-1].y*hw + dly*hw);
         gxStrokePush(out, &n, ocap, sp[m-1].x - nm[nseg-1].x*hw + dlx*hw,
@@ -4809,14 +4847,14 @@ static int gxStrokeOutline(const POINTF* sp, const POINTF* nm, int m,
         }
         gxStrokePush(out, &n, ocap, sp[i+1].x - m2x * hw, sp[i+1].y - m2y * hw);
         if (cr > GX_STROKE_FOLD_EPS) {
-            if (g_strokeJoin == GX_JOIN_ROUND) {
+            if (g_gx_strokeJoin == GX_JOIN_ROUND) {
                 a0 = atan2f(-m1y, -m1x);
                 for (j = segs - 1; j >= 1; j--) {        /* walking backwards */
                     float a = a0 + delta * (float)j / (float)segs;
                     gxStrokePush(out, &n, ocap, sp[i+1].x + cosf(a)*hw,
                                                 sp[i+1].y + sinf(a)*hw);
                 }
-            } else if (g_strokeJoin == GX_JOIN_MITER) {
+            } else if (g_gx_strokeJoin == GX_JOIN_MITER) {
                 float ox, oy;
                 if (gxStrokeMiter(sp[i+2].x - m2x*hw, sp[i+2].y - m2y*hw, -d2x, -d2y,
                                   sp[i].x   - m1x*hw, sp[i].y   - m1y*hw, -d1x, -d1y,
@@ -4829,10 +4867,10 @@ static int gxStrokeOutline(const POINTF* sp, const POINTF* nm, int m,
     gxStrokePush(out, &n, ocap, sp[0].x - nm[0].x * hw, sp[0].y - nm[0].y * hw);
 
     /* ---- round the head ---- */
-    if (g_strokeCap == GX_CAP_ROUND) {
+    if (g_gx_strokeCap == GX_CAP_ROUND) {
         gxStrokeArc(out, &n, ocap, sp[0].x, sp[0].y, hw,
                     atan2f(-nm[0].y, -nm[0].x), -3.14159265f, GX_STROKE_CAP_SEGS);
-    } else if (g_strokeCap == GX_CAP_SQUARE) {
+    } else if (g_gx_strokeCap == GX_CAP_SQUARE) {
         gxStrokePush(out, &n, ocap, sp[0].x - nm[0].x*hw - d0x*hw,
                                     sp[0].y - nm[0].y*hw - d0y*hw);
         gxStrokePush(out, &n, ocap, sp[0].x + nm[0].x*hw - d0x*hw,
@@ -4925,22 +4963,22 @@ static void gxStrokeRibbon(const POINTF* pts, int n, double width, bool closed) 
     out = (POINTF*)malloc((size_t)ocap * sizeof(POINTF));
     if (!out) { free(sp); free(nm); return; }
 
-    oldCap = g_strokeCap;
-    if (closed) g_strokeCap = GX_CAP_BUTT;
+    oldCap = g_gx_strokeCap;
+    if (closed) g_gx_strokeCap = GX_CAP_BUTT;
     cnt = gxStrokeOutline(sp, nm, m, hw, out, ocap);
-    g_strokeCap = oldCap;
+    g_gx_strokeCap = oldCap;
 
     if (cnt >= 3) {
         oldFill  = getpolyfillmode();
-        oldStyle = g_fillStyle.style;
-        oldCol   = g_fillColor;
-        g_fillStyle.style = BS_SOLID;      /* the outline is always solid */
-        g_fillColor = g_lineColor;         /* a ribbon is a STROKE */
+        oldStyle = g_gx_fillStyle.style;
+        oldCol   = g_gx_fillColor;
+        g_gx_fillStyle.style = BS_SOLID;      /* the outline is always solid */
+        g_gx_fillColor = g_gx_lineColor;         /* a ribbon is a STROKE */
         setpolyfillmode(WINDING);
         gxPolyFillF(out, cnt);
         setpolyfillmode(oldFill);
-        g_fillStyle.style = oldStyle;
-        g_fillColor = oldCol;
+        g_gx_fillStyle.style = oldStyle;
+        g_gx_fillColor = oldCol;
     }
     free(sp); free(nm); free(out);
 }
@@ -4961,14 +4999,14 @@ static void gxStrokeRibbonP(const POINT* pts, int n, double width, bool closed) 
 /* The arity forms.  User code calls the name without a suffix; the _2
  * forms take the width from the pen, the _3 forms from the caller.  C++
  * picks by overload and C picks by counting the arguments. */
-static void gx_spl_2(const POINT* p, int n)             { gxStrokeRibbonP(p, n, (double)g_lineWidth, false); }
+static void gx_spl_2(const POINT* p, int n)             { gxStrokeRibbonP(p, n, (double)g_gx_lineWidth, false); }
 static void gx_spl_3(const POINT* p, int n, double w)   { gxStrokeRibbonP(p, n, w, false); }
-static void gx_splf_2(const POINTF* p, int n)           { gxStrokeRibbon(p, n, (double)g_lineWidth, false); }
+static void gx_splf_2(const POINTF* p, int n)           { gxStrokeRibbon(p, n, (double)g_gx_lineWidth, false); }
 static void gx_splf_3(const POINTF* p, int n, double w) { gxStrokeRibbon(p, n, w, false); }
 
-static void gx_spg_2(const POINT* p, int n)             { gxStrokeRibbonP(p, n, (double)g_lineWidth, true); }
+static void gx_spg_2(const POINT* p, int n)             { gxStrokeRibbonP(p, n, (double)g_gx_lineWidth, true); }
 static void gx_spg_3(const POINT* p, int n, double w)   { gxStrokeRibbonP(p, n, w, true); }
-static void gx_spgf_2(const POINTF* p, int n)           { gxStrokeRibbon(p, n, (double)g_lineWidth, true); }
+static void gx_spgf_2(const POINTF* p, int n)           { gxStrokeRibbon(p, n, (double)g_gx_lineWidth, true); }
 static void gx_spgf_3(const POINTF* p, int n, double w) { gxStrokeRibbon(p, n, w, true); }
 
 /* Fill and then rim: the inner part takes the FILL colour and the rim the
@@ -4977,9 +5015,9 @@ static void gx_spgf_3(const POINTF* p, int n, double w) { gxStrokeRibbon(p, n, w
  * inner half lies over the fill: with an opaque colour that is invisible, with a
  * translucent one those pixels are covered twice and come out stronger.
  * Call solidpolygon() and strokepolygon() separately if that matters. */
-static void gx_fspg_2(const POINT* p, int n)            { solidpolygon(p, n);  gxStrokeRibbonP(p, n, (double)g_lineWidth, true); }
+static void gx_fspg_2(const POINT* p, int n)            { solidpolygon(p, n);  gxStrokeRibbonP(p, n, (double)g_gx_lineWidth, true); }
 static void gx_fspg_3(const POINT* p, int n, double w)  { solidpolygon(p, n);  gxStrokeRibbonP(p, n, w, true); }
-static void gx_fspgf_2(const POINTF* p, int n)          { solidpolygonf(p, n); gxStrokeRibbon(p, n, (double)g_lineWidth, true); }
+static void gx_fspgf_2(const POINTF* p, int n)          { solidpolygonf(p, n); gxStrokeRibbon(p, n, (double)g_gx_lineWidth, true); }
 static void gx_fspgf_3(const POINTF* p, int n, double w){ solidpolygonf(p, n); gxStrokeRibbon(p, n, w, true); }
 
 /* Outline a whole path in ONE fill, in the LINE colour, with no per segment
@@ -4991,14 +5029,14 @@ static void gx_fspgf_3(const POINTF* p, int n, double w){ solidpolygonf(p, n); g
  * phase needs that) and those segments are flat capped, for the same
  * reason.  Closed paths get a join at the closing point, never a cap. */
 static void gxStrokePathLine(const float* p, int n, bool closed) {
-    float    w = (float)g_lineWidth;
+    float    w = (float)g_gx_lineWidth;
     POINTF  *sp, *nm, *out;
     float    hw, eps;
     int      i, m, nseg, cnt, ocap;
     int      oldFill, oldStyle, oldCap;
     COLORREF oldCol;
 
-    if (p == NULL || n < 2 || g_lineStyle.style == PS_NULL) return;
+    if (p == NULL || n < 2 || g_gx_lineStyle.style == PS_NULL) return;
     if (gxDashOn()) {
         int lim = closed ? n : n - 1;
         gxDashReset();
@@ -5006,7 +5044,7 @@ static void gxStrokePathLine(const float* p, int n, bool closed) {
         for (i = 0; i < lim; i++) {
             int j = (i + 1) % n;
             gxThickLine(p[i * 2], p[i * 2 + 1],
-                        p[j * 2], p[j * 2 + 1], g_lineColor, w, false);
+                        p[j * 2], p[j * 2 + 1], g_gx_lineColor, w, false);
         }
         gxCheckFlush();
         return;
@@ -5038,22 +5076,22 @@ static void gxStrokePathLine(const float* p, int n, bool closed) {
     out = (POINTF*)malloc((size_t)ocap * sizeof(POINTF));
     if (!out) { free(sp); free(nm); return; }
 
-    oldCap = g_strokeCap;
-    if (closed) g_strokeCap = GX_CAP_BUTT;
+    oldCap = g_gx_strokeCap;
+    if (closed) g_gx_strokeCap = GX_CAP_BUTT;
     cnt = gxStrokeOutline(sp, nm, m, hw, out, ocap);
-    g_strokeCap = oldCap;
+    g_gx_strokeCap = oldCap;
 
     if (cnt >= 3) {
         oldFill  = getpolyfillmode();
-        oldStyle = g_fillStyle.style;
-        oldCol   = g_fillColor;
-        g_fillStyle.style = BS_SOLID;      /* the outline is always solid */
-        g_fillColor = g_lineColor;
+        oldStyle = g_gx_fillStyle.style;
+        oldCol   = g_gx_fillColor;
+        g_gx_fillStyle.style = BS_SOLID;      /* the outline is always solid */
+        g_gx_fillColor = g_gx_lineColor;
         setpolyfillmode(WINDING);
         gxPolyFillF(out, cnt);
         setpolyfillmode(oldFill);
-        g_fillStyle.style = oldStyle;
-        g_fillColor = oldCol;
+        g_gx_fillStyle.style = oldStyle;
+        g_gx_fillColor = oldCol;
     }
     free(sp); free(nm); free(out);
 }
@@ -5081,9 +5119,9 @@ static void gxFloodFill(int x, int y, COLORREF color, int filltype) {
     COLORREF target = BLACK;
     int surface = (filltype == FLOODFILLSURFACE);
 
-    if (!g_glReady) return;
+    if (!g_gx_glReady) return;
     gxFlush();
-    w = g_target->w; h = g_target->h;
+    w = g_gx_target->w; h = g_gx_target->h;
     if (w <= 0 || h <= 0) return;
 
     buf = (unsigned char*)malloc((size_t)w * (size_t)h * 4);
@@ -5093,7 +5131,7 @@ static void gxFloodFill(int x, int y, COLORREF color, int filltype) {
         free(buf); free(vis);
         return;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, gxReadFbo(g_target->fbo));
+    glBindFramebuffer(GL_FRAMEBUFFER, gxReadFbo(g_gx_target->fbo));
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -5156,9 +5194,9 @@ static void gxFloodFill(int x, int y, COLORREF color, int filltype) {
             float fx1 = (float)(xr + 1) * gxInvScaleX();
             float fy1 = fy + gxInvScaleY();
             if (gxBeginFill())
-                gxQuad(fx0 - g_originX * gxInvScaleX(), fy - g_originY * gxInvScaleY(),
-                       fx1 - g_originX * gxInvScaleX(), fy1 - g_originY * gxInvScaleY(),
-                       g_fillColor);
+                gxQuad(fx0 - g_gx_originX * gxInvScaleX(), fy - g_gx_originY * gxInvScaleY(),
+                       fx1 - g_gx_originX * gxInvScaleX(), fy1 - g_gx_originY * gxInvScaleY(),
+                       g_gx_fillColor);
         }
         for (i = xl; i <= xr; i++) {
             int ny2;
@@ -5259,7 +5297,7 @@ static void gxAlphaGrad(double dx, double dy, double dw, double dh,
     float x0, y0, x1, y1;
     int i;
 
-    if (!gxImageOk(img) || !g_glReady) return;
+    if (!gxImageOk(img) || !g_gx_glReady) return;
     if (dw <= 0) dw = (img->logW > 0) ? img->logW : img->width;
     if (dh <= 0) dh = (img->logH > 0) ? img->logH : img->height;
     if (dw <= 0 || dh <= 0) return;
@@ -5320,15 +5358,15 @@ GX_INLINE void gxSetMix(int mode, float w, COLORREF c, GLuint tex2) {
     float g = GX_BYTE_TO_FLOAT(GetGValue(c));
     float b = GX_BYTE_TO_FLOAT(GetBValue(c));
     float a = gxAlphaOf(c);
-    if (mode != g_curMixMode || w != g_curMixW || tex2 != g_curTex2
-        || r != g_curMixR || g != g_curMixG
-        || b != g_curMixB || a != g_curMixA) {
+    if (mode != g_gx_curMixMode || w != g_gx_curMixW || tex2 != g_gx_curTex2
+        || r != g_gx_curMixR || g != g_gx_curMixG
+        || b != g_gx_curMixB || a != g_gx_curMixA) {
         gxEndCmd();
-        g_curMixMode = mode;
-        g_curMixW = w;
-        g_curTex2 = tex2;
-        g_curMixR = r; g_curMixG = g;
-        g_curMixB = b; g_curMixA = a;
+        g_gx_curMixMode = mode;
+        g_gx_curMixW = w;
+        g_gx_curTex2 = tex2;
+        g_gx_curMixR = r; g_gx_curMixG = g;
+        g_gx_curMixB = b; g_gx_curMixA = a;
     }
 }
 
@@ -5353,7 +5391,7 @@ static void gxMixDraw(double dx, double dy, double dw, double dh,
     float t;
     float x0, y0, x1, y1;
 
-    if (!gxImageOk(img) || !g_glReady) return;
+    if (!gxImageOk(img) || !g_gx_glReady) return;
     if (img2 && !gxImageOk(img2)) return;
     if (dw <= 0) dw = (img->logW > 0) ? img->logW : img->width;
     if (dh <= 0) dh = (img->logH > 0) ? img->logH : img->height;
@@ -5408,7 +5446,7 @@ static void gxImageDestroy(IMAGE* img) {
         memset(img, 0, sizeof(*img));
         return;
     }
-    if (g_glReady) gxFlush();   /* drop commands still using this texture */
+    if (g_gx_glReady) gxFlush();   /* drop commands still using this texture */
     gxImgBufDrop(img);
     if (img->fbo) glDeleteFramebuffers(1, &img->fbo);
     if (img->tex) glDeleteTextures(1, &img->tex);
@@ -5431,7 +5469,7 @@ static void gxImageDestroy(IMAGE* img) {
  * drawing into is rebound afterwards - and with it the viewport and the
  * clip box, which this temporarily overrode. */
 static void gxClearFbo(GLuint fbo, int w, int h, COLORREF c, float a) {
-    if (!g_glReady || !fbo || w < 1 || h < 1) return;
+    if (!g_gx_glReady || !fbo || w < 1 || h < 1) return;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glViewport(0, 0, w, h);
     glDisable(GL_SCISSOR_TEST);
@@ -5451,7 +5489,7 @@ static void gxImageAlloc(IMAGE* img, int w, int h) {
     {
         /* Honour setimagefilter() at creation time; gxFlush() re-applies it
          * on draw, so switching the mode later still takes effect. */
-        GLint f = g_imgFilter ? GL_LINEAR : GL_NEAREST;
+        GLint f = g_gx_imgFilter ? GL_LINEAR : GL_NEAREST;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
     }
@@ -5462,18 +5500,18 @@ static void gxImageAlloc(IMAGE* img, int w, int h) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, img->tex, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        glBindFramebuffer(GL_FRAMEBUFFER, g_canvasTarget.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gx_canvasTarget.fbo);
         glDeleteFramebuffers(1, &img->fbo);
         img->fbo = 0;
         return;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, g_target ? g_target->fbo : 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
     img->width = w; img->height = h;
     /* A freshly sized image has no scale history: its pixels ARE the units
      * it covers.  getimage() overwrites these two when it knows better. */
     img->logW = w; img->logH = h;
     img->magic = GXIMG_MAGIC;
-    if (g_workImg == img) gxSyncWorkTarget();   /* the target was replaced */
+    if (g_gx_workImg == img) gxSyncWorkTarget();   /* the target was replaced */
     /* The texture was allocated with NULL data, so it holds undefined
      * pixels until something is drawn into it - a Resize() that is only
      * partly painted used to blit speckles.  Opaque black, which is what
@@ -5488,8 +5526,8 @@ GX_INLINE void Resize(IMAGE* pImg, int width, int height) {
 
 static void gxClearImage(IMAGE* img, COLORREF c) {
     GLuint prev;
-    if (!img || !img->fbo || !g_glReady) return;
-    prev = (g_target ? g_target->fbo : 0);
+    if (!img || !img->fbo || !g_gx_glReady) return;
+    prev = (g_gx_target ? g_gx_target->fbo : 0);
     gxFlush();
     glBindFramebuffer(GL_FRAMEBUFFER, img->fbo);
     glViewport(0, 0, img->width, img->height);
@@ -5522,7 +5560,7 @@ static void gxImageUpload(IMAGE* img, const unsigned char* px, int w, int h, boo
 /* Read a bottom-up RGBA block out of a render target. */
 static unsigned char* gxReadTarget(GLuint fbo, int x, int y, int w, int h) {
     unsigned char* px;
-    if (!g_glReady || w < 1 || h < 1) return NULL;
+    if (!g_gx_glReady || w < 1 || h < 1) return NULL;
     px = (unsigned char*)malloc((size_t)w * (size_t)h * 4);
     if (!px) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); return NULL; }
     gxFlush();
@@ -5530,7 +5568,7 @@ static unsigned char* gxReadTarget(GLuint fbo, int x, int y, int w, int h) {
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_target ? g_target->fbo : 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
     return px;
 }
 
@@ -5562,11 +5600,11 @@ static void gxGetImage5(IMAGE* dst, int x, int y, int w, int h) {
     int dx, dy, dw, dh;
     dx = gxLogToDevX((float)x);
     dy = gxLogToDevY((float)y);
-    dw = (w <= 0) ? -1 : ((int)ceilf((float)(x + w) * g_scaleX + g_originX) - dx);
-    dh = (h <= 0) ? -1 : ((int)ceilf((float)(y + h) * g_scaleY + g_originY) - dy);
+    dw = (w <= 0) ? -1 : ((int)ceilf((float)(x + w) * g_gx_scaleX + g_gx_originX) - dx);
+    dh = (h <= 0) ? -1 : ((int)ceilf((float)(y + h) * g_gx_scaleY + g_gx_originY) - dy);
     if (dw < 0 && w > 0) dw = 0;
     if (dh < 0 && h > 0) dh = 0;
-    gxGetImageFrom(dst, g_target->fbo, g_target->w, g_target->h, dx, dy, dw, dh);
+    gxGetImageFrom(dst, g_gx_target->fbo, g_gx_target->w, g_gx_target->h, dx, dy, dw, dh);
     /* How many logical units the grab stands for, which is what
      * putimage(x, y, &img) has to draw.  Without this the copy came out one
      * scale factor too large: 160 units were read as 240 pixels, and 240 was
@@ -5577,8 +5615,8 @@ static void gxGetImage5(IMAGE* dst, int x, int y, int w, int h) {
             dst->logW = w;
             dst->logH = h;
         } else {
-            dst->logW = (int)(g_logW + 0.5f);
-            dst->logH = (int)(g_logH + 0.5f);
+            dst->logW = (int)(g_gx_logW + 0.5f);
+            dst->logH = (int)(g_gx_logH + 0.5f);
         }
     }
 }
@@ -5598,14 +5636,14 @@ static void gxPutImage(int dx, int dy, int dw, int dh,
     bool whole;                  /* dw/dh were omitted: draw the whole image */
     IMAGE  copy;                 /* used only when dst and src are the same */
     const IMAGE* realSrc = src;
-    if (!gxImageOk(src) || !g_glReady) return;
+    if (!gxImageOk(src) || !g_gx_glReady) return;
     /* Drawing an image into itself - SetWorkingImage(&img) followed by
      * putimage(..., &img) - binds one texture as both the framebuffer
      * attachment and the sampler, which is a feedback loop: the result is
      * undefined per the GL spec and in practice comes out as garbage or a
      * solid block.  rotateimage() and flipimage() already guard against it;
      * this path did not.  Read through a copy instead. */
-    if (g_target && g_target->fbo == realSrc->fbo) {
+    if (g_gx_target && g_gx_target->fbo == realSrc->fbo) {
         memset(&copy, 0, sizeof(copy));
         gxGetImageFrom(&copy, realSrc->fbo, realSrc->width, realSrc->height,
                        0, 0, realSrc->width, realSrc->height);
@@ -5678,7 +5716,7 @@ static void gxPutImage(int dx, int dy, int dw, int dh,
     gxSetTex(realSrc->tex, mode);
     gxQuadTex((float)dx, (float)dy, (float)(dx + dw), (float)(dy + dh),
               u0, v0, u1, v1, WHITE);
-    gxSetRop(g_rop2);
+    gxSetRop(g_gx_rop2);
     gxCheckFlush();
     if (realSrc != src) gxImageDestroy(&copy);
 }
@@ -5707,26 +5745,26 @@ static void gxPutImage8(int dx, int dy, int dw, int dh, const IMAGE* img, int sx
 static void gxSetWorkingImage(IMAGE* pImg) {
     gxFlush();
     if (!pImg) {
-        g_workImg = NULL;
+        g_gx_workImg = NULL;
     } else {
         if (!gxImageOk(pImg) || pImg->width < 1 || pImg->height < 1) return;
         /* Leaving the canvas: remember its transform, because the IMAGE
          * about to be selected runs at 1:1.  Only on the way in - while an
          * IMAGE is selected the live values are already 1:1 and copying
          * them back would throw the canvas transform away. */
-        if (!g_workImg) {
-            g_canvasScaleX  = g_scaleX;
-            g_canvasScaleY  = g_scaleY;
-            g_canvasOriginX = g_originX;
-            g_canvasOriginY = g_originY;
+        if (!g_gx_workImg) {
+            g_gx_canvasScaleX  = g_gx_scaleX;
+            g_gx_canvasScaleY  = g_gx_scaleY;
+            g_gx_canvasOriginX = g_gx_originX;
+            g_gx_canvasOriginY = g_gx_originY;
         }
-        g_workImg = pImg;
+        g_gx_workImg = pImg;
     }
     gxSyncWorkTarget();
     gxUpdateProj();
     gxBindTarget();
 }
-static IMAGE* GetWorkingImage(void) { return g_workImg; }
+static IMAGE* GetWorkingImage(void) { return g_gx_workImg; }
 
 /*======================================================================
  * 14. Image file I/O (BMP via Win32, JPG/GIF/PNG/ICO via GDI+ if present)
@@ -5748,15 +5786,15 @@ typedef int (WINAPI* GXPFN_GPSAVE)(void*, const WCHAR*, const CLSID*, const void
 typedef int (WINAPI* GXPFN_GPGETW)(void*, UINT*);
 typedef int (WINAPI* GXPFN_GPGETH)(void*, UINT*);
 
-static HMODULE   g_gpDll = NULL;
-static ULONG_PTR g_gpToken = 0;
-static GXPFN_GPLOADFILE g_gpLoadFile = 0;
-static GXPFN_GPFROMHBMP g_gpFromHbm = 0;
-static GXPFN_GPTOHBMP   g_gpToHbm = 0;
-static GXPFN_GPDISPOSE  g_gpDispose = 0;
-static GXPFN_GPSAVE     g_gpSave = 0;
-static GXPFN_GPGETW     g_gpGetW = 0;
-static GXPFN_GPGETH     g_gpGetH = 0;
+static HMODULE   g_gx_gpDll = NULL;
+static ULONG_PTR g_gx_gpToken = 0;
+static GXPFN_GPLOADFILE g_gx_gpLoadFile = 0;
+static GXPFN_GPFROMHBMP g_gx_gpFromHbm = 0;
+static GXPFN_GPTOHBMP   g_gx_gpToHbm = 0;
+static GXPFN_GPDISPOSE  g_gx_gpDispose = 0;
+static GXPFN_GPSAVE     g_gx_gpSave = 0;
+static GXPFN_GPGETW     g_gx_gpGetW = 0;
+static GXPFN_GPGETH     g_gx_gpGetH = 0;
 
 static const CLSID gxClsidPNG = { 0x557CF406, 0x1A04, 0x11D3,
     { 0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E } };
@@ -5766,26 +5804,26 @@ static const CLSID gxClsidBMP = { 0x557CF400, 0x1A04, 0x11D3,
     { 0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E } };
 
 static bool gxGdipInit(void) {
-    if (g_gpDll) return true;
-    g_gpDll = LoadLibraryA("gdiplus.dll");
-    if (!g_gpDll) return false;
+    if (g_gx_gpDll) return true;
+    g_gx_gpDll = LoadLibraryA("gdiplus.dll");
+    if (!g_gx_gpDll) return false;
     {
-        GXPFN_GPSTARTUP pStart = (GXPFN_GPSTARTUP)GetProcAddress(g_gpDll, "GdiplusStartup");
-        GXPFN_GPSHUTDOWN pStop = (GXPFN_GPSHUTDOWN)GetProcAddress(g_gpDll, "GdiplusShutdown");
-        if (!pStart) { FreeLibrary(g_gpDll); g_gpDll = NULL; return false; }
-        g_gpLoadFile = (GXPFN_GPLOADFILE)GetProcAddress(g_gpDll, "GdipLoadImageFromFile");
-        g_gpFromHbm  = (GXPFN_GPFROMHBMP)GetProcAddress(g_gpDll, "GdipCreateBitmapFromHBITMAP");
-        g_gpToHbm    = (GXPFN_GPTOHBMP)GetProcAddress(g_gpDll, "GdipCreateHBITMAPFromBitmap");
-        g_gpDispose  = (GXPFN_GPDISPOSE)GetProcAddress(g_gpDll, "GdipDisposeImage");
-        g_gpSave     = (GXPFN_GPSAVE)GetProcAddress(g_gpDll, "GdipSaveImageToFile");
-        g_gpGetW     = (GXPFN_GPGETW)GetProcAddress(g_gpDll, "GdipGetImageWidth");
-        g_gpGetH     = (GXPFN_GPGETH)GetProcAddress(g_gpDll, "GdipGetImageHeight");
+        GXPFN_GPSTARTUP pStart = (GXPFN_GPSTARTUP)GetProcAddress(g_gx_gpDll, "GdiplusStartup");
+        GXPFN_GPSHUTDOWN pStop = (GXPFN_GPSHUTDOWN)GetProcAddress(g_gx_gpDll, "GdiplusShutdown");
+        if (!pStart) { FreeLibrary(g_gx_gpDll); g_gx_gpDll = NULL; return false; }
+        g_gx_gpLoadFile = (GXPFN_GPLOADFILE)GetProcAddress(g_gx_gpDll, "GdipLoadImageFromFile");
+        g_gx_gpFromHbm  = (GXPFN_GPFROMHBMP)GetProcAddress(g_gx_gpDll, "GdipCreateBitmapFromHBITMAP");
+        g_gx_gpToHbm    = (GXPFN_GPTOHBMP)GetProcAddress(g_gx_gpDll, "GdipCreateHBITMAPFromBitmap");
+        g_gx_gpDispose  = (GXPFN_GPDISPOSE)GetProcAddress(g_gx_gpDll, "GdipDisposeImage");
+        g_gx_gpSave     = (GXPFN_GPSAVE)GetProcAddress(g_gx_gpDll, "GdipSaveImageToFile");
+        g_gx_gpGetW     = (GXPFN_GPGETW)GetProcAddress(g_gx_gpDll, "GdipGetImageWidth");
+        g_gx_gpGetH     = (GXPFN_GPGETH)GetProcAddress(g_gx_gpDll, "GdipGetImageHeight");
         {
             GxGdipStartupInput in;
             memset(&in, 0, sizeof(in));
             in.GdiplusVersion = 1;
-            if (pStart(&g_gpToken, &in, NULL) != 0) {
-                FreeLibrary(g_gpDll); g_gpDll = NULL; return false;
+            if (pStart(&g_gx_gpToken, &in, NULL) != 0) {
+                FreeLibrary(g_gx_gpDll); g_gx_gpDll = NULL; return false;
             }
         }
         (void)pStop;
@@ -5873,15 +5911,15 @@ static bool gxLoadImageFile(const WCHAR* file, IMAGE* img, int w, int h, bool re
     int iw = 0, ih = 0;
     bool ok = false;
 
-    if (gxGdipInit() && g_gpLoadFile) {
+    if (gxGdipInit() && g_gx_gpLoadFile) {
         void* gpImg = NULL;
-        if (g_gpLoadFile(file, &gpImg) == 0 && gpImg) {
+        if (g_gx_gpLoadFile(file, &gpImg) == 0 && gpImg) {
             HBITMAP hb = NULL;
-            if (g_gpToHbm && g_gpToHbm(gpImg, &hb, 0) == 0 && hb) {
+            if (g_gx_gpToHbm && g_gx_gpToHbm(gpImg, &hb, 0) == 0 && hb) {
                 px = gxBitsFromHBmp(hb, &iw, &ih);
                 DeleteObject(hb);
             }
-            if (g_gpDispose) g_gpDispose(gpImg);
+            if (g_gx_gpDispose) g_gx_gpDispose(gpImg);
         }
     }
     if (!px) {
@@ -5922,13 +5960,13 @@ static bool gxLoadImageFile(const WCHAR* file, IMAGE* img, int w, int h, bool re
             {
                 /* Stretch the loaded bitmap into the requested size. */
                 GxTarget t;
-                float sx1 = g_scaleX, sy1 = g_scaleY, ox = g_originX, oy = g_originY;
-                int sw = g_devW, sh = g_devH;
+                float sx1 = g_gx_scaleX, sy1 = g_gx_scaleY, ox = g_gx_originX, oy = g_gx_originY;
+                int sw = g_gx_devW, sh = g_gx_devH;
                 t.fbo = tmp.fbo; t.tex = tmp.tex; t.w = w; t.h = h;
-                g_target = &t;
-                g_devW = w; g_devH = h;
-                g_scaleX = g_scaleY = 1.f;
-                g_originX = g_originY = 0.f;
+                g_gx_target = &t;
+                g_gx_devW = w; g_gx_devH = h;
+                g_gx_scaleX = g_gx_scaleY = 1.f;
+                g_gx_originX = g_gx_originY = 0.f;
                 gxUpdateProj();
                 glBindFramebuffer(GL_FRAMEBUFFER, tmp.fbo);
                 glViewport(0, 0, w, h);
@@ -5936,15 +5974,15 @@ static bool gxLoadImageFile(const WCHAR* file, IMAGE* img, int w, int h, bool re
                 gxSetRopState(R2_COPYPEN);
                 glClearColor(0.f, 0.f, 0.f, 0.f);
                 glClear(GL_COLOR_BUFFER_BIT);
-                glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+                glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
                 gxSetRop(R2_COPYPEN);
                 gxSetTex(img->tex, 2);
                 gxQuadTex(0.f, 0.f, (float)w, (float)h, 0.f, 1.f, 1.f, 0.f, WHITE);
                 gxFlush();
-                g_scaleX = sx1; g_scaleY = sy1;
-                g_originX = ox; g_originY = oy;
+                g_gx_scaleX = sx1; g_gx_scaleY = sy1;
+                g_gx_originX = ox; g_gx_originY = oy;
                 gxSyncWorkTarget();
-                g_devW = sw; g_devH = sh;
+                g_gx_devW = sw; g_gx_devH = sh;
                 gxUpdateProj();
                 gxBindTarget();
             }
@@ -5978,12 +6016,12 @@ static bool gxSaveImageFile(const WCHAR* file, const IMAGE* img) {
     if (img) {
         if (!gxImageOk(img) || img->width < 1 || img->height < 1) return false;
         w = img->width; h = img->height;
-        px = gxReadTarget(img->fbo ? img->fbo : g_target->fbo, 0, 0, w, h);
+        px = gxReadTarget(img->fbo ? img->fbo : g_gx_target->fbo, 0, 0, w, h);
     } else {
-        if (!g_glReady || !g_target || g_target->w < 1 || g_target->h < 1)
+        if (!g_gx_glReady || !g_gx_target || g_gx_target->w < 1 || g_gx_target->h < 1)
             return false;
-        w = g_target->w; h = g_target->h;
-        px = gxReadTarget(g_target->fbo, 0, 0, w, h);
+        w = g_gx_target->w; h = g_gx_target->h;
+        px = gxReadTarget(g_gx_target->fbo, 0, 0, w, h);
     }
     if (!px) return false;
     /* glReadPixels is bottom-up while a DIB section is bottom-up as well, so
@@ -6024,13 +6062,13 @@ static bool gxSaveImageFile(const WCHAR* file, const IMAGE* img) {
         if (ext >= 0) {
             WCHAR e0 = file[ext + 1];
             bool isBmp = (e0 == L'b' || e0 == L'B');
-            if (!isBmp && gxGdipInit() && g_gpFromHbm && g_gpSave && g_gpDispose) {
+            if (!isBmp && gxGdipInit() && g_gx_gpFromHbm && g_gx_gpSave && g_gx_gpDispose) {
                 void* gpImg = NULL;
-                if (g_gpFromHbm(hbm, NULL, &gpImg) == 0 && gpImg) {
+                if (g_gx_gpFromHbm(hbm, NULL, &gpImg) == 0 && gpImg) {
                     const CLSID* cls = &gxClsidPNG;
                     if (e0 == L'j' || e0 == L'J') cls = &gxClsidJPG;
-                    if (g_gpSave(gpImg, file, cls, NULL) == 0) ok = true;
-                    g_gpDispose(gpImg);
+                    if (g_gx_gpSave(gpImg, file, cls, NULL) == 0) ok = true;
+                    g_gx_gpDispose(gpImg);
                 }
             }
         }
@@ -6080,7 +6118,7 @@ static bool gx_loadimg5(IMAGE* img, const WCHAR* f, int w, int h, bool resize) {
     return gxLoadImageFile(f, img, w, h, resize);
 }
 static bool gx_saveimg1(const WCHAR* f) {
-    return gxSaveImageFile(f, g_workImg ? g_workImg : NULL);
+    return gxSaveImageFile(f, g_gx_workImg ? g_gx_workImg : NULL);
 }
 static bool gx_saveimg2(const WCHAR* f, const IMAGE* img) {
     return gxSaveImageFile(f, img);
@@ -6091,7 +6129,7 @@ static bool gx_saveimg2(const WCHAR* f, const IMAGE* img) {
  *====================================================================*/
 /* Switch an IMAGE texture between NEAREST (fast) and LINEAR (smooth). */
 static void gxTexFilter(GLuint tex, GLenum filter) {
-    if (!tex || !g_glReady) return;
+    if (!tex || !g_gx_glReady) return;
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (GLint)filter);
@@ -6118,7 +6156,7 @@ static void gxRotateImage(IMAGE* dst, IMAGE* src, double rad, COLORREF bk,
     IMAGE tmp;
     IMAGE* realSrc;
 
-    if (!dst || !gxImageOk(src) || !g_glReady) return;
+    if (!dst || !gxImageOk(src) || !g_gx_glReady) return;
     c = cos(rad); s = sin(rad);
 
     /* rotateimage(&img, &img, ...) reads and writes the same texture, so the
@@ -6188,15 +6226,15 @@ static void gxRotateImage(IMAGE* dst, IMAGE* src, double rad, COLORREF bk,
     if (!dst->fbo) { gxImageDestroy(&tmp); return; }
 
     gxFlush();
-    savedW = g_devW; savedH = g_devH;
-    savedScaleX = g_scaleX; savedScaleY = g_scaleY;
-    savedOX = g_originX; savedOY = g_originY;
+    savedW = g_gx_devW; savedH = g_gx_devH;
+    savedScaleX = g_gx_scaleX; savedScaleY = g_gx_scaleY;
+    savedOX = g_gx_originX; savedOY = g_gx_originY;
 
     t.fbo = dst->fbo; t.tex = dst->tex; t.w = dwPix; t.h = dhPix;
-    g_target = &t;
-    g_devW = dwPix; g_devH = dhPix;
-    g_scaleX = g_scaleY = 1.f;
-    g_originX = g_originY = 0.f;
+    g_gx_target = &t;
+    g_gx_devW = dwPix; g_gx_devH = dhPix;
+    g_gx_scaleX = g_gx_scaleY = 1.f;
+    g_gx_originX = g_gx_originY = 0.f;
     gxUpdateProj();
     glBindFramebuffer(GL_FRAMEBUFFER, dst->fbo);
     glViewport(0, 0, dwPix, dhPix);
@@ -6210,7 +6248,7 @@ static void gxRotateImage(IMAGE* dst, IMAGE* src, double rad, COLORREF bk,
      * background show through. */
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
 
     if (smooth) gxTexFilter(realSrc->tex, GL_LINEAR);
     cx = (float)dwPix * 0.5f; cy = (float)dhPix * 0.5f;
@@ -6238,10 +6276,10 @@ static void gxRotateImage(IMAGE* dst, IMAGE* src, double rad, COLORREF bk,
     if (smooth) gxTexFilter(realSrc->tex, GL_NEAREST);
     gxImageDestroy(&tmp);
 
-    g_scaleX = savedScaleX; g_scaleY = savedScaleY;
-    g_originX = savedOX; g_originY = savedOY;
+    g_gx_scaleX = savedScaleX; g_gx_scaleY = savedScaleY;
+    g_gx_originX = savedOX; g_gx_originY = savedOY;
     gxSyncWorkTarget();
-    g_devW = savedW; g_devH = savedH;
+    g_gx_devW = savedW; g_gx_devH = savedH;
     gxUpdateProj();
     gxBindTarget();
 }
@@ -6267,14 +6305,14 @@ static bool gxPeekEx(ExMessage* m, BYTE filter, bool remove) {
     int i;
     if (!m) return false;
     gxPump();
-    for (i = 0; i < g_msgCount; i++) {
+    for (i = 0; i < g_gx_msgCount; i++) {
         ExMessage* e = gxMsgAt(i);
         if (gxMsgIsType((UINT)e->message, filter)) {
             *m = *e;
             if (remove) {
                 /* Drop everything in front of the match as well, keeping the
                  * queue order intact (EasyX removes the message it returns). */
-                while (g_msgCount > 0) {
+                while (g_gx_msgCount > 0) {
                     ExMessage* h2 = gxMsgAt(0);
                     bool same = (h2 == e);
                     gxMsgPop();
@@ -6315,7 +6353,7 @@ static bool gxWaitMsgEx(ExMessage* m, BYTE filter, bool remove) {
     for (;;) {
         gxPump();                       /* gxPeekEx() pumps again, harmless */
         if (gxPeekEx(m, filter, remove)) return true;
-        if (!g_hwnd) return false;      /* no window: never block */
+        if (!g_gx_hwnd) return false;      /* no window: never block */
         WaitMessage();
     }
 }
@@ -6325,7 +6363,7 @@ static bool gxWaitMsgMouse(MOUSEMSG* m, BYTE filter) {
     for (;;) {
         gxPump();
         if (gxPeekMouse(m, filter, true)) return true;
-        if (!g_hwnd) return false;
+        if (!g_gx_hwnd) return false;
         WaitMessage();
     }
 }
@@ -6364,11 +6402,11 @@ static MOUSEMSG gxGetMsgMouse(BYTE filter) {
 static bool gxPeekVarMsg(bool remove) {
     int i;
     gxPump();
-    for (i = 0; i < g_msgCount; i++) {
+    for (i = 0; i < g_gx_msgCount; i++) {
         ExMessage* e = gxMsgAt(i);
         if (e->message == (USHORT)WM_SIZE) {
             if (remove) {
-                while (g_msgCount > 0) {
+                while (g_gx_msgCount > 0) {
                     ExMessage* h2 = gxMsgAt(0);
                     bool same = (h2 == e);
                     gxMsgPop();
@@ -6399,7 +6437,7 @@ static void gxWaitVarMsg(void) {
     for (;;) {
         gxPump();
         if (gxPeekVarMsg(true)) return;
-        if (!g_hwnd) return;            /* no window: never block */
+        if (!g_gx_hwnd) return;            /* no window: never block */
         WaitMessage();
     }
 }
@@ -6423,8 +6461,8 @@ GX_INLINE bool mousehit(void) { return MouseHit(); }
 GX_INLINE void getmousepos(int* x, int* y) {
     POINT pt;
     pt.x = 0; pt.y = 0;
-    if (g_hwnd) {
-        if (GetCursorPos(&pt)) ScreenToClient(g_hwnd, &pt);
+    if (g_gx_hwnd) {
+        if (GetCursorPos(&pt)) ScreenToClient(g_gx_hwnd, &pt);
     } else {
         if (x) *x = 0;
         if (y) *y = 0;
@@ -6445,17 +6483,17 @@ GX_INLINE MOUSEMSG GetMouseMsg(void) { return gxGetMsgMouse((BYTE)EM_MOUSE); }
 #define GX_IB_W   420
 #define GX_IB_H   170
 
-static HWND  g_ibWnd = NULL;
-static HWND  g_ibEdit = NULL;
-static bool  g_ibDone = false;
-static bool  g_ibOk = false;
-static WCHAR g_ibText[256];
+static HWND  g_gx_ibWnd = NULL;
+static HWND  g_gx_ibEdit = NULL;
+static bool  g_gx_ibDone = false;
+static bool  g_gx_ibOk = false;
+static WCHAR g_gx_ibText[256];
 /* The prompt, stashed so WM_PAINT can draw it.  Painting it straight onto
  * a GetDC() at creation time does not work: ShowWindow() then repaints the
  * window, and DefWindowProc() clears the client area with the class brush
  * (COLOR_BTNFACE), wiping the text out.  Anything a window shows has to be
  * drawn from WM_PAINT, or it disappears on the first repaint. */
-static WCHAR g_ibPrompt[512];
+static WCHAR g_gx_ibPrompt[512];
 
 /*--------------------------- UI font ---------------------------------*/
 /* The font a real Windows dialog uses.
@@ -6505,8 +6543,8 @@ static bool gxSysCaption(UINT id, const WCHAR* fallback,
     return false;
 }
 
-static HFONT g_ibFont = NULL;
-static int   g_ibFontDpi = 0;
+static HFONT g_gx_ibFont = NULL;
+static int   g_gx_ibFontDpi = 0;
 
 static HFONT gxUiFont(void) {
     NONCLIENTMETRICSA ncm;
@@ -6515,8 +6553,8 @@ static HFONT gxUiFont(void) {
      * changes when the window is dragged to another monitor, so a mismatch
      * rebuilds it.  Deleting the old one is safe: the controls that held
      * it were destroyed when their dialog closed. */
-    if (g_ibFont && g_ibFontDpi == dpi) return g_ibFont;
-    if (g_ibFont) { DeleteObject(g_ibFont); g_ibFont = NULL; }
+    if (g_gx_ibFont && g_gx_ibFontDpi == dpi) return g_gx_ibFont;
+    if (g_gx_ibFont) { DeleteObject(g_gx_ibFont); g_gx_ibFont = NULL; }
 
     memset(&ncm, 0, sizeof(ncm));
     ncm.cbSize = (UINT)sizeof(ncm);
@@ -6540,12 +6578,12 @@ static HFONT gxUiFont(void) {
         lf.lfQuality        = DEFAULT_QUALITY;
         lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
         strcpy(lf.lfFaceName, "MS Shell Dlg");
-        g_ibFont = CreateFontIndirectA(&lf);
+        g_gx_ibFont = CreateFontIndirectA(&lf);
     } else {
-        g_ibFont = CreateFontIndirectA(&ncm.lfMessageFont);
+        g_gx_ibFont = CreateFontIndirectA(&ncm.lfMessageFont);
     }
-    if (g_ibFont) { g_ibFontDpi = dpi; return g_ibFont; }
-    g_ibFontDpi = 0;
+    if (g_gx_ibFont) { g_gx_ibFontDpi = dpi; return g_gx_ibFont; }
+    g_gx_ibFontDpi = 0;
     return (HFONT)GetStockObject(DEFAULT_GUI_FONT);   /* last resort */
 }
 
@@ -6582,11 +6620,11 @@ static int gxIbPromptHeight(const WCHAR* p, int innerW) {
 /* Close the dialog with a result.  Shared by the buttons, Enter and
  * Escape so there is one place that reads the text back. */
 static void gxIbFinish(bool ok) {
-    if (!g_ibWnd) return;
-    if (ok && g_ibEdit) GetWindowTextW(g_ibEdit, g_ibText, 255);
-    g_ibOk = ok;
-    g_ibDone = true;
-    DestroyWindow(g_ibWnd);
+    if (!g_gx_ibWnd) return;
+    if (ok && g_gx_ibEdit) GetWindowTextW(g_gx_ibEdit, g_gx_ibText, 255);
+    g_gx_ibOk = ok;
+    g_gx_ibDone = true;
+    DestroyWindow(g_gx_ibWnd);
 }
 
 static LRESULT CALLBACK gxInputBoxProc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -6594,7 +6632,7 @@ static LRESULT CALLBACK gxInputBoxProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
-        if (g_ibPrompt[0]) {
+        if (g_gx_ibPrompt[0]) {
             HFONT oldF = (HFONT)SelectObject(dc, gxUiFont());
             RECT tr;
             int mg = gxIbS(20);
@@ -6609,11 +6647,11 @@ static LRESULT CALLBACK gxInputBoxProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             tr.top    = gxIbS(18);
             tr.right  = (tr.right > mg * 2) ? tr.right - mg
                                             : tr.left + gxIbS(GX_IB_W) - mg * 2;
-            tr.bottom = tr.top + gxIbPromptHeight(g_ibPrompt, tr.right - tr.left);
+            tr.bottom = tr.top + gxIbPromptHeight(g_gx_ibPrompt, tr.right - tr.left);
             /* Without TRANSPARENT the text gets an opaque rectangle in the
              * DC background colour - a white block on the grey dialog. */
             SetBkMode(dc, TRANSPARENT);
-            DrawTextW(dc, g_ibPrompt, -1, &tr,
+            DrawTextW(dc, g_gx_ibPrompt, -1, &tr,
                       DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
             SelectObject(dc, oldF);
         }
@@ -6625,11 +6663,11 @@ static LRESULT CALLBACK gxInputBoxProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (LOWORD(w) == 2) { gxIbFinish(false); return 0; }   /* Cancel */
         return 0;
     case WM_DESTROY:
-        g_ibDone = true;
+        g_gx_ibDone = true;
         return 0;
     case WM_CLOSE:
-        g_ibOk = false;
-        g_ibDone = true;
+        g_gx_ibOk = false;
+        g_gx_ibDone = true;
         DestroyWindow(h);
         return 0;
     }
@@ -6668,7 +6706,7 @@ static void gxIbDrainKeys(void) {
     while (PeekMessageA(&msg, NULL, WM_KEYFIRST, WM_KEYLAST, PM_REMOVE)) {
         /* dropped: it belongs to the key that opened this dialog */
     }
-    for (i = 0; i < g_msgCount; i++) {
+    for (i = 0; i < g_gx_msgCount; i++) {
         if (!gxMsgIsType(gxMsgAt(i)->message, (BYTE)(EM_KEY | EM_CHAR)))
             keep[nk++] = *gxMsgAt(i);
     }
@@ -6686,17 +6724,17 @@ static void gxIbDrainKeys(void) {
  * Every keyboard message is dropped while any of these keys is down.  That
  * is short - it ends the moment the key comes up - and it cannot swallow
  * real typing, because the user is still holding the trigger key. */
-static int g_ibHeldKey[8];
-static int g_ibHeldN = 0;
+static int g_gx_ibHeldKey[8];
+static int g_gx_ibHeldN = 0;
 
 static void gxIbNoteHeld(void) {
     int v;
-    g_ibHeldN = 0;
+    g_gx_ibHeldN = 0;
     /* From VK_BACK up: the mouse buttons below it never arrive as a
      * keyboard message, and a click that opened the dialog would only put
      * them in the list for no reason. */
-    for (v = 0x08; v < 0x100 && g_ibHeldN < 8; v++) {
-        if ((GetAsyncKeyState(v) & 0x8000) != 0) g_ibHeldKey[g_ibHeldN++] = v;
+    for (v = 0x08; v < 0x100 && g_gx_ibHeldN < 8; v++) {
+        if ((GetAsyncKeyState(v) & 0x8000) != 0) g_gx_ibHeldKey[g_gx_ibHeldN++] = v;
     }
 }
 
@@ -6708,11 +6746,11 @@ static void gxIbNoteHeld(void) {
  * that letter again. */
 static bool gxIbStillHolding(void) {
     int i, n = 0;
-    for (i = 0; i < g_ibHeldN; i++) {
-        if ((GetAsyncKeyState(g_ibHeldKey[i]) & 0x8000) != 0)
-            g_ibHeldKey[n++] = g_ibHeldKey[i];
+    for (i = 0; i < g_gx_ibHeldN; i++) {
+        if ((GetAsyncKeyState(g_gx_ibHeldKey[i]) & 0x8000) != 0)
+            g_gx_ibHeldKey[n++] = g_gx_ibHeldKey[i];
     }
-    g_ibHeldN = n;
+    g_gx_ibHeldN = n;
     return n > 0;
 }
 
@@ -6850,27 +6888,27 @@ static bool gxInputBoxExW(const WCHAR* prompt, const WCHAR* title,
     memset(&rc, 0, sizeof(rc));
     rc.right = ww; rc.bottom = wh;
     AdjustWindowRect(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE);
-    g_ibDone = false;
-    g_ibOk = false;
-    g_ibText[0] = 0;
-    g_ibWnd = CreateWindowExA(0, "GX_InputBox", "InputBox",
+    g_gx_ibDone = false;
+    g_gx_ibOk = false;
+    g_gx_ibText[0] = 0;
+    g_gx_ibWnd = CreateWindowExA(0, "GX_InputBox", "InputBox",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                               CW_USEDEFAULT, CW_USEDEFAULT,
                               rc.right - rc.left, rc.bottom - rc.top,
                               gxDialogOwner(), NULL, hInst, NULL);
-    if (!g_ibWnd) return false;
-    SetWindowTextW(g_ibWnd, title ? title : L"InputBox");
-    g_ibEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+    if (!g_gx_ibWnd) return false;
+    SetWindowTextW(g_gx_ibWnd, title ? title : L"InputBox");
+    g_gx_ibEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-                               m, ey, ww - m * 2, eh, g_ibWnd, NULL, hInst, NULL);
-    if (g_ibEdit) {
+                               m, ey, ww - m * 2, eh, g_gx_ibWnd, NULL, hInst, NULL);
+    if (g_gx_ibEdit) {
         /* nMaxCount is the size of the caller's buffer: telling the edit
          * control about it is the only way to stop the user typing past
          * the end of it.  EasyX counts characters, so the NUL is excluded
          * the same way it is on the way out. */
-        SendMessageA(g_ibEdit, EM_LIMITTEXT,
+        SendMessageA(g_gx_ibEdit, EM_LIMITTEXT,
                      (WPARAM)(outLen > 1 ? outLen - 1 : 0), 0);
-        if (def && def[0]) SetWindowTextW(g_ibEdit, def);
+        if (def && def[0]) SetWindowTextW(g_gx_ibEdit, def);
     }
     /* Captions come from user32.dll, so they read the same as a MessageBox
      * would in whatever language the system is set to.  Created with the W
@@ -6887,17 +6925,17 @@ static bool gxInputBoxExW(const WCHAR* prompt, const WCHAR* title,
             hOk = CreateWindowExW(0, L"BUTTON", okTxt,
                                   WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
                                   (ww - bw) / 2, by, bw, bh,
-                                  g_ibWnd, (HMENU)1, hInst, NULL);
+                                  g_gx_ibWnd, (HMENU)1, hInst, NULL);
         } else {
             gxSysCaption(GX_IDS_CANCEL, L"Cancel", cancelTxt, 64);
             hOk = CreateWindowExW(0, L"BUTTON", okTxt,
                                   WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
                                   ww / 2 - bw - bg / 2, by, bw, bh,
-                                  g_ibWnd, (HMENU)1, hInst, NULL);
+                                  g_gx_ibWnd, (HMENU)1, hInst, NULL);
             hCancel = CreateWindowExW(0, L"BUTTON", cancelTxt,
                                       WS_CHILD | WS_VISIBLE,
                                       ww / 2 + bg / 2, by, bw, bh,
-                                      g_ibWnd, (HMENU)2, hInst, NULL);
+                                      g_gx_ibWnd, (HMENU)2, hInst, NULL);
         }
     }
     /* Each control has to be TOLD the font.  Setting it on the edit box
@@ -6906,21 +6944,21 @@ static bool gxInputBoxExW(const WCHAR* prompt, const WCHAR* title,
      * the dialog used to have. */
     {
         HFONT f = gxUiFont();
-        if (g_ibEdit) SendMessageA(g_ibEdit, WM_SETFONT, (WPARAM)f, MAKELONG(TRUE, 0));
+        if (g_gx_ibEdit) SendMessageA(g_gx_ibEdit, WM_SETFONT, (WPARAM)f, MAKELONG(TRUE, 0));
         if (hOk)      SendMessageA(hOk,      WM_SETFONT, (WPARAM)f, MAKELONG(TRUE, 0));
         if (hCancel)  SendMessageA(hCancel,  WM_SETFONT, (WPARAM)f, MAKELONG(TRUE, 0));
     }
-    /* Only stashed here - WM_PAINT draws it.  See g_ibPrompt above. */
+    /* Only stashed here - WM_PAINT draws it.  See g_gx_ibPrompt above. */
     if (prompt) {
         int i;
-        for (i = 0; i < 511 && prompt[i]; i++) g_ibPrompt[i] = prompt[i];
-        g_ibPrompt[i] = 0;
+        for (i = 0; i < 511 && prompt[i]; i++) g_gx_ibPrompt[i] = prompt[i];
+        g_gx_ibPrompt[i] = 0;
     } else {
-        g_ibPrompt[0] = 0;
+        g_gx_ibPrompt[0] = 0;
     }
-    ShowWindow(g_ibWnd, SW_SHOW);
-    SetForegroundWindow(g_ibWnd);
-    if (g_ibEdit) {
+    ShowWindow(g_gx_ibWnd, SW_SHOW);
+    SetForegroundWindow(g_gx_ibWnd);
+    if (g_gx_ibEdit) {
         /* SELECT THE WHOLE default, the way a browser's address bar or a
          * rename field does it: the text is there to be accepted or
          * replaced, so the first keystroke must replace it outright.
@@ -6930,23 +6968,23 @@ static bool gxInputBoxExW(const WCHAR* prompt, const WCHAR* title,
          * the text silently produces something neither of them wanted.
          * EM_SETSEL with (0, -1) is "everything": the end position is
          * clamped to the text length, so an empty box is a no-op. */
-        SetFocus(g_ibEdit);
-        SendMessageA(g_ibEdit, EM_SETSEL, (WPARAM)0, (LPARAM)-1);
+        SetFocus(g_gx_ibEdit);
+        SendMessageA(g_gx_ibEdit, EM_SETSEL, (WPARAM)0, (LPARAM)-1);
     } else {
-        SetFocus(g_ibWnd);
+        SetFocus(g_gx_ibWnd);
     }
     /* After the edit box has the focus and before the loop starts: see
      * gxIbDrainKeys() and gxIbNoteHeld(). */
     gxIbDrainKeys();
     gxIbNoteHeld();
-    while (!g_ibDone) {
+    while (!g_gx_ibDone) {
         if (GetMessageA(&msg, NULL, 0, 0) <= 0) break;
         /* Anything the key that opened the dialog is still producing - the
          * auto repeat, and the keyup that ends it - is dropped here: see
          * gxIbNoteHeld().  It runs BEFORE the Enter / Escape block below,
          * so a held Enter or Escape cannot confirm or cancel the dialog
          * before the user has even seen it. */
-        if (g_ibHeldN > 0 &&
+        if (g_gx_ibHeldN > 0 &&
             (msg.message == WM_KEYDOWN   || msg.message == WM_SYSKEYDOWN ||
              msg.message == WM_CHAR      || msg.message == WM_SYSCHAR ||
              msg.message == WM_DEADCHAR  || msg.message == WM_SYSDEADCHAR ||
@@ -6967,10 +7005,10 @@ static bool gxInputBoxExW(const WCHAR* prompt, const WCHAR* title,
          * must be allowed to fire - otherwise Enter on Cancel would
          * confirm instead of cancelling.  Escape always cancels. */
         if (msg.message == WM_KEYDOWN &&
-            (msg.hwnd == g_ibWnd || (HWND)GetParent(msg.hwnd) == g_ibWnd)) {
+            (msg.hwnd == g_gx_ibWnd || (HWND)GetParent(msg.hwnd) == g_gx_ibWnd)) {
             if (msg.wParam == VK_ESCAPE) { gxIbFinish(false); continue; }
             if (msg.wParam == VK_RETURN &&
-                (msg.hwnd == g_ibEdit || msg.hwnd == g_ibWnd)) {
+                (msg.hwnd == g_gx_ibEdit || msg.hwnd == g_gx_ibWnd)) {
                 gxIbFinish(true);
                 continue;
             }
@@ -6978,14 +7016,14 @@ static bool gxInputBoxExW(const WCHAR* prompt, const WCHAR* title,
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
-    g_ibWnd = NULL;
-    g_ibEdit = NULL;
-    if (g_ibOk) {
+    g_gx_ibWnd = NULL;
+    g_gx_ibEdit = NULL;
+    if (g_gx_ibOk) {
         int i;
-        for (i = 0; i < outLen - 1 && g_ibText[i]; i++) out[i] = g_ibText[i];
+        for (i = 0; i < outLen - 1 && g_gx_ibText[i]; i++) out[i] = g_gx_ibText[i];
         out[i] = 0;
     }
-    return g_ibOk;
+    return g_gx_ibOk;
 }
 
 /* The old four argument form: no default text, auto sized, EasyX's own
@@ -7032,34 +7070,34 @@ static int gx_drawtext(const WCHAR* str, int len, const RECT* pr, UINT fmt,
  * 17. Canvas / framebuffer / lifetime
  *====================================================================*/
 static void gxCreateCanvas(void) {
-    glGenTextures(1, &g_canvasTex);
-    glBindTexture(GL_TEXTURE_2D, g_canvasTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_devW, g_devH, 0,
+    glGenTextures(1, &g_gx_canvasTex);
+    glBindTexture(GL_TEXTURE_2D, g_gx_canvasTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_gx_devW, g_gx_devH, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
 
-    glGenFramebuffers(1, &g_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
+    glGenFramebuffers(1, &g_gx_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, g_canvasTex, 0);
+                           GL_TEXTURE_2D, g_gx_canvasTex, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         MessageBoxA(NULL, "Cannot create FBO (OpenGL 3.0+ required)",
                     "OpenGL Error", MB_OK);
         exit(1);
     }
-    g_canvasTarget.fbo = g_fbo;
-    g_canvasTarget.tex = g_canvasTex;
-    g_canvasTarget.w = g_devW;
-    g_canvasTarget.h = g_devH;
-    g_target = &g_canvasTarget;
-    glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
-    gxApplyWindowState();   /* MSAA now, vsync once g_glReady is set */
+    g_gx_canvasTarget.fbo = g_gx_fbo;
+    g_gx_canvasTarget.tex = g_gx_canvasTex;
+    g_gx_canvasTarget.w = g_gx_devW;
+    g_gx_canvasTarget.h = g_gx_devH;
+    g_gx_target = &g_gx_canvasTarget;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_fbo);
+    gxApplyWindowState();   /* MSAA now, vsync once g_gx_glReady is set */
 
-    glGenTextures(1, &g_atlasTex);
-    glBindTexture(GL_TEXTURE_2D, g_atlasTex);
+    glGenTextures(1, &g_gx_atlasTex);
+    glBindTexture(GL_TEXTURE_2D, g_gx_atlasTex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
@@ -7078,10 +7116,10 @@ static void gxCreateBuffers(void) {
          1.f,  1.f, 1,1,1,1, 1.f, 1.f,
         -1.f,  1.f, 1,1,1,1, 0.f, 1.f
     };
-    glGenBuffers(1, &g_vbo);
-    glGenBuffers(1, &g_ibo);
-    glGenBuffers(1, &g_blitVbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g_blitVbo);
+    glGenBuffers(1, &g_gx_vbo);
+    glGenBuffers(1, &g_gx_ibo);
+    glGenBuffers(1, &g_gx_blitVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_blitVbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(blit), blit, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
@@ -7089,31 +7127,31 @@ static void gxCreateBuffers(void) {
 static void gxPresent(void) {
     static const float ident[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
     static DWORD postT0 = 0;          /* origin for the uTime uniform */
-    if (!g_glReady) return;
+    if (!g_gx_glReady) return;
     gxFlush();
-    gxMsaaResolve();            /* the blit below samples g_canvasTex */
+    gxMsaaResolve();            /* the blit below samples g_gx_canvasTex */
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     /* The back buffer has the size of the *window* (the canvas), not the
      * size of the IMAGE that may currently be the working target. */
-    glViewport(0, 0, g_canvasTarget.w, g_canvasTarget.h);
+    glViewport(0, 0, g_gx_canvasTarget.w, g_gx_canvasTarget.h);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_COLOR_LOGIC_OP);
     glDisable(GL_BLEND);
-    if (g_postProg) {
+    if (g_gx_postProg) {
         /* The one draw the caller's shader sees.  uProj is identity here
          * because the blit quad is already in clip space. */
         if (!postT0) postT0 = GetTickCount();
-        glUseProgram(g_postProg);
-        if (g_postProj >= 0) glUniformMatrix4fv(g_postProj, 1, GL_FALSE, ident);
-        if (g_postTexel >= 0)
-            glUniform2f(g_postTexel, 1.f / (float)g_canvasTarget.w,
-                        1.f / (float)g_canvasTarget.h);
-        if (g_postTime >= 0)
-            glUniform1f(g_postTime, (float)(GetTickCount() - postT0) * 0.001f);
+        glUseProgram(g_gx_postProg);
+        if (g_gx_postProj >= 0) glUniformMatrix4fv(g_gx_postProj, 1, GL_FALSE, ident);
+        if (g_gx_postTexel >= 0)
+            glUniform2f(g_gx_postTexel, 1.f / (float)g_gx_canvasTarget.w,
+                        1.f / (float)g_gx_canvasTarget.h);
+        if (g_gx_postTime >= 0)
+            glUniform1f(g_gx_postTime, (float)(GetTickCount() - postT0) * 0.001f);
     } else {
-        glUniformMatrix4fv(g_uProj, 1, GL_FALSE, ident);
+        glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, ident);
     }
-    glBindBuffer(GL_ARRAY_BUFFER, g_blitVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_blitVbo);
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
@@ -7121,61 +7159,61 @@ static void gxPresent(void) {
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (const void*)8);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (const void*)24);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_canvasTex);
-    /* uUseTex belongs to g_prog, so it must not be touched while the post
+    glBindTexture(GL_TEXTURE_2D, g_gx_canvasTex);
+    /* uUseTex belongs to g_gx_prog, so it must not be touched while the post
      * program is current; that program binds uTex to unit 0 itself. */
-    if (!g_postProg) glUniform1i(g_uUseTex, 2);
+    if (!g_gx_postProg) glUniform1i(g_gx_uUseTex, 2);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    if (g_postProg) glUseProgram(g_prog);
+    if (g_gx_postProg) glUseProgram(g_gx_prog);
     glEnable(GL_BLEND);
-    SwapBuffers(g_hdc);
+    SwapBuffers(g_gx_hdc);
     gxFpsTick();          /* count the frame and honour settargetfps() */
-    glBindFramebuffer(GL_FRAMEBUFFER, g_target ? g_target->fbo : 0);
-    glViewport(0, 0, g_target->w, g_target->h);
-    glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
+    glViewport(0, 0, g_gx_target->w, g_gx_target->h);
+    glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
     gxApplyClip();
 }
 
 static void gxDestroyGL(void) {
     int i;
     gxImgBufDropAll();
-    if (!g_glReady) return;
-    gxMsaaDestroy();          /* before g_fbo goes away */
-    GxVtxVec_clear(&g_vbuf);
-    GxCmdVec_clear(&g_cmds);
-    g_cmdStart = 0;
-    if (g_vbo) glDeleteBuffers(1, &g_vbo);
-    if (g_ibo) glDeleteBuffers(1, &g_ibo);
-    if (g_blitVbo) glDeleteBuffers(1, &g_blitVbo);
-    g_vboCap = 0;
-    free(g_idx);
-    g_idx = NULL;
-    g_idxQuads = g_iboQuads = g_iboUpTo = 0;
-    g_quadRun = false;
-    if (g_fbo) glDeleteFramebuffers(1, &g_fbo);
-    if (g_canvasTex) glDeleteTextures(1, &g_canvasTex);
-    if (g_atlasTex) glDeleteTextures(1, &g_atlasTex);
+    if (!g_gx_glReady) return;
+    gxMsaaDestroy();          /* before g_gx_fbo goes away */
+    GxVtxVec_clear(&g_gx_vbuf);
+    GxCmdVec_clear(&g_gx_cmds);
+    g_gx_cmdStart = 0;
+    if (g_gx_vbo) glDeleteBuffers(1, &g_gx_vbo);
+    if (g_gx_ibo) glDeleteBuffers(1, &g_gx_ibo);
+    if (g_gx_blitVbo) glDeleteBuffers(1, &g_gx_blitVbo);
+    g_gx_vboCap = 0;
+    free(g_gx_idx);
+    g_gx_idx = NULL;
+    g_gx_idxQuads = g_gx_iboQuads = g_gx_iboUpTo = 0;
+    g_gx_quadRun = false;
+    if (g_gx_fbo) glDeleteFramebuffers(1, &g_gx_fbo);
+    if (g_gx_canvasTex) glDeleteTextures(1, &g_gx_canvasTex);
+    if (g_gx_atlasTex) glDeleteTextures(1, &g_gx_atlasTex);
     for (i = 0; i < 6; i++) {
-        if (g_hatchTex[i]) { glDeleteTextures(1, &g_hatchTex[i]); g_hatchTex[i] = 0; }
+        if (g_gx_hatchTex[i]) { glDeleteTextures(1, &g_gx_hatchTex[i]); g_gx_hatchTex[i] = 0; }
     }
     gxPostDestroy();
-    if (g_prog) glDeleteProgram(g_prog);
-    g_vbo = g_blitVbo = g_fbo = g_canvasTex = g_atlasTex = g_prog = 0;
-    memset(&g_canvasTarget, 0, sizeof(g_canvasTarget));
-    g_glReady = false;
+    if (g_gx_prog) glDeleteProgram(g_gx_prog);
+    g_gx_vbo = g_gx_blitVbo = g_gx_fbo = g_gx_canvasTex = g_gx_atlasTex = g_gx_prog = 0;
+    memset(&g_gx_canvasTarget, 0, sizeof(g_gx_canvasTarget));
+    g_gx_glReady = false;
 }
 
 static void gxFreeText(void) {
     size_t i;
-    for (i = 0; i < g_fonts.size; i++)
-        if (g_fonts.data[i].hfont) DeleteObject(g_fonts.data[i].hfont);
-    GxFontVec_free(&g_fonts);
-    gxStrMapFree(&g_fontIds);
-    gxGlyphMapFree(&g_glyphs);
-    if (g_fontDC) { DeleteDC(g_fontDC); g_fontDC = NULL; }
-    free(g_atlas);
-    g_atlas = NULL;
-    g_packX = g_packY = g_packRowH = 0;
+    for (i = 0; i < g_gx_fonts.size; i++)
+        if (g_gx_fonts.data[i].hfont) DeleteObject(g_gx_fonts.data[i].hfont);
+    GxFontVec_free(&g_gx_fonts);
+    gxStrMapFree(&g_gx_fontIds);
+    gxGlyphMapFree(&g_gx_glyphs);
+    if (g_gx_fontDC) { DeleteDC(g_gx_fontDC); g_gx_fontDC = NULL; }
+    free(g_gx_atlas);
+    g_gx_atlas = NULL;
+    g_gx_packX = g_gx_packY = g_gx_packRowH = 0;
 }
 
 /* Reset the whole drawing state to the EasyX defaults.  dropMessages also
@@ -7184,46 +7222,46 @@ static void gxFreeText(void) {
 static void gxInitState(bool dropMessages) {
     gxInitFontDefault();
     if (dropMessages) gxMsgInit();
-    g_curX = g_curY = 0;
-    g_originX = g_originY = 0.f;
-    g_scaleX = g_scaleY = 1.f;
-    g_canvasScaleX = g_canvasScaleY = 1.f;
-    g_canvasOriginX = g_canvasOriginY = 0.f;
-    g_reqOriginX = g_reqOriginY = 0.f;
+    g_gx_curX = g_gx_curY = 0;
+    g_gx_originX = g_gx_originY = 0.f;
+    g_gx_scaleX = g_gx_scaleY = 1.f;
+    g_gx_canvasScaleX = g_gx_canvasScaleY = 1.f;
+    g_gx_canvasOriginX = g_gx_canvasOriginY = 0.f;
+    g_gx_reqOriginX = g_gx_reqOriginY = 0.f;
     /* Matches the reset above: with no setaspectratio() pending, a later
      * fixhighdpi() has to re-derive from 1, not from a stale request. */
-    g_reqScaleX = g_reqScaleY = 1.f;
-    g_clipOn = false;
+    g_gx_reqScaleX = g_gx_reqScaleY = 1.f;
+    g_gx_clipOn = false;
     gxUpdateProj();
-    g_fillStyle.style = BS_SOLID;
-    g_fillStyle.hatch = 0;
-    g_fillStyle.ppattern = NULL;
-    g_lineStyle.style = PS_SOLID;
-    g_lineStyle.thickness = 1;
-    g_lineStyle.puserstyle = NULL;
-    g_lineStyle.userstylecount = 0;
-    g_lineWidth = 1;
+    g_gx_fillStyle.style = BS_SOLID;
+    g_gx_fillStyle.hatch = 0;
+    g_gx_fillStyle.ppattern = NULL;
+    g_gx_lineStyle.style = PS_SOLID;
+    g_gx_lineStyle.thickness = 1;
+    g_gx_lineStyle.puserstyle = NULL;
+    g_gx_lineStyle.userstylecount = 0;
+    g_gx_lineWidth = 1;
     gxDashReset();
-    g_rop2 = R2_COPYPEN;
-    g_curRop = R2_COPYPEN;
-    g_fillColor = WHITE;
-    g_lineColor = WHITE;
-    g_textColor = WHITE;
-    g_bkColor   = BLACK;
-    g_bkMode    = TRANSPARENT;
-    g_polyMode  = ALTERNATE;
-    g_alpha     = 1.f;
-    g_curAlpha  = 1.f;
-    g_blend     = GX_BLEND_ALPHA;
-    g_curBlend  = GX_BLEND_ALPHA;
-    g_batchDraw = false;
-    /* g_renderMode is deliberately NOT reset here: graphdefaults() shares
+    g_gx_rop2 = R2_COPYPEN;
+    g_gx_curRop = R2_COPYPEN;
+    g_gx_fillColor = WHITE;
+    g_gx_lineColor = WHITE;
+    g_gx_textColor = WHITE;
+    g_gx_bkColor   = BLACK;
+    g_gx_bkMode    = TRANSPARENT;
+    g_gx_polyMode  = ALTERNATE;
+    g_gx_alpha     = 1.f;
+    g_gx_curAlpha  = 1.f;
+    g_gx_blend     = GX_BLEND_ALPHA;
+    g_gx_curBlend  = GX_BLEND_ALPHA;
+    g_gx_batchDraw = false;
+    /* g_gx_renderMode is deliberately NOT reset here: graphdefaults() shares
      * this function, and EasyX lists only the view, the current point, the
      * colours, the line style, the fill style and the font as "defaults" -
      * the render mode belongs to the window and survives.  initgraph()
      * establishes it from the INIT_RENDERMANUAL flag. */
-    if (g_glReady) {
-        glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (g_gx_glReady) {
+        glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
         gxBindTarget();
     }
 }
@@ -7274,20 +7312,20 @@ static HWND gxInitGraph(int w, int h) {
     if (w < 1) w = 1;
     if (h < 1) h = 1;
 
-    if (g_hwnd) {
+    if (g_gx_hwnd) {
         gxDestroyGL();
         gxFreeText();
-        if (g_hglrc) { wglMakeCurrent(NULL, NULL); wglDeleteContext(g_hglrc); g_hglrc = NULL; }
-        if (g_hdc) { ReleaseDC(g_hwnd, g_hdc); g_hdc = NULL; }
-        DestroyWindow(g_hwnd);
-        g_hwnd = NULL;
+        if (g_gx_hglrc) { wglMakeCurrent(NULL, NULL); wglDeleteContext(g_gx_hglrc); g_gx_hglrc = NULL; }
+        if (g_gx_hdc) { ReleaseDC(g_gx_hwnd, g_gx_hdc); g_gx_hdc = NULL; }
+        DestroyWindow(g_gx_hwnd);
+        g_gx_hwnd = NULL;
     }
     gxInitState(true);
     /* EasyX starts in RENDER_AUTO, i.e. every primitive is shown as it is
      * drawn and a plain loop works without BeginBatchDraw().  This used to
      * be RENDER_MANUAL, which left the window blank (the canvas was drawn
      * but never presented). */
-    g_renderMode = (g_initFlag & INIT_RENDERMANUAL) ? RENDER_MANUAL : RENDER_AUTO;
+    g_gx_renderMode = (g_gx_initFlag & INIT_RENDERMANUAL) ? RENDER_MANUAL : RENDER_AUTO;
 
     hInst = GetModuleHandleA(NULL);
     {
@@ -7310,26 +7348,26 @@ static HWND gxInitGraph(int w, int h) {
     }
 
     style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    if (g_initFlag & INIT_NOBORDER) style = WS_POPUP;
+    if (g_gx_initFlag & INIT_NOBORDER) style = WS_POPUP;
     /* EX_NOMINIMIZE removes the button, INIT_MINIMIZE (easygl) only starts
      * the window iconified - the two are unrelated. */
-    if (g_initFlag & NOMINIMIZE) style &= ~WS_MINIMIZEBOX;
+    if (g_gx_initFlag & NOMINIMIZE) style &= ~WS_MINIMIZEBOX;
     /* variablewinsize(true) called before initgraph(): build the window
      * with the frame already on, so there is no redraw on startup.  It wins
      * over EX_NOMINIMIZE on the maximise button - see the note there. */
-    if (g_varWinSize) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+    if (g_gx_varWinSize) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
     rc.left = 0; rc.top = 0; rc.right = w; rc.bottom = h;
     AdjustWindowRect(&rc, style, FALSE);
-    g_hwnd = CreateWindowExA(0, "GX_OpenGL_Window", "OpenGL", style,
+    g_gx_hwnd = CreateWindowExA(0, "GX_OpenGL_Window", "OpenGL", style,
                              CW_USEDEFAULT, CW_USEDEFAULT,
                              rc.right - rc.left, rc.bottom - rc.top,
                              NULL, NULL, hInst, NULL);
-    if (!g_hwnd) {
+    if (!g_gx_hwnd) {
         MessageBoxA(NULL, "Failed to create window", "Error", MB_OK);
         exit(1);
     }
-    if (g_initFlag & NOCLOSE) {
-        HMENU sm = GetSystemMenu(g_hwnd, FALSE);
+    if (g_gx_initFlag & NOCLOSE) {
+        HMENU sm = GetSystemMenu(g_gx_hwnd, FALSE);
         if (sm) EnableMenuItem(sm, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
     }
     /* EasyX shows the console only when EX_SHOWCONSOLE asks for it.  Most
@@ -7346,11 +7384,11 @@ static HWND gxInitGraph(int w, int h) {
      * Define GX_NO_AUTO_HIDE_CONSOLE before including this header to turn
      * the automatic hiding off (per call, initgraph(w, h, EX_SHOWCONSOLE)
      * or a later showconsole() still works). */
-    if (g_initFlag & SHOWCONSOLE) gxConsoleShow(true);
+    if (g_gx_initFlag & SHOWCONSOLE) gxConsoleShow(true);
 #ifndef GX_NO_AUTO_HIDE_CONSOLE
     else if (gxHasConsole())      gxConsoleShow(false);
 #endif
-    g_hdc = GetDC(g_hwnd);
+    g_gx_hdc = GetDC(g_gx_hwnd);
 
     memset(&pfd, 0, sizeof(pfd));
     pfd.nSize = sizeof(pfd);
@@ -7361,14 +7399,14 @@ static HWND gxInitGraph(int w, int h) {
     pfd.cAlphaBits = 8;
     pfd.cDepthBits = 24;
     pfd.cStencilBits = 8;
-    pf = ChoosePixelFormat(g_hdc, &pfd);
-    if (!pf || !SetPixelFormat(g_hdc, pf, &pfd)) {
+    pf = ChoosePixelFormat(g_gx_hdc, &pfd);
+    if (!pf || !SetPixelFormat(g_gx_hdc, pf, &pfd)) {
         MessageBoxA(NULL, "Failed to set pixel format", "Error", MB_OK);
         exit(1);
     }
 
-    tmp = wglCreateContext(g_hdc);
-    wglMakeCurrent(g_hdc, tmp);
+    tmp = wglCreateContext(g_gx_hdc);
+    wglMakeCurrent(g_gx_hdc, tmp);
     wglCreateContextAttribsARB =
         (PFN_WGLCREATECTXATTRIBS)wglGetProcAddress("wglCreateContextAttribsARB");
     if (wglCreateContextAttribsARB) {
@@ -7383,26 +7421,26 @@ static HWND gxInitGraph(int w, int h) {
          * its framebuffers), then give up and keep the default context. */
         int req[4];
         int n = 0, k;
-        req[n++] = g_reqGLMajor; req[n++] = g_reqGLMinor;
-        if (g_reqGLMajor != 3 || g_reqGLMinor != 3) { req[n++] = 3; req[n++] = 3; }
+        req[n++] = g_gx_reqGLMajor; req[n++] = g_gx_reqGLMinor;
+        if (g_gx_reqGLMajor != 3 || g_gx_reqGLMinor != 3) { req[n++] = 3; req[n++] = 3; }
         for (k = 0; k < n; k += 2) {
             HGLRC rc2;
             attribs[1] = req[k];
             attribs[3] = req[k + 1];
-            rc2 = wglCreateContextAttribsARB(g_hdc, NULL, attribs);
+            rc2 = wglCreateContextAttribsARB(g_gx_hdc, NULL, attribs);
             if (rc2) {
                 wglMakeCurrent(NULL, NULL);
                 wglDeleteContext(tmp);
                 tmp = rc2;
-                g_glMajor = req[k];
-                g_glMinor = req[k + 1];
+                g_gx_glMajor = req[k];
+                g_gx_glMinor = req[k + 1];
                 break;
             }
         }
     }
-    if (g_glMajor == 0) { g_glMajor = 1; g_glMinor = 1; }   /* default ctx */
-    g_hglrc = tmp;
-    wglMakeCurrent(g_hdc, g_hglrc);
+    if (g_gx_glMajor == 0) { g_gx_glMajor = 1; g_gx_glMinor = 1; }   /* default ctx */
+    g_gx_hglrc = tmp;
+    wglMakeCurrent(g_gx_hdc, g_gx_hglrc);
 
     gxLoadGL();
     if (!glCreateShader || !glBindBuffer || !glGenFramebuffers || !glVertexAttribPointer) {
@@ -7410,14 +7448,14 @@ static HWND gxInitGraph(int w, int h) {
                     "Error", MB_OK);
         exit(1);
     }
-    g_devW = w; g_devH = h;
+    g_gx_devW = w; g_gx_devH = h;
     /* The size initgraph() was asked for, before any DPI scaling: a rebuilt
      * window starts here and gxRestoreDpiFix() scales it up again. */
-    g_baseW = w; g_baseH = h;
-    g_scaleX = g_scaleY = 1.f;
-    g_canvasScaleX = g_canvasScaleY = 1.f;
-    g_canvasOriginX = g_canvasOriginY = 0.f;
-    g_reqOriginX = g_reqOriginY = 0.f;
+    g_gx_baseW = w; g_gx_baseH = h;
+    g_gx_scaleX = g_gx_scaleY = 1.f;
+    g_gx_canvasScaleX = g_gx_canvasScaleY = 1.f;
+    g_gx_canvasOriginX = g_gx_canvasOriginY = 0.f;
+    g_gx_reqOriginX = g_gx_reqOriginY = 0.f;
     gxUpdateProj();
 
     gxCreateProgram();
@@ -7429,79 +7467,79 @@ static HWND gxInitGraph(int w, int h) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_COLOR_LOGIC_OP);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
-    glViewport(0, 0, g_devW, g_devH);
-    glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_fbo);
+    glViewport(0, 0, g_gx_devW, g_gx_devH);
+    glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
 
-    g_glReady = true;
+    g_gx_glReady = true;
     gxApplyWindowState();   /* reapply vsync / MSAA to the new window */
-    g_target = &g_canvasTarget;
-    g_workImg = NULL;
+    g_gx_target = &g_gx_canvasTarget;
+    g_gx_workImg = NULL;
     /* gxCreateCanvas() allocated the canvas texture with NULL data, so its
      * contents are undefined: present it as it stands and the window shows
      * whatever that memory last held, which is the speckle that used to
      * force a cleardevice() right after initgraph().  EasyX hands over a
-     * window already in the background colour, so clear to g_bkColor here.
+     * window already in the background colour, so clear to g_gx_bkColor here.
      *
      * It has to run after gxApplyWindowState(): with MSAA on the canvas
      * framebuffer is the multisample renderbuffer, and that is undefined
      * too - clearing the plain texture first would only be overwritten by
      * the next resolve.  Before ShowWindow(), so nothing is ever shown. */
-    gxClearFbo(g_canvasTarget.fbo, g_canvasTarget.w, g_canvasTarget.h,
-               g_bkColor, 1.f);
+    gxClearFbo(g_gx_canvasTarget.fbo, g_gx_canvasTarget.w, g_gx_canvasTarget.h,
+               g_gx_bkColor, 1.f);
 #ifdef GX_EASYX_HWND
-    hwnd = g_hwnd;
+    hwnd = g_gx_hwnd;
 #endif
-    if (!(g_initFlag & INIT_HIDE)) ShowWindow(g_hwnd, SW_SHOW);
-    if (g_initFlag & INIT_MINIMIZE) ShowWindow(g_hwnd, SW_MINIMIZE);
-    UpdateWindow(g_hwnd);
-    SetForegroundWindow(g_hwnd);   /* IsWindowActive() relies on it */
-    SetFocus(g_hwnd);
+    if (!(g_gx_initFlag & INIT_HIDE)) ShowWindow(g_gx_hwnd, SW_SHOW);
+    if (g_gx_initFlag & INIT_MINIMIZE) ShowWindow(g_gx_hwnd, SW_MINIMIZE);
+    UpdateWindow(g_gx_hwnd);
+    SetForegroundWindow(g_gx_hwnd);   /* IsWindowActive() relies on it */
+    SetFocus(g_gx_hwnd);
     gxPump();
-    return g_hwnd;
+    return g_gx_hwnd;
 }
 
 static HWND gx_initgraph2(int w, int h) {
-    g_initFlag = INIT_DEFAULT;
+    g_gx_initFlag = INIT_DEFAULT;
     return gxInitGraph(w, h);
 }
 static HWND gx_initgraph3(int w, int h, int flag) {
-    g_initFlag = flag;
+    g_gx_initFlag = flag;
     return gxInitGraph(w, h);
 }
 
 static void closegraph(void) {
     /* Give the console back: a program that ends with closegraph(); _getch();
      * would otherwise wait on a window that is no longer visible. */
-    if (g_consoleHidden) gxConsoleShow(true);
+    if (g_gx_consoleHidden) gxConsoleShow(true);
     gxImgBufDropAll();
     gxDestroyGL();
     gxFreeText();
-    if (g_hglrc) { wglMakeCurrent(NULL, NULL); wglDeleteContext(g_hglrc); g_hglrc = NULL; }
-    if (g_hdc) { ReleaseDC(g_hwnd, g_hdc); g_hdc = NULL; }
-    if (g_hwnd) { DestroyWindow(g_hwnd); g_hwnd = NULL; }
+    if (g_gx_hglrc) { wglMakeCurrent(NULL, NULL); wglDeleteContext(g_gx_hglrc); g_gx_hglrc = NULL; }
+    if (g_gx_hdc) { ReleaseDC(g_gx_hwnd, g_gx_hdc); g_gx_hdc = NULL; }
+    if (g_gx_hwnd) { DestroyWindow(g_gx_hwnd); g_gx_hwnd = NULL; }
 #ifdef GX_EASYX_HWND
     hwnd = NULL;
 #endif
-    g_workImg = NULL;
-    g_target = &g_canvasTarget;
+    g_gx_workImg = NULL;
+    g_gx_target = &g_gx_canvasTarget;
 }
 
 static void cleardevice(void) {
-    if (!g_glReady) return;
-    GxVtxVec_clear(&g_vbuf);   /* clear the canvas -> drop pending primitives */
-    GxCmdVec_clear(&g_cmds);
-    g_cmdStart = 0;
-    glBindFramebuffer(GL_FRAMEBUFFER, g_target ? g_target->fbo : 0);
-    glViewport(0, 0, g_target->w, g_target->h);
+    if (!g_gx_glReady) return;
+    GxVtxVec_clear(&g_gx_vbuf);   /* clear the canvas -> drop pending primitives */
+    GxCmdVec_clear(&g_gx_cmds);
+    g_gx_cmdStart = 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
+    glViewport(0, 0, g_gx_target->w, g_gx_target->h);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_COLOR_LOGIC_OP);
     glEnable(GL_BLEND);
     /* The background colour, not hard coded black: setbkcolor(WHITE);
      * cleardevice(); has to leave a white canvas, which is what EasyX does
      * and what the clear*() family has always done here. */
-    glClearColor(GetRValue(g_bkColor) / 255.f, GetGValue(g_bkColor) / 255.f,
-                 GetBValue(g_bkColor) / 255.f, 1.f);
+    glClearColor(GetRValue(g_gx_bkColor) / 255.f, GetGValue(g_gx_bkColor) / 255.f,
+                 GetBValue(g_gx_bkColor) / 255.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     gxApplyClip();
 }
@@ -7518,19 +7556,19 @@ static void setaspectratio(float sx, float sy) {
      * effective one, and the effective one, which is the requested pair
      * times the DPI factor.  Negative factors keep their sign because the
      * factor is always positive. */
-    g_reqScaleX = sx;
-    g_reqScaleY = sy;
+    g_gx_reqScaleX = sx;
+    g_gx_reqScaleY = sy;
     /* Belongs to the canvas.  Applied at once when the canvas is current;
-     * otherwise it waits in g_canvasScaleX / Y until it is again. */
-    g_canvasScaleX = sx * g_dpiFix;
-    g_canvasScaleY = sy * g_dpiFix;
-    if (!g_workImg) {
-        g_scaleX = g_canvasScaleX;
-        g_scaleY = g_canvasScaleY;
+     * otherwise it waits in g_gx_canvasScaleX / Y until it is again. */
+    g_gx_canvasScaleX = sx * g_gx_dpiFix;
+    g_gx_canvasScaleY = sy * g_gx_dpiFix;
+    if (!g_gx_workImg) {
+        g_gx_scaleX = g_gx_canvasScaleX;
+        g_gx_scaleY = g_gx_canvasScaleY;
     }
     gxUpdateProj();
-    if (g_glReady) {
-        glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (g_gx_glReady) {
+        glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
         gxBindTarget();      /* the clip box scales with the coordinate space */
     }
 }
@@ -7573,9 +7611,9 @@ static void gxResizeMainWindow(int w, int h);
 static void gxResizeCanvas(int w, int h);
 GX_INLINE void setwinsize(int w, int h) {
     /* The logical size, so it is what a later rebuild scales from. */
-    g_baseW = w; g_baseH = h;
-    gxResizeMainWindow((int)((float)w * g_dpiFix + 0.5f),
-                       (int)((float)h * g_dpiFix + 0.5f));
+    g_gx_baseW = w; g_gx_baseH = h;
+    gxResizeMainWindow((int)((float)w * g_gx_dpiFix + 0.5f),
+                       (int)((float)h * g_gx_dpiFix + 0.5f));
 }
 
 /* Read the window size back.  Either pointer may be NULL, the same
@@ -7583,19 +7621,19 @@ GX_INLINE void setwinsize(int w, int h) {
  *
  * getwinsize() is the inverse of setwinsize() and therefore reports LOGICAL
  * units, so setwinsize(1024, 768); getwinsize(&w, &h); returns 1024x768 at
- * any DPI.  Returning g_devW here instead made the pair asymmetric: at 150%
+ * any DPI.  Returning g_gx_devW here instead made the pair asymmetric: at 150%
  * the same round trip gave back 1536x1152.
  *
  * getwindevsize() is the device form - the real pixel size of the window and
  * of the canvas texture, which is what Win32 calls and a glReadPixels() on
  * the canvas see. */
 GX_INLINE void getwinsize(int* w, int* h) {
-    if (w) *w = (int)((float)g_devW / g_dpiFix + 0.5f);
-    if (h) *h = (int)((float)g_devH / g_dpiFix + 0.5f);
+    if (w) *w = (int)((float)g_gx_devW / g_gx_dpiFix + 0.5f);
+    if (h) *h = (int)((float)g_gx_devH / g_gx_dpiFix + 0.5f);
 }
 GX_INLINE void getwindevsize(int* w, int* h) {
-    if (w) *w = g_devW;
-    if (h) *h = g_devH;
+    if (w) *w = g_gx_devW;
+    if (h) *h = g_gx_devH;
 }
 
 /* Give the window a resizable frame (WS_THICKFRAME | WS_MAXIMIZEBOX), or
@@ -7652,12 +7690,12 @@ GX_INLINE void getwindevsize(int* w, int* h) {
  *     suspends the program, so nothing is presented mid-drag; the frame is
  *     repainted by the WM_PAINT handler and the picture resumes when the
  *     drag ends.
- *   - Nothing clamps the size.  A very small window makes g_devW / g_devH
+ *   - Nothing clamps the size.  A very small window makes g_gx_devW / g_gx_devH
  *     small, which is legal but may make the content unreadable, and a
  *     canvas has to be allocated at whatever size is asked for.
  *   - The maximise button is turned on even when initgraph() was given
  *     EX_NOMINIMIZE; this call is the more specific request and wins. */
-/* Make the live window's frame agree with g_varWinSize.  Split out of
+/* Make the live window's frame agree with g_gx_varWinSize.  Split out of
  * variablewinsize() because a rebuilt window needs the frame back too: it
  * is a per-window property exactly like vsync, MSAA, the image filter and
  * the DPI fix, so gxApplyWindowState() - the "reapply everything after a
@@ -7672,18 +7710,18 @@ GX_INLINE void getwindevsize(int* w, int* h) {
 static void gxRestoreVarWin(void) {
     LONG st;
     RECT rc, cr;
-    if (!g_hwnd) return;          /* no window yet: initgraph() reads the flag */
+    if (!g_gx_hwnd) return;          /* no window yet: initgraph() reads the flag */
 
-    st = GetWindowLongA(g_hwnd, GWL_STYLE);
-    if (g_varWinSize) st |=  (LONG)(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    st = GetWindowLongA(g_gx_hwnd, GWL_STYLE);
+    if (g_gx_varWinSize) st |=  (LONG)(WS_THICKFRAME | WS_MAXIMIZEBOX);
     else              st &= ~(LONG)(WS_THICKFRAME | WS_MAXIMIZEBOX);
     /* Already what was asked for: leave the window completely alone.  This
      * is the case on every rebuild that did not change the setting, and it
      * is what keeps gxApplyWindowState() from resizing a window that is
      * already correct - a SetWindowPos() here would be harmless but it is
      * one more round trip through the window manager on each initgraph(). */
-    if (st == GetWindowLongA(g_hwnd, GWL_STYLE)) return;
-    SetWindowLongA(g_hwnd, GWL_STYLE, st);
+    if (st == GetWindowLongA(g_gx_hwnd, GWL_STYLE)) return;
+    SetWindowLongA(g_gx_hwnd, GWL_STYLE, st);
 
     /* The frame is not the same thickness as the one it replaces: a window
      * that had WS_CAPTION carried the fixed 3 px frame (WS_DLGFRAME comes
@@ -7707,27 +7745,27 @@ static void gxRestoreVarWin(void) {
      * the canvas to whatever the window manager actually handed back - a
      * maximised window or one pinned against the screen edge cannot grow,
      * and in that case the canvas has to follow the client instead. */
-    SetRect(&rc, 0, 0, g_devW > 0 ? g_devW : 1, g_devH > 0 ? g_devH : 1);
+    SetRect(&rc, 0, 0, g_gx_devW > 0 ? g_gx_devW : 1, g_gx_devH > 0 ? g_gx_devH : 1);
     AdjustWindowRect(&rc, (DWORD)st, FALSE);
-    SetWindowPos(g_hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+    SetWindowPos(g_gx_hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE |
                  SWP_FRAMECHANGED);
 
-    if (g_glReady && GetClientRect(g_hwnd, &cr)) {
+    if (g_gx_glReady && GetClientRect(g_gx_hwnd, &cr)) {
         int nw = cr.right - cr.left, nh = cr.bottom - cr.top;
-        if (nw >= 1 && nh >= 1 && (nw != g_devW || nh != g_devH)) {
+        if (nw >= 1 && nh >= 1 && (nw != g_gx_devW || nh != g_gx_devH)) {
             gxResizeCanvas(nw, nh);
             /* Same bookkeeping the WM_SIZE handler does: the logical size
              * has to follow the device size, or getwidth() lies. */
-            g_baseW = (int)((float)nw / g_dpiFix + 0.5f);
-            g_baseH = (int)((float)nh / g_dpiFix + 0.5f);
+            g_gx_baseW = (int)((float)nw / g_gx_dpiFix + 0.5f);
+            g_gx_baseH = (int)((float)nh / g_gx_dpiFix + 0.5f);
         }
     }
 }
 
 GX_INLINE void variablewinsize(bool enable) {
-    g_varWinSize = (enable != 0);
-    /* No window yet: initgraph() reads g_varWinSize while it builds the
+    g_gx_varWinSize = (enable != 0);
+    /* No window yet: initgraph() reads g_gx_varWinSize while it builds the
      * window, so the frame is in place from the start and nothing has to be
      * re-measured.  With a window already up, change it in place. */
     gxRestoreVarWin();
@@ -7740,23 +7778,23 @@ GX_INLINE void variablewinsize(bool enable) {
  *
  * No arguments, so it needs no overload and lives out here where both the
  * C and the C++ half of the header can see it. */
-GX_INLINE bool getvariablewinsize(void) { return g_varWinSize; }
+GX_INLINE bool getvariablewinsize(void) { return g_gx_varWinSize; }
 
 static void gxResizeCanvas(int w, int h) {
-    if (!g_glReady) return;
+    if (!g_gx_glReady) return;
     if (w < 1 || h < 1) return;
-    if (w == g_devW && h == g_devH) return;     /* nothing to do */
+    if (w == g_gx_devW && h == g_gx_devH) return;     /* nothing to do */
 
     gxFlush();                    /* queued primitives carry the old size */
     gxMsaaDestroy();              /* sized off the canvas: rebuilt below  */
 
-    g_devW = w; g_devH = h;
+    g_gx_devW = w; g_gx_devH = h;
     /* Same texture id, new storage: glTexImage2D() redefines it. */
-    glBindTexture(GL_TEXTURE_2D, g_canvasTex);
+    glBindTexture(GL_TEXTURE_2D, g_gx_canvasTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    g_canvasTarget.w = w;
-    g_canvasTarget.h = h;
+    g_gx_canvasTarget.w = w;
+    g_gx_canvasTarget.h = h;
 
     gxUpdateProj();
     gxMsaaCreate();               /* picks the new canvas size up itself  */
@@ -7768,22 +7806,22 @@ static void gxResizeCanvas(int w, int h) {
      * throws the picture away and the program has to redraw, which is what
      * EasyX does too.  Same reason as the clear in initgraph(): no
      * speckles, and in the background colour. */
-    gxClearFbo(g_canvasTarget.fbo, g_canvasTarget.w, g_canvasTarget.h,
-               g_bkColor, 1.f);
-    if (g_glReady) glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    gxClearFbo(g_gx_canvasTarget.fbo, g_gx_canvasTarget.w, g_gx_canvasTarget.h,
+               g_gx_bkColor, 1.f);
+    if (g_gx_glReady) glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
 }
 
 static void gxResizeMainWindow(int w, int h) {
     DWORD style;
     RECT rc;
-    if (!g_glReady || !g_hwnd) return;
+    if (!g_gx_glReady || !g_gx_hwnd) return;
     if (w < 1 || h < 1) return;
-    if (w == g_devW && h == g_devH) return;     /* nothing to do */
+    if (w == g_gx_devW && h == g_gx_devH) return;     /* nothing to do */
 
-    style = (DWORD)GetWindowLongA(g_hwnd, GWL_STYLE);
+    style = (DWORD)GetWindowLongA(g_gx_hwnd, GWL_STYLE);
     SetRect(&rc, 0, 0, w, h);
     AdjustWindowRect(&rc, style, FALSE);
-    SetWindowPos(g_hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+    SetWindowPos(g_gx_hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     /* SetWindowPos() is synchronous: WM_SIZE has already run and rebuilt
      * the canvas by the time it returns, so this is only a fallback for the
@@ -7813,7 +7851,7 @@ static void gxResizeMainWindow(int w, int h) {
  * it survives a window rebuild: gxApplyWindowState() reapplies it.  A
  * program that wants it from the start still has to call it after
  * initgraph(), because initgraph() resets the coordinate space. */
-/* On / off in one call.  The state is remembered in g_dpiFixOn, which is
+/* On / off in one call.  The state is remembered in g_gx_dpiFixOn, which is
  * what makes it survive a window rebuild: gxApplyWindowState() calls
  * gxRestoreDpiFix(), so a program that turned this on once keeps it on
  * across initgraph() / Resize() without doing anything. */
@@ -7826,17 +7864,17 @@ static bool gxApplyDpiFix(bool on) {
     newFix = on ? ((float)getdpi() / 96.f) : 1.f;
     if (!(newFix > 0.f)) newFix = 1.f;          /* nonsense DPI -> off  */
 
-    g_dpiFixOn = on;
-    g_dpiFix   = newFix;
-    g_canvasScaleX = g_reqScaleX * newFix;
-    g_canvasScaleY = g_reqScaleY * newFix;
-    g_canvasOriginX = g_reqOriginX * newFix;
-    g_canvasOriginY = g_reqOriginY * newFix;
-    if (!g_workImg) {
-        g_scaleX  = g_canvasScaleX;
-        g_scaleY  = g_canvasScaleY;
-        g_originX = g_canvasOriginX;
-        g_originY = g_canvasOriginY;
+    g_gx_dpiFixOn = on;
+    g_gx_dpiFix   = newFix;
+    g_gx_canvasScaleX = g_gx_reqScaleX * newFix;
+    g_gx_canvasScaleY = g_gx_reqScaleY * newFix;
+    g_gx_canvasOriginX = g_gx_reqOriginX * newFix;
+    g_gx_canvasOriginY = g_gx_reqOriginY * newFix;
+    if (!g_gx_workImg) {
+        g_gx_scaleX  = g_gx_canvasScaleX;
+        g_gx_scaleY  = g_gx_canvasScaleY;
+        g_gx_originX = g_gx_canvasOriginX;
+        g_gx_originY = g_gx_canvasOriginY;
     }
 
     /* The window is sized from the request, not from its present size.
@@ -7847,22 +7885,22 @@ static bool gxApplyDpiFix(bool on) {
      * Both are 8.3 inches across, which is the point: without this the
      * window would come out a third smaller on the scaled display.
      *
-     * Deriving it from g_baseW / g_baseH rather than from the current
-     * g_devW / g_devH is what makes it repeatable.  A rebuilt window comes
+     * Deriving it from g_gx_baseW / g_gx_baseH rather than from the current
+     * g_gx_devW / g_gx_devH is what makes it repeatable.  A rebuilt window comes
      * back at the logical size, and the old "multiply by how much the factor
      * changed" form had already applied its factor, so it saw 1.5 == 1.5 and
      * concluded there was nothing to do - the window stayed small.  Scaling
      * the request instead is idempotent: the same inputs give the same
      * window every time, however often it is called. */
-    nw = (int)((float)g_baseW * newFix + 0.5f);
-    nh = (int)((float)g_baseH * newFix + 0.5f);
-    if (nw < 1) nw = g_baseW;
-    if (nh < 1) nh = g_baseH;
+    nw = (int)((float)g_gx_baseW * newFix + 0.5f);
+    nh = (int)((float)g_gx_baseH * newFix + 0.5f);
+    if (nw < 1) nw = g_gx_baseW;
+    if (nh < 1) nh = g_gx_baseH;
     gxResizeMainWindow(nw, nh);   /* device pixels - not setwinsize(), which
                                    * would multiply by the factor again */
     gxUpdateProj();
-    if (g_glReady) {
-        glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (g_gx_glReady) {
+        glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
         gxBindTarget();          /* the clip box scales with the space */
     }
     return true;
@@ -7872,18 +7910,18 @@ static void fixhighdpi_b(bool on) {
     if (!gxApplyDpiFix(on)) return;
     /* Re-derive from the requested pair, so switching either way takes
      * effect on the current setaspectratio() immediately. */
-    setaspectratio(g_reqScaleX, g_reqScaleY);
+    setaspectratio(g_gx_reqScaleX, g_gx_reqScaleY);
 }
 
 /* Re-apply after a window rebuild.  Only when switched on - otherwise
  * there is nothing to restore.  The DPI is read again because the window
  * may have landed on a different monitor. */
 static void gxRestoreDpiFix(void) {
-    if (!g_dpiFixOn) return;
+    if (!g_gx_dpiFixOn) return;
     /* Same path as the switch itself: a rebuilt window starts at the plain
      * size, so both the scale and the window have to be redone. */
     gxApplyDpiFix(true);
-    setaspectratio(g_reqScaleX, g_reqScaleY);
+    setaspectratio(g_gx_reqScaleX, g_gx_reqScaleY);
 }
 
 /* Back to 1:1 - read as fixhighdpi(false).  Kept because the pair reads
@@ -7906,10 +7944,10 @@ static void gx_fixhighdpi_1(bool on) { fixhighdpi_b(on); }
 #endif
 
 /* The factor in force: 1 when off, 1.5 at 150%, 2 at 200%. */
-GX_INLINE float gethighdpiscale(void) { return g_dpiFix; }
+GX_INLINE float gethighdpiscale(void) { return g_gx_dpiFix; }
 /* Whether it is switched on at all, which is a different question from
  * what the factor happens to be (1.f at 100% looks like "off"). */
-GX_INLINE bool ishighdpi(void) { return g_dpiFixOn; }
+GX_INLINE bool ishighdpi(void) { return g_gx_dpiFixOn; }
 
 static void setcliprgn(HRGN hrgn) {
     DWORD res;
@@ -7917,18 +7955,18 @@ static void setcliprgn(HRGN hrgn) {
      * batch: flush first, otherwise queued primitives are clipped by the
      * *new* region. */
     gxFlush();
-    if (!hrgn) { g_clipOn = false; gxApplyClip(); return; }
-    res = GetRgnBox(hrgn, &g_clipRect);
-    if (res == NULLREGION || res == ERROR) { g_clipOn = false; gxApplyClip(); return; }
-    if (g_clipRect.right <= g_clipRect.left || g_clipRect.bottom <= g_clipRect.top) {
-        g_clipOn = false; gxApplyClip(); return;   /* empty region */
+    if (!hrgn) { g_gx_clipOn = false; gxApplyClip(); return; }
+    res = GetRgnBox(hrgn, &g_gx_clipRect);
+    if (res == NULLREGION || res == ERROR) { g_gx_clipOn = false; gxApplyClip(); return; }
+    if (g_gx_clipRect.right <= g_gx_clipRect.left || g_gx_clipRect.bottom <= g_gx_clipRect.top) {
+        g_gx_clipOn = false; gxApplyClip(); return;   /* empty region */
     }
-    g_clipOn = true;
+    g_gx_clipOn = true;
     gxApplyClip();
 }
 static void clearcliprgn(void) {
     gxFlush();
-    g_clipOn = false;
+    g_gx_clipOn = false;
     gxApplyClip();
 }
 
@@ -7943,11 +7981,11 @@ static void clearcliprgn(void) {
 static void getcliprgn(HRGN hrgn) {
     long x0, y0, x1, y1;
     if (!hrgn) return;
-    if (!g_clipOn) { SetRectRgn(hrgn, 0, 0, 0, 0); return; }
-    x0 = gxLogToDevX((float)g_clipRect.left);
-    y0 = gxLogToDevY((float)g_clipRect.top);
-    x1 = gxLogToDevX((float)g_clipRect.right);
-    y1 = gxLogToDevY((float)g_clipRect.bottom);
+    if (!g_gx_clipOn) { SetRectRgn(hrgn, 0, 0, 0, 0); return; }
+    x0 = gxLogToDevX((float)g_gx_clipRect.left);
+    y0 = gxLogToDevY((float)g_gx_clipRect.top);
+    x1 = gxLogToDevX((float)g_gx_clipRect.right);
+    y1 = gxLogToDevY((float)g_gx_clipRect.bottom);
     if (x1 < x0) { long t = x0; x0 = x1; x1 = t; }
     if (y1 < y0) { long t = y0; y0 = y1; y1 = t; }
     SetRectRgn(hrgn, (int)x0, (int)y0, (int)x1, (int)y1);
@@ -7959,9 +7997,9 @@ static void getcliprgn(HRGN hrgn) {
 /* A viewport is an origin shift plus an optional clip, so it needs its own
  * copy of the clip flag: getcliprgn() has no way to say "there is no
  * region", and getviewport() has to be able to report clip = false. */
-static bool      g_vpOn = false;
-static int       g_vpL = 0, g_vpT = 0, g_vpR = 0, g_vpB = 0;
-static bool      g_vpClip = false;
+static bool      g_gx_vpOn = false;
+static int       g_gx_vpL = 0, g_gx_vpT = 0, g_gx_vpR = 0, g_gx_vpB = 0;
+static bool      g_gx_vpClip = false;
 
 static void setviewport(int left, int top, int right, int bottom, int clip) {
     long lx, ly;
@@ -7969,37 +8007,37 @@ static void setviewport(int left, int top, int right, int bottom, int clip) {
     if (right < left)  { int t = right; right = left;  left = t; }
     if (bottom < top)  { int t = bottom; bottom = top;  top = t; }
     setorigin(left, top);       /* multiplies by the DPI factor itself */
-    /* g_clipRect is LOGICAL.  The arguments are in the same 96 dpi units
+    /* g_gx_clipRect is LOGICAL.  The arguments are in the same 96 dpi units
      * setorigin() takes, so the far corner becomes DEVICE pixels first and
      * gxDevToLog*() maps it back through the (already scaled) origin.
      * At a factor of 1 this is exactly what it was before. */
-    lx = gxDevToLogX((int)((float)right  * g_dpiFix + 0.5f));
-    ly = gxDevToLogY((int)((float)bottom * g_dpiFix + 0.5f));
-    g_vpOn = true;
-    g_vpL = left; g_vpT = top; g_vpR = right; g_vpB = bottom;
-    g_vpClip = (clip != 0);
-    if (g_vpClip) {
-        g_clipRect.left = 0;
-        g_clipRect.top = 0;
-        g_clipRect.right = (long)lx;
-        g_clipRect.bottom = (long)ly;
-        g_clipOn = true;
+    lx = gxDevToLogX((int)((float)right  * g_gx_dpiFix + 0.5f));
+    ly = gxDevToLogY((int)((float)bottom * g_gx_dpiFix + 0.5f));
+    g_gx_vpOn = true;
+    g_gx_vpL = left; g_gx_vpT = top; g_gx_vpR = right; g_gx_vpB = bottom;
+    g_gx_vpClip = (clip != 0);
+    if (g_gx_vpClip) {
+        g_gx_clipRect.left = 0;
+        g_gx_clipRect.top = 0;
+        g_gx_clipRect.right = (long)lx;
+        g_gx_clipRect.bottom = (long)ly;
+        g_gx_clipOn = true;
     } else {
-        g_clipOn = false;
+        g_gx_clipOn = false;
     }
     gxApplyClip();
 }
 static void getviewport(int* left, int* top, int* right, int* bottom,
                         int* clip) {
-    if (left)   *left   = g_vpL;
-    if (top)    *top    = g_vpT;
-    if (right)  *right  = g_vpR;
-    if (bottom) *bottom = g_vpB;
-    if (clip)   *clip   = g_vpClip ? 1 : 0;
+    if (left)   *left   = g_gx_vpL;
+    if (top)    *top    = g_gx_vpT;
+    if (right)  *right  = g_gx_vpR;
+    if (bottom) *bottom = g_gx_vpB;
+    if (clip)   *clip   = g_gx_vpClip ? 1 : 0;
 }
 
-static void setwindowtextA(const char* s) { if (g_hwnd) SetWindowTextA(g_hwnd, s); }
-static void setwindowtextW(const WCHAR* s) { if (g_hwnd) SetWindowTextW(g_hwnd, s); }
+static void setwindowtextA(const char* s) { if (g_gx_hwnd) SetWindowTextA(g_gx_hwnd, s); }
+static void setwindowtextW(const WCHAR* s) { if (g_gx_hwnd) SetWindowTextW(g_gx_hwnd, s); }
 
 /*------------------- window / cursor helpers (easygl) ------------------*/
 /* Pure Win32 one liners that EasyX programs otherwise have to reach for
@@ -8058,11 +8096,11 @@ static GX_PFN_GetLayeredWindowAttributes gxGetGLWA(void) {
 GX_INLINE void setwindowalpha(BYTE alpha) {
     BYTE opacity = (BYTE)(255 - (int)alpha);
     GX_PFN_SetLayeredWindowAttributes pfn;
-    if (!g_hwnd) return;
-    SetWindowLongA(g_hwnd, GWL_EXSTYLE,
-                   GetWindowLongA(g_hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
+    if (!g_gx_hwnd) return;
+    SetWindowLongA(g_gx_hwnd, GWL_EXSTYLE,
+                   GetWindowLongA(g_gx_hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
     pfn = gxGetSLWA();
-    if (pfn) pfn(g_hwnd, 0, opacity, LWA_ALPHA);
+    if (pfn) pfn(g_gx_hwnd, 0, opacity, LWA_ALPHA);
 }
 /* Returns the same transparency that setwindowalpha() takes: 0 = opaque,
  * 255 = invisible.  A window that is not layered at all is opaque, i.e. 0. */
@@ -8070,55 +8108,55 @@ GX_INLINE BYTE getwindowalpha(void) {
     BYTE a = 255;
     DWORD f = 0;
     GX_PFN_GetLayeredWindowAttributes pfn;
-    if (!g_hwnd) return ALPHA_OPAQUE;
+    if (!g_gx_hwnd) return ALPHA_OPAQUE;
     pfn = gxGetGLWA();
     if (!pfn) return ALPHA_OPAQUE;
-    if (!pfn(g_hwnd, NULL, &a, &f)) return ALPHA_OPAQUE;
+    if (!pfn(g_gx_hwnd, NULL, &a, &f)) return ALPHA_OPAQUE;
     if (!(f & LWA_ALPHA)) return ALPHA_OPAQUE;
     return (BYTE)(255 - (int)a);
 }
 
 /* Keep the window in front of every other window (or release it again). */
 GX_INLINE void setwindowtopmost(bool on) {
-    if (!g_hwnd) return;
-    SetWindowPos(g_hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST,
+    if (!g_gx_hwnd) return;
+    SetWindowPos(g_gx_hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST,
                  0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 GX_INLINE bool getwindowtopmost(void) {
-    if (!g_hwnd) return false;
-    return (GetWindowLongA(g_hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+    if (!g_gx_hwnd) return false;
+    return (GetWindowLongA(g_gx_hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 }
 
-static void BeginBatchDraw(void) { g_batchDraw = true; }
+static void BeginBatchDraw(void) { g_gx_batchDraw = true; }
 static void gx_endbatch4(int l, int t, int r, int b) {
     (void)l; (void)t; (void)r; (void)b;
-    g_batchDraw = false;
+    g_gx_batchDraw = false;
     gxFlush(); gxPump(); gxPresent();
 }
 
 typedef BOOL (WINAPI *PFNWGLSWAPINTERVALEXT)(int);
-static PFNWGLSWAPINTERVALEXT g_wglSwapIntervalEXT = 0;
+static PFNWGLSWAPINTERVALEXT g_gx_wglSwapIntervalEXT = 0;
 /* Two separate values, mirroring setaasamples():
- *   g_reqVsync - what the program asked for.  Survives closegraph(), so
+ *   g_gx_reqVsync - what the program asked for.  Survives closegraph(), so
  *                initgraph() can reapply it to the new window.
- *   g_vsyncOn  - what actually took effect, reported by getvsync().
+ *   g_gx_vsyncOn  - what actually took effect, reported by getvsync().
  * This matters because wglSwapIntervalEXT() belongs to a HDC: a new window
  * has a new HDC, which starts at the driver default (usually vsync ON).
  * Without reapplying, setvsync(false) silently reverted on every recreate. */
-static bool g_reqVsync = false;
-static bool g_vsyncOn = false;
+static bool g_gx_reqVsync = false;
+static bool g_gx_vsyncOn = false;
 
 static bool setvsync(bool on) {
-    g_reqVsync = on;
-    if (!g_glReady || !g_hglrc) return false;   /* applied by initgraph() */
-    if (!g_wglSwapIntervalEXT)
-        g_wglSwapIntervalEXT =
+    g_gx_reqVsync = on;
+    if (!g_gx_glReady || !g_gx_hglrc) return false;   /* applied by initgraph() */
+    if (!g_gx_wglSwapIntervalEXT)
+        g_gx_wglSwapIntervalEXT =
             (PFNWGLSWAPINTERVALEXT)wglGetProcAddress("wglSwapIntervalEXT");
-    if (!g_wglSwapIntervalEXT) { g_vsyncOn = false; return false; }
-    g_vsyncOn = (g_wglSwapIntervalEXT(on ? 1 : 0) != FALSE);
-    return g_vsyncOn;
+    if (!g_gx_wglSwapIntervalEXT) { g_gx_vsyncOn = false; return false; }
+    g_gx_vsyncOn = (g_gx_wglSwapIntervalEXT(on ? 1 : 0) != FALSE);
+    return g_gx_vsyncOn;
 }
-static bool getvsync(void) { return g_vsyncOn; }
+static bool getvsync(void) { return g_gx_vsyncOn; }
 
 /* Called once the context exists, and again after every recreate: push the
  * requested settings that live on per-window objects back onto them. */
@@ -8128,11 +8166,11 @@ static void gxApplyWindowState(void) {
      * resize to the size the window really has once the frame is the one
      * the program asked for.  A no-op when the style already matches. */
     gxRestoreVarWin();
-    setvsync(g_reqVsync);
+    setvsync(g_gx_reqVsync);
     gxMsaaCreate();
     /* Same treatment as vsync and MSAA: a rebuilt context must come back
-     * with the filter the program asked for.  g_imgFilter survives
-     * closegraph(); g_curFilter is the value commands are tagged with, and
+     * with the filter the program asked for.  g_gx_imgFilter survives
+     * closegraph(); g_gx_curFilter is the value commands are tagged with, and
      * it has to agree with it again after a rebuild. */
     gxRestoreFilter();
     gxRestoreDpiFix();
@@ -8173,16 +8211,16 @@ static void gxMirrorTo(IMAGE* dst, const IMAGE* src, bool horz) {
     dst->logH = src->logH;
 
     gxFlush();
-    saveWork = g_workImg;
-    sX = g_scaleX; sY = g_scaleY; oX = g_originX; oY = g_originY;
+    saveWork = g_gx_workImg;
+    sX = g_gx_scaleX; sY = g_gx_scaleY; oX = g_gx_originX; oY = g_gx_originY;
     /* The quad is emitted in dst's own pixel space, so the caller's
      * setorigin() / setaspectratio() must not be applied on top of it. */
-    g_scaleX = 1.f; g_scaleY = 1.f; g_originX = 0.f; g_originY = 0.f;
-    g_workImg = dst;
+    g_gx_scaleX = 1.f; g_gx_scaleY = 1.f; g_gx_originX = 0.f; g_gx_originY = 0.f;
+    g_gx_workImg = dst;
     gxSyncWorkTarget();
     gxUpdateProj();
     gxBindTarget();
-    if (g_glReady) glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (g_gx_glReady) glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
 
     /* A freshly allocated texture holds whatever was in the memory, and a
      * source with transparent parts leaves those parts alone because the
@@ -8200,15 +8238,15 @@ static void gxMirrorTo(IMAGE* dst, const IMAGE* src, bool horz) {
     gxSetTex(src->tex, 2);
     gxQuadTex(0.f, 0.f, w, h, u0, v0, u1, v1, WHITE);
     gxSetTex(0, 0);
-    gxSetRop(g_rop2);
+    gxSetRop(g_gx_rop2);
     gxFlush();
 
-    g_scaleX = sX; g_scaleY = sY; g_originX = oX; g_originY = oY;
-    g_workImg = saveWork;
+    g_gx_scaleX = sX; g_gx_scaleY = sY; g_gx_originX = oX; g_gx_originY = oY;
+    g_gx_workImg = saveWork;
     gxSyncWorkTarget();
     gxUpdateProj();
     gxBindTarget();
-    if (g_glReady) glUniformMatrix4fv(g_uProj, 1, GL_FALSE, g_proj);
+    if (g_gx_glReady) glUniformMatrix4fv(g_gx_uProj, 1, GL_FALSE, g_gx_proj);
 }
 
 GX_INLINE void flipimage(IMAGE* dst, const IMAGE* src) {
@@ -8228,18 +8266,18 @@ GX_INLINE void mirrorimage(IMAGE* dst, const IMAGE* src) {
  *
  * getfps() / getframetime() report a smoothed average, not the last frame:
  * an instantaneous value jitters too much to be read off a HUD. */
-static LARGE_INTEGER g_fpsFreq, g_fpsLast, g_fpsMark;
-static int    g_fpsFrames = 0;
-static double g_fpsValue = 0.0, g_fpsMs = 0.0;
-static double g_targetFps = 0.0;   /* 0 = unlimited */
-static bool   g_fpsInit = false;
+static LARGE_INTEGER g_gx_fpsFreq, g_gx_fpsLast, g_gx_fpsMark;
+static int    g_gx_fpsFrames = 0;
+static double g_gx_fpsValue = 0.0, g_gx_fpsMs = 0.0;
+static double g_gx_targetFps = 0.0;   /* 0 = unlimited */
+static bool   g_gx_fpsInit = false;
 
 static void gxFpsInit(void) {
-    if (g_fpsInit) return;
-    QueryPerformanceFrequency(&g_fpsFreq);
-    QueryPerformanceCounter(&g_fpsLast);
-    g_fpsMark = g_fpsLast;
-    g_fpsInit = true;
+    if (g_gx_fpsInit) return;
+    QueryPerformanceFrequency(&g_gx_fpsFreq);
+    QueryPerformanceCounter(&g_gx_fpsLast);
+    g_gx_fpsMark = g_gx_fpsLast;
+    g_gx_fpsInit = true;
 }
 
 /* Called once per presented frame: keep the counters, then - if a target
@@ -8247,42 +8285,42 @@ static void gxFpsInit(void) {
 static void gxFpsTick(void) {
     LARGE_INTEGER now;
     double el;
-    if (!g_fpsInit) gxFpsInit();
-    if (g_fpsFreq.QuadPart <= 0) return;
+    if (!g_gx_fpsInit) gxFpsInit();
+    if (g_gx_fpsFreq.QuadPart <= 0) return;
     QueryPerformanceCounter(&now);
-    g_fpsFrames++;
+    g_gx_fpsFrames++;
     /* Average over ~0.25 s so the number is stable but still responsive. */
-    el = (double)(now.QuadPart - g_fpsMark.QuadPart) / (double)g_fpsFreq.QuadPart;
+    el = (double)(now.QuadPart - g_gx_fpsMark.QuadPart) / (double)g_gx_fpsFreq.QuadPart;
     if (el >= 0.25) {
-        g_fpsValue = (double)g_fpsFrames / el;
-        g_fpsMs    = el * 1000.0 / (double)g_fpsFrames;
-        g_fpsMark  = now;
-        g_fpsFrames = 0;
+        g_gx_fpsValue = (double)g_gx_fpsFrames / el;
+        g_gx_fpsMs    = el * 1000.0 / (double)g_gx_fpsFrames;
+        g_gx_fpsMark  = now;
+        g_gx_fpsFrames = 0;
     }
-    if (g_targetFps > 0.0) {
-        double want = 1.0 / g_targetFps;
-        double used = (double)(now.QuadPart - g_fpsLast.QuadPart)
-                      / (double)g_fpsFreq.QuadPart;
+    if (g_gx_targetFps > 0.0) {
+        double want = 1.0 / g_gx_targetFps;
+        double used = (double)(now.QuadPart - g_gx_fpsLast.QuadPart)
+                      / (double)g_gx_fpsFreq.QuadPart;
         if (used < want) {
             DWORD ms = (DWORD)((want - used) * 1000.0);
             if (ms > 0) Sleep(ms);
         }
     }
-    g_fpsLast = now;
-    QueryPerformanceCounter(&g_fpsLast);   /* the sleep is not counted */
+    g_gx_fpsLast = now;
+    QueryPerformanceCounter(&g_gx_fpsLast);   /* the sleep is not counted */
 }
 
-GX_INLINE double getfps(void)       { return g_fpsValue; }
-GX_INLINE double getframetime(void) { return g_fpsMs; }
+GX_INLINE double getfps(void)       { return g_gx_fpsValue; }
+GX_INLINE double getframetime(void) { return g_gx_fpsMs; }
 
 /* Cap the frame rate in software.  fps <= 0 removes the cap.  With vsync
  * on this is redundant (the display already sets the pace) and harmless:
  * the target is only ever slept towards, never waited past. */
 GX_INLINE void settargetfps(double fps) {
-    g_targetFps = (fps > 0.0 && fps < 10000.0) ? fps : 0.0;
+    g_gx_targetFps = (fps > 0.0 && fps < 10000.0) ? fps : 0.0;
     gxFpsInit();
 }
-GX_INLINE double gettargetfps(void) { return g_targetFps; }
+GX_INLINE double gettargetfps(void) { return g_gx_targetFps; }
 
 /*======================================================================
  * 17b. Helpers used by the EasyX compatible dispatch macros
@@ -8299,7 +8337,7 @@ static const WCHAR* gxWiden(const char* s) {
     n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, 1024);
     if (n <= 0)
 #endif
-        n = MultiByteToWideChar(g_codePage, 0, s, -1, out, 1024);
+        n = MultiByteToWideChar(g_gx_codePage, 0, s, -1, out, 1024);
     if (n <= 0) out[0] = 0;
     return out;
 }
@@ -8390,14 +8428,14 @@ static bool gx_ibA(char* out, int n, const char* prompt, const char* title,
          * half written character, which is why the old code dropped the
          * whole answer.  Give back a character less until it fits, so the
          * tail is cut on a character boundary. */
-        int len = WideCharToMultiByte(g_codePage, 0, buf, -1, out, n, NULL, NULL);
+        int len = WideCharToMultiByte(g_gx_codePage, 0, buf, -1, out, n, NULL, NULL);
         if (len <= 0) {
             int k = 0;
             while (buf[k]) k++;
             len = 0;
             while (k > 0 && len <= 0) {
                 k--;
-                len = WideCharToMultiByte(g_codePage, 0, buf, k, out, n, NULL, NULL);
+                len = WideCharToMultiByte(g_gx_codePage, 0, buf, k, out, n, NULL, NULL);
             }
             if (len <= 0)      out[0] = 0;
             else if (len >= n) out[n - 1] = 0;
@@ -8446,8 +8484,8 @@ static int gx_msgboxA(const char* text, const char* cap, UINT type) {
 
 /*----------------------------- device --------------------------------*/
 static GX_UNUSED void getaspectratio(float* pxasp, float* pyasp) {
-    if (pxasp) *pxasp = g_scaleX;
-    if (pyasp) *pyasp = g_scaleY;
+    if (pxasp) *pxasp = g_gx_scaleX;
+    if (pyasp) *pyasp = g_gx_scaleY;
 }
 
 /* EasyX: restore every device setting to its default value. */
@@ -8461,16 +8499,16 @@ static GX_UNUSED void graphdefaults(void) {
  * and without a border, whatever the current brush is. */
 static void gxBkBegin(FILLSTYLE* saveFs, COLORREF* saveFc) {
     gxFlush();
-    *saveFs = g_fillStyle;
-    *saveFc = g_fillColor;
-    g_fillStyle.style = BS_SOLID;
-    g_fillStyle.hatch = 0;
-    g_fillStyle.ppattern = NULL;
-    g_fillColor = g_bkColor;
+    *saveFs = g_gx_fillStyle;
+    *saveFc = g_gx_fillColor;
+    g_gx_fillStyle.style = BS_SOLID;
+    g_gx_fillStyle.hatch = 0;
+    g_gx_fillStyle.ppattern = NULL;
+    g_gx_fillColor = g_gx_bkColor;
 }
 static void gxBkEnd(const FILLSTYLE* saveFs, COLORREF saveFc) {
-    g_fillStyle = *saveFs;
-    g_fillColor = saveFc;
+    g_gx_fillStyle = *saveFs;
+    g_gx_fillColor = saveFc;
     gxCheckFlush();
 }
 
@@ -8542,10 +8580,10 @@ static void gxBezierSeg(float x0, float y0, float x1, float y1,
  * layout - points 0, 3, 6, ... are anchors, the two between them are the
  * control points of that cubic. */
 static GX_UNUSED void polybezier(const POINT* pts, int n) {
-    float w = (float)g_lineWidth;
+    float w = (float)g_gx_lineWidth;
     int i;
     if (!pts || n < 4) return;
-    if (g_lineStyle.style == PS_NULL) return;
+    if (g_gx_lineStyle.style == PS_NULL) return;
     gxDashReset();
     gxSetTex(0, 0);
     for (i = 0; i + 3 < n; i += 3)
@@ -8553,7 +8591,7 @@ static GX_UNUSED void polybezier(const POINT* pts, int n) {
                     (float)pts[i + 1].x, (float)pts[i + 1].y,
                     (float)pts[i + 2].x, (float)pts[i + 2].y,
                     (float)pts[i + 3].x, (float)pts[i + 3].y,
-                    g_lineColor, w);
+                    g_gx_lineColor, w);
     gxCheckFlush();
 }
 
@@ -8585,7 +8623,7 @@ static void gxSetTextStyleW(int h, int wdth, const WCHAR* face,
         }
     }
     if (lf.lfFaceName[0] == 0) strcpy(lf.lfFaceName, "System");
-    g_font = lf;
+    g_gx_font = lf;
 }
 static void gxSetTextStyleA(int h, int wdth, const char* face,
                             int esc, int orient, int weight,
@@ -8696,11 +8734,11 @@ static bool getimagefilter(void);
  * library: setfontmode(GLF_INT), setblendmode(GX_BLEND_ADD),
  * setfiltermode(GLL_LINEAR). */
 /* Re-assert the filter after a context rebuild (initgraph() goes through
- * gxApplyWindowState()).  g_imgFilter survives closegraph() because it is a
+ * gxApplyWindowState()).  g_gx_imgFilter survives closegraph() because it is a
  * plain static, so this only has to bring the per-command value back in line
  * with it. */
 static void gxRestoreFilter(void) {
-    g_curFilter = g_imgFilter;
+    g_gx_curFilter = g_gx_imgFilter;
 }
 
 GX_INLINE void setfiltermode(int mode) {
@@ -8712,17 +8750,17 @@ GX_INLINE int getfiltermode(void) {
 
 GX_INLINE void setimagefilter(bool smooth) {
     int n = smooth ? 1 : 0;
-    if (n == g_curFilter) return;
+    if (n == g_gx_curFilter) return;
     /* Close the open batch BEFORE switching, so the primitives queued so
      * far keep the filter they were drawn with.  Without this, two
      * putimage() calls on the same texture merge into one command and both
      * end up with whichever filter was set last - which is why "NEAREST on
      * the left, LINEAR on the right" used to look identical. */
     gxEndCmd();
-    g_curFilter = n;
-    g_imgFilter = n;
+    g_gx_curFilter = n;
+    g_gx_imgFilter = n;
 }
-GX_INLINE bool getimagefilter(void) { return g_imgFilter != 0; }
+GX_INLINE bool getimagefilter(void) { return g_gx_imgFilter != 0; }
 
 /* GX_IMGBUF_DISCARD tells GetImageBuffer() to skip the GPU -> CPU read
  * back, for callers that overwrite every pixel anyway (software
@@ -8730,13 +8768,13 @@ GX_INLINE bool getimagefilter(void) { return g_imgFilter != 0; }
  * upload into a single upload. */
 #define GX_IMGBUF_READ     0   /* default: read the target back (EasyX)   */
 #define GX_IMGBUF_DISCARD  1   /* caller overwrites everything: no read   */
-static bool g_imgBufDiscard = false;
+static bool g_gx_imgBufDiscard = false;
 
 GX_INLINE void setimagebuffermode(int mode) {
-    g_imgBufDiscard = (mode == GX_IMGBUF_DISCARD);
+    g_gx_imgBufDiscard = (mode == GX_IMGBUF_DISCARD);
 }
 GX_INLINE int getimagebuffermode(void) {
-    return g_imgBufDiscard ? GX_IMGBUF_DISCARD : GX_IMGBUF_READ;
+    return g_gx_imgBufDiscard ? GX_IMGBUF_DISCARD : GX_IMGBUF_READ;
 }
 
 /* EasyX: DWORD* GetImageBuffer(IMAGE* pImg = NULL) - a CPU side copy of
@@ -8749,36 +8787,36 @@ GX_INLINE int getimagebuffermode(void) {
  * the latest, which matches what a double buffered EasyX program sees. */
 typedef struct GxImgBuf { IMAGE* img; DWORD* data; int w, h; int dirty; } GxImgBuf;
 GX_DEFINE_ARRAY(GxImgBufVec, GxImgBuf)
-static GxImgBufVec g_imgBufs;
+static GxImgBufVec g_gx_imgBufs;
 
 static GxImgBuf* gxImgBufFind(IMAGE* img) {
     size_t i;
-    for (i = 0; i < g_imgBufs.size; i++)
-        if (g_imgBufs.data[i].img == img) return &g_imgBufs.data[i];
+    for (i = 0; i < g_gx_imgBufs.size; i++)
+        if (g_gx_imgBufs.data[i].img == img) return &g_gx_imgBufs.data[i];
     return NULL;
 }
 static void gxImgBufDrop(IMAGE* img) {
     size_t i;
-    for (i = 0; i < g_imgBufs.size; i++) {
-        if (g_imgBufs.data[i].img != img) continue;
-        free(g_imgBufs.data[i].data);
-        g_imgBufs.data[i] = g_imgBufs.data[g_imgBufs.size - 1];
-        g_imgBufs.size--;
+    for (i = 0; i < g_gx_imgBufs.size; i++) {
+        if (g_gx_imgBufs.data[i].img != img) continue;
+        free(g_gx_imgBufs.data[i].data);
+        g_gx_imgBufs.data[i] = g_gx_imgBufs.data[g_gx_imgBufs.size - 1];
+        g_gx_imgBufs.size--;
         return;
     }
 }
 static void gxImgBufDropAll(void) {
     size_t i;
-    for (i = 0; i < g_imgBufs.size; i++) free(g_imgBufs.data[i].data);
-    GxImgBufVec_clear(&g_imgBufs);
+    for (i = 0; i < g_gx_imgBufs.size; i++) free(g_gx_imgBufs.data[i].data);
+    GxImgBufVec_clear(&g_gx_imgBufs);
 }
 static void gxSyncImgBufs(void) {
     size_t i;
     unsigned char* flip;
     GLuint tex;
-    if (!g_glReady) return;
-    for (i = 0; i < g_imgBufs.size; i++) {
-        GxImgBuf* b = &g_imgBufs.data[i];
+    if (!g_gx_glReady) return;
+    for (i = 0; i < g_gx_imgBufs.size; i++) {
+        GxImgBuf* b = &g_gx_imgBufs.data[i];
         int row;
         if (!b->dirty || !b->data || b->w < 1 || b->h < 1) continue;
         if (b->img) {
@@ -8786,8 +8824,8 @@ static void gxSyncImgBufs(void) {
                 || b->img->height != b->h) { b->dirty = 0; continue; }
             tex = b->img->tex;
         } else {
-            if (g_target->w != b->w || g_target->h != b->h) { b->dirty = 0; continue; }
-            tex = g_target->tex;
+            if (g_gx_target->w != b->w || g_gx_target->h != b->h) { b->dirty = 0; continue; }
+            tex = g_gx_target->tex;
         }
         if (!tex) { b->dirty = 0; continue; }
         /* alpha is 0 in the client buffer but the texture needs 255; the
@@ -8815,14 +8853,14 @@ static DWORD* gxGetImageBuffer(IMAGE* img) {
     unsigned char* dst;
     GLuint fbo;
     int w, h, row;
-    if (!g_glReady) return NULL;
+    if (!g_gx_glReady) return NULL;
     gxSyncImgBufs();     /* land edits from a previous call first */
     gxFlush();
     if (img && gxImageOk(img)) {
         fbo = img->fbo; w = img->width; h = img->height;
     } else {
         img = NULL;
-        fbo = g_target->fbo; w = g_target->w; h = g_target->h;
+        fbo = g_gx_target->fbo; w = g_gx_target->w; h = g_gx_target->h;
     }
     if (!fbo || w < 1 || h < 1) return NULL;
     b = gxImgBufFind(img);
@@ -8830,8 +8868,8 @@ static DWORD* gxGetImageBuffer(IMAGE* img) {
         GxImgBuf nb;
         memset(&nb, 0, sizeof(nb));
         nb.img = img;
-        GxImgBufVec_pushv(&g_imgBufs, nb);
-        b = &g_imgBufs.data[g_imgBufs.size - 1];
+        GxImgBufVec_pushv(&g_gx_imgBufs, nb);
+        b = &g_gx_imgBufs.data[g_gx_imgBufs.size - 1];
     }
     if (!b->data || b->w != w || b->h != h) {
         free(b->data);
@@ -8839,14 +8877,14 @@ static DWORD* gxGetImageBuffer(IMAGE* img) {
         b->w = w; b->h = h;
         if (!b->data) return NULL;
     }
-    if (!g_imgBufDiscard) {
+    if (!g_gx_imgBufDiscard) {
         tmp = gxScratch(0, (size_t)w * (size_t)h * 4);
         if (!tmp) return NULL;
         glBindFramebuffer(GL_FRAMEBUFFER, gxReadFbo(fbo));
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
         glPixelStorei(GL_PACK_ALIGNMENT, 4);
-        glBindFramebuffer(GL_FRAMEBUFFER, g_target->fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target->fbo);
         /* glReadPixels is bottom-up, the client buffer is top-down, and an
          * EasyX buffer carries alpha 0.  Clearing alpha is fused into the
          * flip so each row is still in cache - a second full pass over the
@@ -8875,13 +8913,13 @@ static void gx_flushmsg1(BYTE filter) {
     int i, nk = 0;
     gxPump();
     if (filter == 0xFF) { gxMsgInit(); return; }
-    for (i = 0; i < g_msgCount; i++)
+    for (i = 0; i < g_gx_msgCount; i++)
         if (!gxMsgIsType(gxMsgAt(i)->message, filter))
             keep[nk++] = *gxMsgAt(i);
     gxMsgInit();
     for (i = 0; i < nk; i++) gxMsgPush(&keep[i]);
 }
-static GX_UNUSED void setcapture(void) { if (g_hwnd) SetCapture(g_hwnd); }
+static GX_UNUSED void setcapture(void) { if (g_gx_hwnd) SetCapture(g_gx_hwnd); }
 static GX_UNUSED void releasecapture(void) { ReleaseCapture(); }
 static GX_UNUSED bool gx_peekmousemsg1(MOUSEMSG* m) {
     return gxPeekMouse(m, (BYTE)EM_MOUSE, true);
@@ -8910,7 +8948,7 @@ static GX_UNUSED const char* GetEasyGLVer(void) { return EASYGL_VERSION; }
  * Before initgraph() there is no context at all, hence the "n/a". */
 static const char* gxGLStr(int name) {
     const unsigned char* s;
-    if (!g_glReady || !gxGetString) return "n/a";
+    if (!g_gx_glReady || !gxGetString) return "n/a";
     s = gxGetString((GLenum)name);
     return s ? (const char*)s : "n/a";
 }
@@ -8922,31 +8960,31 @@ GX_INLINE const char* getglslver(void)     { return gxGLStr(GL_SHADING_LANGUAGE_
 /* The adapter name and the current display mode come from Win32, not from
  * GL, so they are available even without a context.  Both are looked up
  * once and then cached. */
-static char g_adapterName[160];
-static char g_displayMode[160];
-static bool g_adapterDone = false;
+static char g_gx_adapterName[160];
+static char g_gx_displayMode[160];
+static bool g_gx_adapterDone = false;
 
 static void gxAdapterOnce(void) {
     DISPLAY_DEVICEA dd;
     DEVMODEA dm;
-    if (g_adapterDone) return;
-    g_adapterDone = true;
-    strcpy(g_adapterName, "n/a");
-    strcpy(g_displayMode, "n/a");
+    if (g_gx_adapterDone) return;
+    g_gx_adapterDone = true;
+    strcpy(g_gx_adapterName, "n/a");
+    strcpy(g_gx_displayMode, "n/a");
     memset(&dd, 0, sizeof(dd));
     dd.cb = (DWORD)sizeof(dd);
     if (EnumDisplayDevicesA(0, 0, &dd, 0))
-        strncpy(g_adapterName, dd.DeviceString, sizeof(g_adapterName) - 1);
+        strncpy(g_gx_adapterName, dd.DeviceString, sizeof(g_gx_adapterName) - 1);
     memset(&dm, 0, sizeof(dm));
     dm.dmSize = (WORD)sizeof(dm);
     if (EnumDisplaySettingsA(0, ENUM_CURRENT_SETTINGS, &dm))
-        sprintf(g_displayMode, "%lux%lu %luHz %lubpp",
+        sprintf(g_gx_displayMode, "%lux%lu %luHz %lubpp",
                 (unsigned long)dm.dmPelsWidth, (unsigned long)dm.dmPelsHeight,
                 (unsigned long)dm.dmDisplayFrequency,
                 (unsigned long)dm.dmBitsPerPel);
 }
-GX_INLINE const char* getadapterinfo(void) { gxAdapterOnce(); return g_adapterName; }
-GX_INLINE const char* getdisplaymode(void) { gxAdapterOnce(); return g_displayMode; }
+GX_INLINE const char* getadapterinfo(void) { gxAdapterOnce(); return g_gx_adapterName; }
+GX_INLINE const char* getdisplaymode(void) { gxAdapterOnce(); return g_gx_displayMode; }
 
 /*------------------- graphics.h (BGI) leftovers -----------------------*/
 static GX_UNUSED void bar(double l, double t, double r, double b) {
@@ -8954,10 +8992,10 @@ static GX_UNUSED void bar(double l, double t, double r, double b) {
 }
 static GX_UNUSED void bar3d(double l, double t, double r, double b, int depth, bool topflag) {
     POINT p[4];
-    COLORREF save = g_fillColor;
+    COLORREF save = g_gx_fillColor;
     bar(l, t, r, b);
     if (depth == 0) return;
-    g_fillColor = save;
+    g_gx_fillColor = save;
     p[0].x = (LONG)r;            p[0].y = (LONG)t;
     p[1].x = (LONG)(r + depth);  p[1].y = (LONG)(t - depth);
     p[2].x = (LONG)(r + depth);  p[2].y = (LONG)(b - depth);
@@ -9909,6 +9947,676 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
 
 #endif /* __cplusplus */
 
-#endif /* EASYGL_H */
 
+/* GL enums that a stock GL 1.1 gl.h does not define.  easygl only needs a
+ * handful of them itself, so the rest arrive with the mesh interface. */
+#ifndef GL_FRAMEBUFFER_BINDING
+#define GL_FRAMEBUFFER_BINDING            0x8CA6
+#endif
+#ifndef GL_CURRENT_PROGRAM
+#define GL_CURRENT_PROGRAM                0x8B8D
+#endif
+#ifndef GL_ARRAY_BUFFER_BINDING
+#define GL_ARRAY_BUFFER_BINDING           0x8894
+#endif
+#ifndef GL_ACTIVE_TEXTURE
+#define GL_ACTIVE_TEXTURE                 0x84E0
+#endif
+#ifndef GL_TEXTURE_BINDING_2D
+#define GL_TEXTURE_BINDING_2D             0x8069
+#endif
+#ifndef GL_VERTEX_ATTRIB_ARRAY_ENABLED
+#define GL_VERTEX_ATTRIB_ARRAY_ENABLED    0x8622
+#endif
+#ifndef GL_DEPTH_COMPONENT24
+#define GL_DEPTH_COMPONENT24              0x81A6
+#endif
+#ifndef GL_DEPTH_COMPONENT16
+#define GL_DEPTH_COMPONENT16              0x81A5
+#endif
+#ifndef GL_DEPTH_ATTACHMENT
+#define GL_DEPTH_ATTACHMENT               0x8D00
+#endif
+#ifndef GL_RENDERBUFFER
+#define GL_RENDERBUFFER                   0x8D41
+#endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER
+#define GL_ELEMENT_ARRAY_BUFFER           0x8893
+#endif
+#ifndef GL_TRIANGLE_FAN
+#define GL_TRIANGLE_FAN                   0x0006
+#endif
+
+/*======================================================================
+ *  20. GPU mesh interface  (EASYGL extension, no EasyX counterpart)
+ *====================================================================*/
+/* Why this exists
+ * ---------------
+ * A software rasteriser has to pay for every pixel on every frame: shade
+ * it, then hand the finished frame to the GPU as a texture.  A 1280x720
+ * canvas is 921600 pixels, so that is 3.7 MB of upload per frame on top of
+ * the CPU shading -- and it is the reason a voxel world crawls while the
+ * same hardware runs Minecraft at hundreds of frames per second.
+ *
+ * The world is static.  That is what makes the fix possible: upload the
+ * geometry once, then let the GPU replay it with one draw call per frame.
+ * No CPU shading, no upload, no per pixel work at all.
+ *
+ * Three calls a frame:
+ *
+ *     if (gxmeshbegin()) {
+ *         gxmeshdraw(mesh, mvp, atlas);
+ *         gxmeshend();
+ *     } else {
+ *         ... software fallback ...
+ *     }
+ *
+ * gxmeshbegin() returns false forever if the driver cannot do it, so the
+ * fallback is a normal supported path and not dead code.
+ *
+ * State hygiene
+ * -------------
+ * easygl keeps vertex attribute arrays 0/1/2 enabled and pointed at its
+ * own vertex buffer, and OpenGL ignores the fixed function arrays whenever
+ * a generic array of the same index is enabled.  A mesh therefore gets its
+ * own VAO, which carries its own attribute bindings and cannot be clobbered
+ * by easygl's calls.  Where VAOs are unavailable the enable bits are saved
+ * and restored instead.  Everything else -- program, framebuffer, viewport,
+ * viewport, blend, depth, texture unit -- is saved and restored too, so
+ * easygl's 2D drawing is unaffected.
+ */
+
+typedef struct GXMESH {
+    GLuint vao, vbo, ibo;      /* GL names; vao is 0 where unsupported     */
+    int    nv, ni;             /* vertex count, index count                */
+} GXMESH;
+
+/* Vertex layout: x,y,z, u,v, r,g,b -- 8 floats, 32 bytes, interleaved.
+ * r/g/b are a multiplier in 0..1, so per face lighting costs nothing. */
+#define GXMESH_STRIDE 8
+
+static GLuint g_gx_gmProg = 0;
+static GLint  g_gx_gmUmvp = -1, g_gx_gmUtex = -1, g_gx_gmUuseTex = -1, g_gx_gmUflip = -1;
+static GLint  g_gx_gmUeye = -1, g_gx_gmUfog = -1, g_gx_gmUfogCol = -1;
+static GLuint g_gx_gmFbo = 0, g_gx_gmTex = 0, g_gx_gmRb = 0, g_gx_gmQuad = 0;
+static int    g_gx_gmW = 0, g_gx_gmH = 0;
+static int    g_gx_gmTried = 0, g_gx_gmOk = 0;
+static GLuint g_gx_gmQuadVao = 0;         /* the composite quad's own VAO     */
+static int    g_gx_gmIn = 0;              /* 1 while a 3D pass is open        */
+static int    g_gx_gmFlip = 0;            /* 0 = image already upright        */
+static float  g_gx_gmFogNear = 1.0e30f, g_gx_gmFogFar = 2.0e30f;
+static float  g_gx_gmFogCol[3] = { 0.588f, 0.725f, 0.882f };
+static float  g_gx_gmEye[3] = { 0, 0, 0 };
+
+static const char* GX_GM_VS =
+    "#version 120\n"
+    "attribute vec3 aPos;\n"
+    "attribute vec2 aUV;\n"
+    "attribute vec3 aColor;\n"
+    "uniform mat4 uMVP;\n"
+    "uniform float uFlip;\n"
+    "uniform vec3 uEye;\n"
+    "varying vec2 vUV;\n"
+    "varying vec3 vColor;\n"
+    "varying float vDist;\n"
+    "void main(){\n"
+    "  vUV = aUV; vColor = aColor;\n"
+    "  vDist = distance(aPos, uEye);\n"
+    "  vec4 p = uMVP * vec4(aPos, 1.0);\n"
+    "  p.y *= uFlip;\n"
+    "  gl_Position = p;\n"
+    "}\n";
+
+static const char* GX_GM_FS =
+    "#version 120\n"
+    "uniform sampler2D uTex;\n"
+    "uniform int uUseTex;\n"
+    "uniform vec2 uFog;\n"
+    "uniform vec3 uFogCol;\n"
+    "varying vec2 vUV;\n"
+    "varying vec3 vColor;\n"
+    "varying float vDist;\n"
+    "void main(){\n"
+    "  vec4 t = texture2D(uTex, vUV);\n"
+    "  vec3 c = (uUseTex == 1) ? t.rgb * vColor : vColor;\n"
+    /* Alpha is the composite mask, not the texture's: meshbegin() clears the
+     * offscreen target to alpha 0 and meshend() blends it over whatever 2D
+     * drawing is already on the canvas, so a fragment that took its alpha
+     * from the texture would blend itself away and leave only the sky. */
+    "  float a = 1.0;\n"
+    "  float f = clamp((vDist - uFog.x) / max(uFog.y - uFog.x, 0.0001), 0.0, 1.0);\n"
+    "  f *= f;\n"
+    "  gl_FragColor = vec4(mix(c, uFogCol, f), a);\n"
+    "}\n";
+
+/* ---- saved GL state ------------------------------------------------ */
+typedef struct GxMeshSave {
+    GLint prog, fbo, vp[4], abuf, tex2d, activeTex;
+    GLint blend, depth, cull, scissor, depthFunc, depthMask, ibuf;
+    GLint attrOn[3];
+} GxMeshSave;
+
+/* Saved across meshbegin() .. meshend().  Declared here, not with the
+ * other statics, because the type above has to exist first. */
+static GxMeshSave g_gx_gmSave;
+
+static void gxmesh_push(GxMeshSave* s) {
+    glGetIntegerv(GL_CURRENT_PROGRAM, &s->prog);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s->fbo);
+    glGetIntegerv(GL_VIEWPORT, s->vp);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s->abuf);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &s->activeTex);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->tex2d);
+    s->blend    = glIsEnabled(GL_BLEND);
+    s->depth    = glIsEnabled(GL_DEPTH_TEST);
+    s->cull     = glIsEnabled(GL_CULL_FACE);
+    s->scissor  = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_DEPTH_FUNC, &s->depthFunc);
+    glGetIntegerv(GL_DEPTH_WRITEMASK, &s->depthMask);
+    if (!glBindVertexArray) {
+        glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &s->attrOn[0]);
+        glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &s->attrOn[1]);
+        glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &s->attrOn[2]);
+    } else { s->attrOn[0] = s->attrOn[1] = s->attrOn[2] = 0; }
+}
+
+static void gxmesh_pop(const GxMeshSave* s) {
+    glUseProgram((GLuint)s->prog);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)s->fbo);
+    glViewport(s->vp[0], s->vp[1], s->vp[2], s->vp[3]);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)s->abuf);
+    if (s->blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (s->depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (s->cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    if (s->scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    glDepthFunc((GLenum)s->depthFunc);
+    glDepthMask((GLboolean)s->depthMask);
+    glActiveTexture((GLenum)s->activeTex);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)s->tex2d);
+    if (!glBindVertexArray) {
+        glBindVertexArray(0);
+        if (s->attrOn[0]) glEnableVertexAttribArray(0);
+        if (s->attrOn[1]) glEnableVertexAttribArray(1);
+        if (s->attrOn[2]) glEnableVertexAttribArray(2);
+    } else glBindVertexArray(0);
+    /* easygl's pointers are still bound to its own VBO; nothing above
+     * overwrote them because a VAO of 0 was current while we drew. */
+}
+
+/* ---- lazy setup ---------------------------------------------------- */
+static int gxmesh_setup(void) {
+    if (g_gx_gmTried) return g_gx_gmOk;
+    g_gx_gmTried = 1;
+    if (!g_gx_glReady || !glCreateProgram) { g_gx_gmOk = 0; return 0; }
+
+    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    GLint ok = 0;
+    char log[512];
+    memset(log, 0, sizeof(log));
+    glShaderSource(vs, 1, &GX_GM_VS, NULL);
+    glCompileShader(vs);
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        glGetShaderInfoLog(vs, 511, NULL, log);
+        fprintf(stderr, "gxmesh: vertex shader\n%s\n", log);
+        glDeleteShader(vs); glDeleteShader(fs); return 0;
+    }
+    ok = 0;
+    glShaderSource(fs, 1, &GX_GM_FS, NULL);
+    glCompileShader(fs);
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        glGetShaderInfoLog(fs, 511, NULL, log);
+        fprintf(stderr, "gxmesh: fragment shader\n%s\n", log);
+        glDeleteShader(vs); glDeleteShader(fs); return 0;
+    }
+    g_gx_gmProg = glCreateProgram();
+    glAttachShader(g_gx_gmProg, vs);
+    glAttachShader(g_gx_gmProg, fs);
+    /* GLSL 120 has no layout qualifier: without this the driver picks the
+     * slots and the geometry reads whatever the disabled attributes
+     * default to.  This exact omission produced an all white window. */
+    glBindAttribLocation(g_gx_gmProg, 0, "aPos");
+    glBindAttribLocation(g_gx_gmProg, 1, "aUV");
+    glBindAttribLocation(g_gx_gmProg, 2, "aColor");
+    glLinkProgram(g_gx_gmProg);
+    glGetProgramiv(g_gx_gmProg, GL_LINK_STATUS, &ok);
+    glDeleteShader(vs); glDeleteShader(fs);
+    if (!ok) {
+        glGetProgramInfoLog(g_gx_gmProg, 511, NULL, log);
+        fprintf(stderr, "gxmesh: link\n%s\n", log);
+        glDeleteProgram(g_gx_gmProg); g_gx_gmProg = 0; return 0;
+    }
+    g_gx_gmUmvp    = glGetUniformLocation(g_gx_gmProg, "uMVP");
+    g_gx_gmUtex    = glGetUniformLocation(g_gx_gmProg, "uTex");
+    g_gx_gmUuseTex = glGetUniformLocation(g_gx_gmProg, "uUseTex");
+    g_gx_gmUflip   = glGetUniformLocation(g_gx_gmProg, "uFlip");
+    g_gx_gmUeye    = glGetUniformLocation(g_gx_gmProg, "uEye");
+    g_gx_gmUfog    = glGetUniformLocation(g_gx_gmProg, "uFog");
+    g_gx_gmUfogCol = glGetUniformLocation(g_gx_gmProg, "uFogCol");
+
+    /* full screen quad in clip space: pos3, uv2, rgb3 */
+    static const float quad[4 * 8] = {
+        -1, -1, 0,   0, 0,   1, 1, 1,
+         1, -1, 0,   1, 0,   1, 1, 1,
+         1,  1, 0,   1, 1,   1, 1, 1,
+        -1,  1, 0,   0, 1,   1, 1, 1,
+    };
+    glGenBuffers(1, &g_gx_gmQuad);
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_gmQuad);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    /* The composite quad needs its own VAO.  Setting the pointers with
+     * VAO 0 current would overwrite easygl's own bindings, which are only
+     * restored by enable bits, not by pointers. */
+    if (glGenVertexArrays) {
+        glGenVertexArrays(1, &g_gx_gmQuadVao);
+        if (g_gx_gmQuadVao) {
+            glBindVertexArray(g_gx_gmQuadVao);
+            glEnableVertexAttribArray(0);
+            glEnableVertexAttribArray(1);
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)0);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)12);
+            glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)20);
+            glBindVertexArray(0);
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    g_gx_gmOk = 1;
+    return 1;
+}
+
+/* The offscreen target is rebuilt whenever the canvas changes size.  It
+ * needs a depth attachment because the canvas framebuffer has none. */
+static int gxmesh_target(int w, int h) {
+    if (w < 1 || h < 1) return 0;
+    if (g_gx_gmFbo && w == g_gx_gmW && h == g_gx_gmH) return 1;
+
+    if (g_gx_gmFbo) {
+        glDeleteFramebuffers(1, &g_gx_gmFbo);
+        glDeleteTextures(1, &g_gx_gmTex);
+        glDeleteRenderbuffers(1, &g_gx_gmRb);
+        g_gx_gmFbo = g_gx_gmTex = g_gx_gmRb = 0;
+    }
+    glGenTextures(1, &g_gx_gmTex);
+    glBindTexture(GL_TEXTURE_2D, g_gx_gmTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+
+    glGenRenderbuffers(1, &g_gx_gmRb);
+    glBindRenderbuffer(GL_RENDERBUFFER, g_gx_gmRb);
+    /* 24 bit depth first; 16 is the fall back an old driver may insist on */
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    if (glGetError() != GL_NO_ERROR) {
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, w, h);
+        if (glGetError() != GL_NO_ERROR) {
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            return 0;
+        }
+    }
+    glGenFramebuffers(1, &g_gx_gmFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_gmFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_gx_gmTex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, g_gx_gmRb);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return 0;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    g_gx_gmW = w; g_gx_gmH = h;
+    return 1;
+}
+
+/* ---- public -------------------------------------------------------- */
+
+/* Upload static geometry.  verts is nv*8 floats, idx is ni indices.
+ * Returns NULL if GL is not up.  Upload once, draw every frame. */
+GX_INLINE GXMESH* gxcreatemesh(const float* verts, int nv,
+                               const unsigned int* idx, int ni) {
+    GXMESH* m;
+    if (!gxmesh_setup() || nv <= 0 || ni <= 0 || !verts || !idx) return NULL;
+    m = (GXMESH*)calloc(1, sizeof(GXMESH));
+    if (!m) return NULL;
+    m->nv = nv; m->ni = ni;
+
+    if (glGenVertexArrays) {
+        glGenVertexArrays(1, &m->vao);
+        if (m->vao) glBindVertexArray(m->vao);
+    }
+    glGenBuffers(1, &m->vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GXGLsizeiptr)((size_t)nv * GXMESH_STRIDE * sizeof(float)),
+                 verts, GL_STATIC_DRAW);
+    glGenBuffers(1, &m->ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GXGLsizeiptr)((size_t)ni * sizeof(unsigned int)),
+                 idx, GL_STATIC_DRAW);
+
+    if (m->vao) {
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)12);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)20);
+        glBindVertexArray(0);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    return m;
+}
+
+GX_INLINE void gxfreemesh(GXMESH* m) {
+    if (!m) return;
+    if (m->vao) glDeleteVertexArrays(1, &m->vao);
+    if (m->vbo) glDeleteBuffers(1, &m->vbo);
+    if (m->ibo) glDeleteBuffers(1, &m->ibo);
+    free(m);
+}
+
+/* Fog and eye.  Eye is only used to work out the fog distance. */
+GX_INLINE void gxmeshfog(float nearD, float farD, int r, int g, int b) {
+    g_gx_gmFogNear = nearD; g_gx_gmFogFar = (farD > nearD) ? farD : nearD + 0.001f;
+    g_gx_gmFogCol[0] = (float)r / 255.f;
+    g_gx_gmFogCol[1] = (float)g / 255.f;
+    g_gx_gmFogCol[2] = (float)b / 255.f;
+}
+GX_INLINE void gxmesheye(float x, float y, float z) {
+    g_gx_gmEye[0] = x; g_gx_gmEye[1] = y; g_gx_gmEye[2] = z;
+}
+/* Flip the finished image vertically if it comes out upside down. */
+GX_INLINE void gxmeshflip(int on) { g_gx_gmFlip = (on != 0) ? -1 : 1; }
+
+/* Column major 4x4 helpers, GL convention. */
+GX_INLINE void gxmeshperspective(float out[16], float fovyRad, float aspect,
+                                 float n, float f) {
+    float t = 1.0f / tanf(fovyRad * 0.5f);
+    memset(out, 0, sizeof(float) * 16);
+    out[0] = t / aspect; out[5] = t;
+    /* Column major: out[col*4+row].  Row 3 is (0,0,-1,0) so that
+     * w_clip = -z_view; the 2fn/(n-f) term belongs in row 2 col 3.
+     * The two were the wrong way round, which gave every vertex
+     * w = 1 and put the whole scene outside the depth range. */
+    out[10] = (f + n) / (n - f); out[11] = -1.0f;
+    out[14] = (2.0f * f * n) / (n - f);
+}
+GX_INLINE void gxmeshlookat(float out[16],
+                            float ex, float ey, float ez,
+                            float cx, float cy, float cz,
+                            float ux, float uy, float uz) {
+    float fx = cx - ex, fy = cy - ey, fz = cz - ez;
+    float rl = sqrtf(fx * fx + fy * fy + fz * fz);
+    if (rl < 1e-6f) { fx = 0; fy = 0; fz = -1; rl = 1; }
+    fx /= rl; fy /= rl; fz /= rl;
+    float sx = fy * uz - fz * uy, sy = fz * ux - fx * uz, sz = fx * uy - fy * ux;
+    rl = sqrtf(sx * sx + sy * sy + sz * sz);
+    if (rl < 1e-6f) { sx = 1; sy = 0; sz = 0; rl = 1; }
+    sx /= rl; sy /= rl; sz /= rl;
+    float vx = sy * fz - sz * fy, vy = sz * fx - sx * fz, vz = sx * fy - sy * fx;
+    out[0] = sx; out[1] = vx; out[2] = -fx; out[3] = 0;
+    out[4] = sy; out[5] = vy; out[6] = -fy; out[7] = 0;
+    out[8] = sz; out[9] = vz; out[10] = -fz; out[11] = 0;
+    out[12] = -(sx * ex + sy * ey + sz * ez);
+    out[13] = -(vx * ex + vy * ey + vz * ez);
+    out[14] = (fx * ex + fy * ey + fz * ez);
+    out[15] = 1;
+}
+GX_INLINE void gxmeshmatmul(float out[16], const float a[16], const float b[16]) {
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++) {
+            float s = 0;
+            for (int k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+            out[c * 4 + r] = s;
+        }
+}
+
+/* ---- the 3D pass ---------------------------------------------------
+ *
+ * Three phases, because a world is more than one mesh:
+ *
+ *   meshbegin()  bind the offscreen target and clear it once
+ *   meshdraw()   add geometry, as many calls as you like
+ *   meshend()    composite the finished image onto the canvas once
+ *
+ * The earlier single-call form cleared and composited on every mesh, so a
+ * chunked world could only ever show its last chunk.  The clear colour is
+ * written with alpha 0 and the composite blends, so whatever was already
+ * on the canvas -- a gradient sky drawn with ordinary 2D calls -- shows
+ * through wherever no geometry was drawn.
+ */
+static void gxMeshPtrs(void) {
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)12);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, GXMESH_STRIDE * sizeof(float), (const void*)20);
+}
+/* Only needed where VAOs do not exist: there the pointers live in VAO 0,
+ * which is the one easygl draws through. */
+static void gxMeshPtrsRestore(void) {
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_vbo);
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (const void*)0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (const void*)8);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vtx), (const void*)24);
+}
+
+GX_INLINE bool gxmeshbegin(void) {
+    if (!gxmesh_setup()) return false;
+    if (!gxmesh_target(g_gx_canvasTarget.w, g_gx_canvasTarget.h)) return false;
+    if (g_gx_gmIn) return true;
+    g_gx_gmIn = 1;
+    gxmesh_push(&g_gx_gmSave);
+    if (g_gx_batchDraw) gxFlush();     /* never interleave with 2D commands */
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_gmFbo);
+    glViewport(0, 0, g_gx_gmW, g_gx_gmH);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);             /* backfaces already removed */
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glClearColor(g_gx_gmFogCol[0], g_gx_gmFogCol[1], g_gx_gmFogCol[2], 0.0f);
+    glClearDepth(1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(g_gx_gmProg);
+    if (g_gx_gmUflip >= 0)    glUniform1f(g_gx_gmUflip, (g_gx_gmFlip == 0) ? 1.0f : (float)g_gx_gmFlip);
+    if (g_gx_gmUeye >= 0)     glUniform3f(g_gx_gmUeye, g_gx_gmEye[0], g_gx_gmEye[1], g_gx_gmEye[2]);
+    if (g_gx_gmUfog >= 0)     glUniform2f(g_gx_gmUfog, g_gx_gmFogNear, g_gx_gmFogFar);
+    if (g_gx_gmUfogCol >= 0)  glUniform3f(g_gx_gmUfogCol, g_gx_gmFogCol[0], g_gx_gmFogCol[1], g_gx_gmFogCol[2]);
+    if (g_gx_gmUtex >= 0)     glUniform1i(g_gx_gmUtex, 0);
+    return true;
+}
+
+GX_INLINE void gxmeshdraw(GXMESH* m, const float* mvp16, IMAGE* tex) {
+    if (!g_gx_gmIn || !g_gx_gmOk || !m || !mvp16) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_gmFbo);
+    glViewport(0, 0, g_gx_gmW, g_gx_gmH);
+    glUseProgram(g_gx_gmProg);
+    if (g_gx_gmUmvp >= 0) glUniformMatrix4fv(g_gx_gmUmvp, 1, GL_FALSE, mvp16);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (tex && gxImageOk(tex)) ? tex->tex : 0);
+    if (g_gx_gmUuseTex >= 0) glUniform1i(g_gx_gmUuseTex, (tex && gxImageOk(tex)) ? 1 : 0);
+
+    if (m->vao) glBindVertexArray(m->vao);
+    else { glBindBuffer(GL_ARRAY_BUFFER, m->vbo); gxMeshPtrs(); }
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
+    glDrawElements(GL_TRIANGLES, (GLsizei)m->ni, GL_UNSIGNED_INT, (const void*)0);
+    if (m->vao) glBindVertexArray(0);
+}
+
+GX_INLINE void gxmeshend(void) {
+    if (!g_gx_gmIn) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_canvasTarget.fbo);
+    glViewport(0, 0, g_gx_canvasTarget.w, g_gx_canvasTarget.h);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(g_gx_gmProg);
+    {
+        static const float ident[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+        if (g_gx_gmUmvp >= 0) glUniformMatrix4fv(g_gx_gmUmvp, 1, GL_FALSE, ident);
+    }
+    if (g_gx_gmUflip >= 0)   glUniform1f(g_gx_gmUflip, 1.0f);
+    if (g_gx_gmUuseTex >= 0) glUniform1i(g_gx_gmUuseTex, 1);
+    /* Fog must not tint the composite: push the range out of reach. */
+    if (g_gx_gmUfog >= 0)    glUniform2f(g_gx_gmUfog, 1.0e30f, 2.0e30f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_gx_gmTex);
+    if (g_gx_gmQuadVao) {
+        glBindVertexArray(g_gx_gmQuadVao);
+    } else {
+        glBindBuffer(GL_ARRAY_BUFFER, g_gx_gmQuad);
+        gxMeshPtrs();
+    }
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    if (g_gx_gmQuadVao) glBindVertexArray(0);
+    else gxMeshPtrsRestore();
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    gxmesh_pop(&g_gx_gmSave);
+    g_gx_gmIn = 0;
+}
+
+/* Re-upload the contents of an existing mesh.  Orphaning first lets the
+ * driver hand back a new block instead of stalling on the old one, which
+ * is what a chunk rebuild wants: the shape changes, the object does not. */
+GX_INLINE bool gxmeshupdate(GXMESH* m, const float* verts, int nv,
+                            const unsigned int* idx, int ni) {
+    if (!m || nv <= 0 || ni <= 0 || !verts || !idx) return false;
+    if (m->vao) glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+    glBufferData(GL_ARRAY_BUFFER, 0, NULL, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GXGLsizeiptr)((size_t)nv * GXMESH_STRIDE * sizeof(float)),
+                 verts, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, 0, NULL, GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GXGLsizeiptr)((size_t)ni * sizeof(unsigned int)),
+                 idx, GL_STATIC_DRAW);
+    if (m->vao) glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    m->nv = nv; m->ni = ni;
+    return true;
+}
+
+/* Gribb-Hartmann: the six frustum planes of a column major MVP, laid out
+ * as 6 * (a,b,c,d).  Row r of the matrix is m[r], m[4+r], m[8+r], m[12+r]. */
+GX_INLINE void gxmeshfrustum(const float m[16], float pl[24]) {
+    static const int s[6][2] = { {1,0}, {-1,0}, {1,1}, {-1,1}, {1,2}, {-1,2} };
+    for (int i = 0; i < 6; i++) {
+        int sg = s[i][0], k = s[i][1];
+        pl[i*4+0] = m[0*4+3] + (float)sg * m[0*4+k];
+        pl[i*4+1] = m[1*4+3] + (float)sg * m[1*4+k];
+        pl[i*4+2] = m[2*4+3] + (float)sg * m[2*4+k];
+        pl[i*4+3] = m[3*4+3] + (float)sg * m[3*4+k];
+    }
+}
+GX_INLINE bool gxmeshaabbinfrustum(const float pl[24],
+                                   float mnx, float mny, float mnz,
+                                   float mxx, float mxy, float mxz) {
+    for (int i = 0; i < 6; i++) {
+        float a = pl[i*4+0], b = pl[i*4+1], c = pl[i*4+2], d = pl[i*4+3];
+        float px = (a >= 0) ? mxx : mnx;
+        float py = (b >= 0) ? mxy : mny;
+        float pz = (c >= 0) ? mxz : mnz;
+        if (a * px + b * py + c * pz + d < 0.0f) return false;
+    }
+    return true;
+}
+
+
+/*======================================================================
+ * 20. Public 3D mesh interface
+ *====================================================================
+ * The names above are gx* internals.  These are the ones a program
+ * spells.  See section 19 for what the pass does and why.
+ *
+ *   createmesh(verts, nv, idx, ni)   upload geometry ONCE
+ *   meshbegin() / meshdraw() / meshend()   one pass, many meshes
+ *   meshvisible(mvp, box)            per chunk frustum test
+ *
+ * verts is nv * 8 floats:  x, y, z, u, v, r, g, b
+ *   r/g/b are a 0..1 multiplier on the texture, so per face lighting is
+ *   free.  idx is ni unsigned ints, three per triangle.
+ * mvp is 16 floats, COLUMN MAJOR (OpenGL order).  meshperspective(),
+ * meshlookat() and meshmatmul() all speak that order, so a program never
+ * has to transpose anything by hand.
+ */
+GX_INLINE GXMESH* createmesh(const float* verts, int nv,
+                             const unsigned int* idx, int ni) {
+    return gxcreatemesh(verts, nv, idx, ni);
+}
+GX_INLINE bool updatemesh(GXMESH* m, const float* verts, int nv,
+                          const unsigned int* idx, int ni) {
+    return gxmeshupdate(m, verts, nv, idx, ni);
+}
+GX_INLINE void freemesh(GXMESH* m) { gxfreemesh(m); }
+
+GX_INLINE bool meshavailable(void) { return gxmesh_setup() ? true : false; }
+GX_INLINE bool meshbegin(void)     { return gxmeshbegin(); }
+GX_INLINE void meshdraw(GXMESH* m, const float* mvp16, IMAGE* tex) {
+    gxmeshdraw(m, mvp16, tex);
+}
+GX_INLINE void meshend(void) { gxmeshend(); }
+
+GX_INLINE void meshfog(float nearD, float farD, COLORREF col) {
+    gxmeshfog(nearD, farD, (int)((col) & 255), (int)(((col) >> 8) & 255),
+              (int)(((col) >> 16) & 255));
+}
+GX_INLINE void mesheye(float x, float y, float z) { gxmesheye(x, y, z); }
+GX_INLINE void meshflip(bool on) { gxmeshflip(on ? 1 : 0); }
+
+GX_INLINE void meshperspective(float out[16], float fovyRad, float aspect,
+                               float nearZ, float farZ) {
+    gxmeshperspective(out, fovyRad, aspect, nearZ, farZ);
+}
+GX_INLINE void meshlookat(float out[16],
+                          float ex, float ey, float ez,
+                          float cx, float cy, float cz,
+                          float ux, float uy, float uz) {
+    gxmeshlookat(out, ex, ey, ez, cx, cy, cz, ux, uy, uz);
+}
+GX_INLINE void meshmatmul(float out[16], const float a[16], const float b[16]) {
+    gxmeshmatmul(out, a, b);
+}
+/* True when the axis aligned box is at least partly inside the frustum of
+ * a column major MVP.  Cheap enough to call per chunk per frame. */
+GX_INLINE bool meshvisible(const float mvp16[16],
+                           float mnx, float mny, float mnz,
+                           float mxx, float mxy, float mxz) {
+    float pl[24];
+    gxmeshfrustum(mvp16, pl);
+    return gxmeshaabbinfrustum(pl, mnx, mny, mnz, mxx, mxy, mxz);
+}
+
+/*------------------- canvas and GL state introspection ----------------*/
+/* The canvas is sized in device pixels, which is not what getwidth() and
+ * getheight() report when DPI scaling or a non default aspect ratio is in
+ * effect.  Anything that wants to blit its own rendered frame into the canvas
+ * needs the real numbers, and it cannot reach g_gx_canvasTarget - that symbol
+ * is static to this header, which is exactly the point of naming it that way.
+ * Hence these four.  All of them are safe to call before initgraph().        */
+GX_INLINE bool         isglready(void)        { return g_gx_glReady != 0; }
+GX_INLINE int          getcanvaswidth(void)   { return g_gx_canvasTarget.w; }
+GX_INLINE int          getcanvasheight(void)  { return g_gx_canvasTarget.h; }
+GX_INLINE unsigned int getcanvastex(void)     { return (unsigned int)g_gx_canvasTarget.tex; }
+GX_INLINE unsigned int getcanvasfbo(void)     { return (unsigned int)g_gx_canvasTarget.fbo; }
+
+#endif /* EASYGL_H */
 
