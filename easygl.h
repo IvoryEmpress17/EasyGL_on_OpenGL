@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20260927
+#define EASYGL_H 20261001
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -27,6 +27,26 @@
  *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
+ *
+ * Revision 20261001 (bug fix pass)
+ *   - getaspectratio() / getorigin() report what the caller PASSED to
+ *     setaspectratio() / setorigin(), not the value that ended up in force.
+ *     They used to return the effective one, i.e. the request times the
+ *     high DPI factor, so on a 150% display
+ *
+ *         setaspectratio(2, 2);  getaspectratio(&x, &y);   ->  3, 3
+ *
+ *     which made them the only setter / getter pair in the library that
+ *     was not its own inverse, and left the requested value - the one a
+ *     program needs in order to re-apply it, or to compare against - with
+ *     no way to read it back at all.  getwinsize() had already solved the
+ *     same problem the right way: it is the inverse of setwinsize() and
+ *     reports logical units at any DPI, while getwindevsize() carries the
+ *     device form.  The two getters now follow it, so a set / get round
+ *     trip is exact at any DPI and the value actually in force is what
+ *     they return times gethighdpiscale().  Code that relied on the old
+ *     behaviour has to multiply by gethighdpiscale(); to go the other way,
+ *     divide.
  *
  * Revision 20260925 (bug fix pass)
  *   - InputBox() accepts the full EasyX signature again:
@@ -413,8 +433,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20260927
-#define EASYGL_VERSION  "20260927"
+#define EASYGL_VER      20261001
+#define EASYGL_VERSION  "20261001"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -842,13 +862,16 @@ typedef DWORD ACOLORREF;
 #define GL_LOGIC_OP              GL_COLOR_LOGIC_OP
 #endif
 /* GL_TEXTURE1 carries the second image of miximagei(); every other draw
- * reads unit 0.  MinGW ships a GL 1.1 gl.h, which has GL_TEXTURE0 but not
- * this one (it arrived with GL 1.3), hence the fallback. */
+ * reads unit 0.  It arrived with GL 1.3, and a stock Windows GL 1.1 gl.h
+ * (the SDK one, or the default that comes with MinGW) has GL_TEXTURE0 but
+ * not this one, hence the fallback.  Guarded, so a newer header keeps its
+ * own value.  Note this is a *declaration* gap only: whatever your header
+ * says, glActiveTexture() must still be fetched at run time. */
 #ifndef GL_TEXTURE1
 #define GL_TEXTURE1              0x84C1
 #endif
-/* GL_UNSIGNED_INT is GL 1.1, GL_ELEMENT_ARRAY_BUFFER is 1.5 - MinGW ships a
- * 1.1 gl.h, so the latter (at least) is missing there. */
+/* GL_UNSIGNED_INT is GL 1.1, GL_ELEMENT_ARRAY_BUFFER is 1.5 - a stock
+ * Windows GL 1.1 gl.h lacks the latter, so it is filled in when absent. */
 #ifndef GL_UNSIGNED_INT
 #define GL_UNSIGNED_INT          0x1405
 #endif
@@ -865,8 +888,8 @@ typedef DWORD ACOLORREF;
 DECLGL(void, glGenBuffers, GLsizei, GLuint*)
 DECLGL(void, glBindBuffer, GLenum, GLuint)
 DECLGL(void, glBufferData, GLenum, GLsizei, const void*, GLenum)
-/* GLintptr / GLsizeiptr arrived with GL 1.5, and MinGW ships a GL 1.1 gl.h
- * that has neither, so glBufferSubData() cannot be declared with them.
+/* GLintptr / GLsizeiptr arrived with GL 1.5, and a stock Windows GL 1.1
+ * gl.h has neither, so glBufferSubData() cannot be declared with them.
  *
  * They cannot simply be defined here either: a typedef is not a macro, so
  * #ifndef does not see it, and a real gl.h that does declare them would then
@@ -904,6 +927,7 @@ DECLGL(void, glBindVertexArray, GLuint)
 DECLGL(void, glDeleteVertexArrays, GLsizei, const GLuint*)
 DECLGL(void, glGetVertexAttribiv, GLuint, GLenum, GLint*)
 DECLGL(void, glEnableVertexAttribArray, GLuint)
+DECLGL(void, glDisableVertexAttribArray, GLuint)
 DECLGL(void, glVertexAttribPointer, GLuint, GLint, GLenum, GLboolean, GLsizei, const void*)
 DECLGL(void, glActiveTexture, GLenum)
 DECLGL(void, glGenFramebuffers, GLsizei, GLuint*)
@@ -926,8 +950,8 @@ DECLGL(void, glDeleteFramebuffers, GLsizei, const GLuint*)
 typedef const unsigned char* (APIENTRY *PFNGLGETSTRING)(GLenum);
 static PFNGLGETSTRING gxGetString = 0;
 
-/* glBlendEquation() is GL 1.2+, so MinGW's GL 1.1 gl.h does not declare it
- * and calling it outright does not compile.  It gets its own pointer rather
+/* glBlendEquation() is GL 1.2+, so a header that stops at GL 1.1 does not
+ * declare it and calling it outright does not compile.  It gets its own pointer rather
  * than a DECLGL() entry, because some SDKs *do* declare it and then the
  * static pointer would clash with the real declaration - exactly the
  * glGetString() trap above.  Declared up here because gxLoadGL() loads it. */
@@ -956,7 +980,7 @@ static void gxLoadGL(void) {
     LOADGL(glUniform2f);             LOADGL(glUniformMatrix4fv);
     LOADGL(glUniform4f);
     LOADGL(glUniform3f);
-    LOADGL(glEnableVertexAttribArray); LOADGL(glVertexAttribPointer);
+    LOADGL(glEnableVertexAttribArray); LOADGL(glDisableVertexAttribArray); LOADGL(glVertexAttribPointer);
     LOADGL(glActiveTexture);         LOADGL(glGenFramebuffers);
     LOADGL(glBindFramebuffer);       LOADGL(glFramebufferTexture2D);
     LOADGL(glCheckFramebufferStatus); LOADGL(glDeleteFramebuffers);
@@ -1168,7 +1192,10 @@ static float  g_gx_scaleX = 1.f, g_gx_scaleY = 1.f;
  * factors as the caller passed them.  g_gx_scaleX / g_gx_scaleY hold the
  * effective value (requested * g_gx_dpiFix), which is what everything else in
  * the library reads, so the requested pair has to be kept separately to be
- * able to recompute when the factor changes. */
+ * able to recompute when the factor changes.
+ * It is also what getaspectratio() reports: a getter is the inverse of its
+ * setter, so it answers with the request and leaves the effective value to
+ * be reached by multiplying with gethighdpiscale(). */
 static float  g_gx_dpiFix = 1.f;              /* 1 = no scaling applied      */
 /* The window size the caller asked for, in LOGICAL units - what initgraph()
  * and setwinsize() were given.  The device size is this times g_gx_dpiFix:
@@ -2062,8 +2089,8 @@ GX_INLINE int gxRop2Fix(int rop2) {
 
 /* Turn a GX_BLEND_* value into glBlendFunc / glBlendEquation.
  *
- * glBlendEquation() is GL 1.2 (imaging) / 1.4 core, and the GL/gl.h that
- * ships with MinGW is only GL 1.1: the name is not declared there, so
+ * glBlendEquation() is GL 1.2 (imaging) / 1.4 core, and a stock Windows
+ * GL/gl.h stops at GL 1.1: the name is not declared there, so
  * calling it outright does not compile.  It also cannot simply be added
  * with DECLGL(), because some SDKs *do* declare it and then the static
  * function pointer would clash with the real declaration.  So it gets its
@@ -3608,14 +3635,17 @@ GX_INLINE void setorigin(double x, double y) {
     }
 }
 /* EasyX: getorigin(int* x, int* y) reads the origin back.  Either pointer
- * may be NULL.  The value is in device pixels because that is the unit
- * setorigin() takes. */
-/* Reads the EFFECTIVE offset back, i.e. the request times the DPI factor,
- * in device pixels - the same convention getaspectratio() uses.  To get
- * what was passed in, divide by gethighdpiscale(). */
+ * may be NULL. */
+/* Reads back what setorigin() was GIVEN, in logical units - the same
+ * convention getaspectratio() and getwinsize() use, so that a set / get
+ * round trip is exact at any DPI.  The offset actually in force is this
+ * times gethighdpiscale(), because fixhighdpi() scales the request into
+ * device pixels; code that wants those has to multiply.  An IMAGE is its
+ * own 1:1 space with no offset, so it reports 0 while one is the working
+ * target. */
 GX_INLINE void getorigin(int* x, int* y) {
-    if (x) *x = (int)g_gx_originX;
-    if (y) *y = (int)g_gx_originY;
+    if (x) *x = g_gx_workImg ? 0 : (int)g_gx_reqOriginX;
+    if (y) *y = g_gx_workImg ? 0 : (int)g_gx_reqOriginY;
 }
 GX_INLINE void getfont(LOGFONTA* f) { if (f) *f = g_gx_font; }
 GX_INLINE void setfont(const LOGFONTA* f) { if (f) g_gx_font = *f; }
@@ -7847,6 +7877,11 @@ static void gxResizeMainWindow(int w, int h) {
  * its 1:1 mapping unless it calls fixhighdpi(), which then scales the
  * default too.
  *
+ * The two getters are deliberately not folded in: getaspectratio() and
+ * getorigin() read the request back, so they stay the same whatever the
+ * factor is, and the value in force is what they return times
+ * gethighdpiscale().  That is what keeps set / get a round trip.
+ *
  * Default is OFF, so an existing program is unaffected.  Once switched on
  * it survives a window rebuild: gxApplyWindowState() reapplies it.  A
  * program that wants it from the start still has to call it after
@@ -8483,9 +8518,16 @@ static int gx_msgboxA(const char* text, const char* cap, UINT type) {
  *====================================================================*/
 
 /*----------------------------- device --------------------------------*/
+/* Reads back the pair setaspectratio() was GIVEN, not the pair in force:
+ * a getter has to be the inverse of its setter, the way getwinsize() is.
+ * The pair in force is this times gethighdpiscale(), and that is what
+ * everything inside the library still uses (g_gx_scaleX / Y) - so on a
+ * 150% display setaspectratio(2, 2) continues to lay out 3 device pixels
+ * per logical unit and simply reports 2 for it.  An IMAGE is drawn into
+ * at 1:1, so it reports 1 while one is the working target. */
 static GX_UNUSED void getaspectratio(float* pxasp, float* pyasp) {
-    if (pxasp) *pxasp = g_gx_scaleX;
-    if (pyasp) *pyasp = g_gx_scaleY;
+    if (pxasp) *pxasp = g_gx_workImg ? 1.f : g_gx_reqScaleX;
+    if (pyasp) *pyasp = g_gx_workImg ? 1.f : g_gx_reqScaleY;
 }
 
 /* EasyX: restore every device setting to its default value. */
@@ -10038,7 +10080,14 @@ typedef struct GXMESH {
 static GLuint g_gx_gmProg = 0;
 static GLint  g_gx_gmUmvp = -1, g_gx_gmUtex = -1, g_gx_gmUuseTex = -1, g_gx_gmUflip = -1;
 static GLint  g_gx_gmUeye = -1, g_gx_gmUfog = -1, g_gx_gmUfogCol = -1;
+/* g_gx_gmFbo is where geometry is rasterised.  With MSAA on it owns two
+ * multisampled RENDERBUFFERs and g_gx_gmFboR is the single sample FBO that
+ * holds g_gx_gmTex; meshend() resolves into it before compositing.  With
+ * MSAA off g_gx_gmFbo attaches g_gx_gmTex directly and g_gx_gmFboR is 0,
+ * which is exactly what this used to do. */
 static GLuint g_gx_gmFbo = 0, g_gx_gmTex = 0, g_gx_gmRb = 0, g_gx_gmQuad = 0;
+static GLuint g_gx_gmFboR = 0, g_gx_gmRbC = 0;
+static int    g_gx_gmSamples = 0;         /* samples the target was built with */
 static int    g_gx_gmW = 0, g_gx_gmH = 0;
 static int    g_gx_gmTried = 0, g_gx_gmOk = 0;
 static GLuint g_gx_gmQuadVao = 0;         /* the composite quad's own VAO     */
@@ -10229,18 +10278,55 @@ static int gxmesh_setup(void) {
     return 1;
 }
 
-/* The offscreen target is rebuilt whenever the canvas changes size.  It
- * needs a depth attachment because the canvas framebuffer has none. */
-static int gxmesh_target(int w, int h) {
-    if (w < 1 || h < 1) return 0;
-    if (g_gx_gmFbo && w == g_gx_gmW && h == g_gx_gmH) return 1;
+static void gxmesh_target_free(void) {
+    if (g_gx_gmFboR) { glDeleteFramebuffers(1, &g_gx_gmFboR); g_gx_gmFboR = 0; }
+    if (g_gx_gmFbo)  { glDeleteFramebuffers(1, &g_gx_gmFbo);  g_gx_gmFbo  = 0; }
+    if (g_gx_gmRbC)  { glDeleteRenderbuffers(1, &g_gx_gmRbC); g_gx_gmRbC  = 0; }
+    if (g_gx_gmRb)   { glDeleteRenderbuffers(1, &g_gx_gmRb);  g_gx_gmRb   = 0; }
+    if (g_gx_gmTex)  { glDeleteTextures(1, &g_gx_gmTex);      g_gx_gmTex  = 0; }
+}
 
-    if (g_gx_gmFbo) {
-        glDeleteFramebuffers(1, &g_gx_gmFbo);
-        glDeleteTextures(1, &g_gx_gmTex);
-        glDeleteRenderbuffers(1, &g_gx_gmRb);
-        g_gx_gmFbo = g_gx_gmTex = g_gx_gmRb = 0;
+/* Depth attachment: 24 bit first, 16 is the fall back an old driver may
+ * insist on.  samples >= 2 asks for a multisampled one, which it has to
+ * be whenever the colour attachment is: GL refuses a framebuffer that
+ * mixes multisampled and single sampled attachments. */
+static int gxmesh_depth(int w, int h, int samples) {
+    static const GLenum fmts[2] = { GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT16 };
+    int i;
+    if (g_gx_gmRb) { glDeleteRenderbuffers(1, &g_gx_gmRb); g_gx_gmRb = 0; }
+    glGenRenderbuffers(1, &g_gx_gmRb);
+    glBindRenderbuffer(GL_RENDERBUFFER, g_gx_gmRb);
+    for (i = 0; i < 2; i++) {
+        if (samples >= 2 && glRenderbufferStorageMultisample)
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, (GLsizei)samples,
+                                             fmts[i], (GLsizei)w, (GLsizei)h);
+        else
+            glRenderbufferStorage(GL_RENDERBUFFER, fmts[i], (GLsizei)w, (GLsizei)h);
+        if (glGetError() == GL_NO_ERROR) return 1;
     }
+    return 0;
+}
+
+/* The offscreen target is rebuilt whenever the canvas changes size or the
+ * requested sample count does.  It needs a depth attachment because the
+ * canvas framebuffer has none.
+ *
+ * setaasamples() used to have no effect on this pass at all: the geometry
+ * never touched the canvas framebuffer, which is the only one MSAA was
+ * ever applied to.  With samples >= 2 the target becomes two multisampled
+ * renderbuffers plus g_gx_gmFboR, the single sample FBO that meshend()
+ * resolves into.  With 0 it is the one FBO with the texture attached,
+ * exactly as before. */
+static int gxmesh_target(int w, int h) {
+    int want, s;
+    if (w < 1 || h < 1) return 0;
+    want = (g_gx_aaSamples >= 2 && glRenderbufferStorageMultisample && glBlitFramebuffer)
+           ? g_gx_aaSamples : 0;
+    if (g_gx_gmFbo && w == g_gx_gmW && h == g_gx_gmH && want == g_gx_gmSamples) return 1;
+
+    gxmesh_target_free();
+    /* meshend() always samples g_gx_gmTex, so it exists either way: with
+     * MSAA on it is the resolve destination rather than the draw target. */
     glGenTextures(1, &g_gx_gmTex);
     glBindTexture(GL_TEXTURE_2D, g_gx_gmTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -10248,33 +10334,57 @@ static int gxmesh_target(int w, int h) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
-    glGenRenderbuffers(1, &g_gx_gmRb);
-    glBindRenderbuffer(GL_RENDERBUFFER, g_gx_gmRb);
-    /* 24 bit depth first; 16 is the fall back an old driver may insist on */
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-    if (glGetError() != GL_NO_ERROR) {
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, w, h);
-        if (glGetError() != GL_NO_ERROR) {
-            glBindRenderbuffer(GL_RENDERBUFFER, 0);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            return 0;
+    /* No query for "which counts work": an unsupported one leaves the
+     * framebuffer incomplete, so walk down 4 -> 2 like the canvas does. */
+    for (s = want; s >= 2; s /= 2) {
+        GLuint rbC = 0;
+        glGenRenderbuffers(1, &rbC);
+        glBindRenderbuffer(GL_RENDERBUFFER, rbC);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, (GLsizei)s, GL_RGBA8,
+                                         (GLsizei)w, (GLsizei)h);
+        if (glGetError() == GL_NO_ERROR && gxmesh_depth(w, h, s)) {
+            glGenFramebuffers(1, &g_gx_gmFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, g_gx_gmFbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                      GL_RENDERBUFFER, rbC);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                      GL_RENDERBUFFER, g_gx_gmRb);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                g_gx_gmRbC = rbC;
+                glGenFramebuffers(1, &g_gx_gmFboR);
+                glBindFramebuffer(GL_FRAMEBUFFER, g_gx_gmFboR);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                       GL_TEXTURE_2D, g_gx_gmTex, 0);
+                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+                    g_gx_gmSamples = s; g_gx_gmW = w; g_gx_gmH = h;
+                    return 1;
+                }
+            }
         }
+        /* this count did not take: drop it and try half as many */
+        if (rbC) glDeleteRenderbuffers(1, &rbC);
+        if (g_gx_gmFboR) { glDeleteFramebuffers(1, &g_gx_gmFboR); g_gx_gmFboR = 0; }
+        if (g_gx_gmFbo)  { glDeleteFramebuffers(1, &g_gx_gmFbo);  g_gx_gmFbo  = 0; }
+        if (g_gx_gmRb)   { glDeleteRenderbuffers(1, &g_gx_gmRb);  g_gx_gmRb   = 0; }
     }
+
+    /* MSAA off, or the driver refused every count: one FBO, texture drawn
+     * straight into it. */
+    if (!gxmesh_depth(w, h, 0)) { gxmesh_target_free(); return 0; }
     glGenFramebuffers(1, &g_gx_gmFbo);
     glBindFramebuffer(GL_FRAMEBUFFER, g_gx_gmFbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_gx_gmTex, 0);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, g_gx_gmRb);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glBindRenderbuffer(GL_RENDERBUFFER, 0);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return 0;
+        gxmesh_target_free(); return 0;
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    g_gx_gmW = w; g_gx_gmH = h;
+    g_gx_gmSamples = 0; g_gx_gmW = w; g_gx_gmH = h;
     return 1;
 }
 
@@ -10461,6 +10571,17 @@ GX_INLINE void gxmeshdraw(GXMESH* m, const float* mvp16, IMAGE* tex) {
 
 GX_INLINE void gxmeshend(void) {
     if (!g_gx_gmIn) return;
+    /* Fold the samples into g_gx_gmTex before it is used as a texture.
+     * Averaging is what the resolve is for: an edge pixel that was half
+     * covered comes out half transparent, which is exactly what the
+     * composite below wants. */
+    if (g_gx_gmFboR) {
+        glDisable(GL_SCISSOR_TEST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, g_gx_gmFbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gx_gmFboR);
+        glBlitFramebuffer(0, 0, g_gx_gmW, g_gx_gmH, 0, 0, g_gx_gmW, g_gx_gmH,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, g_gx_canvasTarget.fbo);
     glViewport(0, 0, g_gx_canvasTarget.w, g_gx_canvasTarget.h);
     glDisable(GL_DEPTH_TEST);
@@ -10581,6 +10702,10 @@ GX_INLINE void meshfog(float nearD, float farD, COLORREF col) {
 }
 GX_INLINE void mesheye(float x, float y, float z) { gxmesheye(x, y, z); }
 GX_INLINE void meshflip(bool on) { gxmeshflip(on ? 1 : 0); }
+/* Samples the 3D target was actually built with: 0 when MSAA is off or the
+ * driver refused it.  Can be lower than getaasamples() because the target
+ * walks 4 -> 2 the same way the canvas does. */
+GX_INLINE int getmeshsamples(void) { return g_gx_gmSamples; }
 
 GX_INLINE void meshperspective(float out[16], float fovyRad, float aspect,
                                float nearZ, float farZ) {
@@ -10617,6 +10742,262 @@ GX_INLINE int          getcanvaswidth(void)   { return g_gx_canvasTarget.w; }
 GX_INLINE int          getcanvasheight(void)  { return g_gx_canvasTarget.h; }
 GX_INLINE unsigned int getcanvastex(void)     { return (unsigned int)g_gx_canvasTarget.tex; }
 GX_INLINE unsigned int getcanvasfbo(void)     { return (unsigned int)g_gx_canvasTarget.fbo; }
+/* The two handles behind the context.  wglMakeCurrent(hdc, hglrc) is what
+ * makes a second context or a background loader possible, and some drivers
+ * insist on seeing the HDC before they will hand out an extension. */
+GX_INLINE void* getglhdc(void)   { return (void*)g_gx_hdc; }
+GX_INLINE void* getglhglrc(void) { return (void*)g_gx_hglrc; }
+
+/*=================== raw OpenGL escape hatch ====================*/
+/* Everything easygl draws goes through one shader and one vertex format, and
+ * it remembers the GL state it set so it does not set it twice.  Code that
+ * reaches past that and calls GL directly therefore has to do two things:
+ * let the pending batch out first, so the two are not interleaved, and put
+ * the state back, because the cache still believes it is in place.
+ * glbegin()/glend() do exactly that and nothing else.
+ *
+ *   if (glbegin()) {
+ *       glMatrixMode(GL_PROJECTION); glLoadIdentity(); ...
+ *       glColor3f(1.f, 0.f, 0.f);
+ *       glBegin(GL_TRIANGLES); glVertex2f(0, 0); ... glEnd();
+ *       glend();
+ *   }
+ *
+ * Inside the pair: the bound framebuffer is the canvas (getcanvasfbo()), the
+ * viewport covers the whole canvas in device pixels, the easygl program is
+ * unbound, the vertex array object is unbound and every generic vertex
+ * attribute array is off -- so the fixed pipeline, glBegin/glVertex/glColor,
+ * the matrix stack, glTexImage2D and friends all behave the way a plain
+ * GL 1.1 program expects them to.  That is the whole point: easygl leaves
+ * 236 of the 261 GL 1.1 entry points untouched, and this is how you get at
+ * them without touching a pixel of easygl's own plumbing.
+ *
+ * Rules, both real:
+ *   - Do not call easygl drawing functions inside the pair.  glbegin() has
+ *     already flushed the batch; anything you queue would be flushed again
+ *     behind glend()'s back and would land on top of your own geometry.
+ *     Do the GL, call glend(), then draw with easygl.
+ *   - The pair does not nest and is not reentrant.  glbegin() returns false
+ *     when GL is not up yet or a pair is already open, so always test it.
+ *
+ * Anything past GL 1.1 is not exported by opengl32.dll on any Windows
+ * machine - Microsoft has never updated that export table - so those
+ * entry points have to be fetched at run time, hence glgetproc().
+ * How much your own GL/gl.h declares is a separate question that depends
+ * on what you installed; it decides whether you need an extern, not
+ * whether you need a pointer.
+ */
+
+/* A GL 1.1-era gl.h has none of these.  Each is guarded so a newer SDK
+ * that does declare them keeps its own value and there is no
+ * redefinition. */
+#ifndef GL_CURRENT_PROGRAM
+#define GL_CURRENT_PROGRAM                  0x8B8D
+#endif
+#ifndef GL_FRAMEBUFFER_BINDING
+#define GL_FRAMEBUFFER_BINDING              0x8CA6
+#endif
+#ifndef GL_VERTEX_ARRAY_BINDING
+#define GL_VERTEX_ARRAY_BINDING             0x85B5
+#endif
+#ifndef GL_ARRAY_BUFFER_BINDING
+#define GL_ARRAY_BUFFER_BINDING             0x8894
+#endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER_BINDING
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING     0x8895
+#endif
+#ifndef GL_VERTEX_ATTRIB_ARRAY_ENABLED
+#define GL_VERTEX_ATTRIB_ARRAY_ENABLED      0x8622
+#endif
+#ifndef GL_MAX_VERTEX_ATTRIBS
+#define GL_MAX_VERTEX_ATTRIBS               0x8869
+#endif
+#ifndef GL_ACTIVE_TEXTURE
+#define GL_ACTIVE_TEXTURE                   0x84E0
+#endif
+#ifndef GL_DITHER
+#define GL_DITHER                           0x0BD0
+#endif
+#ifndef GL_COLOR_WRITEMASK
+#define GL_COLOR_WRITEMASK                  0x0C23
+#endif
+#ifndef GL_DEPTH_WRITEMASK
+#define GL_DEPTH_WRITEMASK                  0x0B72
+#endif
+
+/* No real driver reports more than 16, but the table is sized by this so a
+ * hypothetical 32 does not overrun it - glbegin() clamps to what GL says. */
+#ifndef GX_GL_MAXATTRIB
+#define GX_GL_MAXATTRIB 16
+#endif
+
+typedef struct GxGlSave {
+    int       on;
+    int       nAttrib;
+    GLint     prog, fbo, vao, arr, elem, actTex, tex[2];
+    GLint     vp[4], sci[4];
+    GLboolean sciOn, blendOn, depthOn, cullOn, logicOn, dithOn;
+    GLboolean dmask, cmask[4], t2d[2];
+    GLboolean attribOn[GX_GL_MAXATTRIB];
+} GxGlSave;
+
+/* Static storage duration, so it starts zeroed, and one copy per translation
+ * unit like every other static in this header. */
+static GxGlSave g_gx_glSave;
+
+GX_INLINE bool glbegin(void) {
+    GxGlSave* s = &g_gx_glSave;
+    int i, n;
+    if (!g_gx_glReady || s->on) return false;
+
+    /* Close the batch, then really submit it.  gxEndCmd() only closes it;
+     * gxFlush() is what uploads and draws, and it has to happen now so the
+     * caller's GL lands on top of easygl's frame rather than underneath it. */
+    gxEndCmd();
+    gxFlush();
+    if (!g_gx_glReady) return false;
+
+    glGetIntegerv(GL_CURRENT_PROGRAM,             &s->prog);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING,         &s->fbo);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING,        &s->vao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING,        &s->arr);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING,&s->elem);
+    glGetIntegerv(GL_ACTIVE_TEXTURE,              &s->actTex);
+    glGetIntegerv(GL_VIEWPORT,                    s->vp);
+    glGetIntegerv(GL_SCISSOR_BOX,                 s->sci);
+
+    /* Two units: easygl binds a second image on GL_TEXTURE1 for the blend
+     * and mask operations, and leaving it bound makes any glBindTexture()
+     * the caller does on unit 1 clobber that image. */
+    if (glActiveTexture) {
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->tex[0]);
+        s->t2d[0] = glIsEnabled(GL_TEXTURE_2D);
+        glActiveTexture(GL_TEXTURE1);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->tex[1]);
+        s->t2d[1] = glIsEnabled(GL_TEXTURE_2D);
+        glActiveTexture((GLenum)s->actTex);
+    }
+
+    s->sciOn   = glIsEnabled(GL_SCISSOR_TEST);
+    s->blendOn = glIsEnabled(GL_BLEND);
+    s->depthOn = glIsEnabled(GL_DEPTH_TEST);
+    s->cullOn  = glIsEnabled(GL_CULL_FACE);
+    s->logicOn = glIsEnabled(GL_COLOR_LOGIC_OP);
+    s->dithOn  = glIsEnabled(GL_DITHER);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &s->dmask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, s->cmask);
+
+    /* The one that matters most.  Generic attribute arrays are enabled by
+     * easygl and point at its own buffer; while any of them is on, GL
+     * ignores the matching fixed pipeline array, so glVertexPointer()/
+     * glColorPointer() would be silently dropped.  Only the enable flags are
+     * touched -- the pointers stay as easygl set them. */
+    n = GX_GL_MAXATTRIB;
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &n);
+    if (n > GX_GL_MAXATTRIB) n = GX_GL_MAXATTRIB;
+    if (n < 0) n = 0;
+    s->nAttrib = n;
+    if (glGetVertexAttribiv) {
+        for (i = 0; i < n; i++) {
+            GLint e = 0;
+            glGetVertexAttribiv((GLuint)i, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &e);
+            s->attribOn[i] = (GLboolean)(e != 0);
+            if (e && glDisableVertexAttribArray) glDisableVertexAttribArray((GLuint)i);
+        }
+    }
+
+    if (glUseProgram)      glUseProgram(0);
+    if (glBindVertexArray) glBindVertexArray(0);
+    s->on = 1;
+    return true;
+}
+
+GX_INLINE void glend(void) {
+    GxGlSave* s = &g_gx_glSave;
+    int i;
+    if (!s->on) return;
+    s->on = 0;
+
+    if (glBindVertexArray) glBindVertexArray((GLuint)s->vao);
+    /* Outside the VAO guard on purpose: the enable flags are global state,
+     * not VAO state, so they have to come back whether or not the driver
+     * exposes vertex array objects.  Leaving them off would drop every
+     * later easygl draw -- attribute 0/1/2 are how it submits vertices. */
+    if (glEnableVertexAttribArray)
+        for (i = 0; i < s->nAttrib; i++)
+            if (s->attribOn[i]) glEnableVertexAttribArray((GLuint)i);
+    if (glUseProgram) glUseProgram((GLuint)s->prog);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)s->fbo);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)s->arr);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)s->elem);
+
+    if (glActiveTexture) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)s->tex[0]);
+        if (s->t2d[0]) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)s->tex[1]);
+        if (s->t2d[1]) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
+        glActiveTexture((GLenum)s->actTex);
+    }
+
+    glViewport(s->vp[0],  s->vp[1],  s->vp[2],  s->vp[3]);
+    glScissor (s->sci[0], s->sci[1], s->sci[2], s->sci[3]);
+    if (s->sciOn)   glEnable(GL_SCISSOR_TEST);   else glDisable(GL_SCISSOR_TEST);
+    if (s->blendOn) glEnable(GL_BLEND);          else glDisable(GL_BLEND);
+    if (s->depthOn) glEnable(GL_DEPTH_TEST);     else glDisable(GL_DEPTH_TEST);
+    if (s->cullOn)  glEnable(GL_CULL_FACE);      else glDisable(GL_CULL_FACE);
+    if (s->logicOn) glEnable(GL_COLOR_LOGIC_OP); else glDisable(GL_COLOR_LOGIC_OP);
+    if (s->dithOn)  glEnable(GL_DITHER);         else glDisable(GL_DITHER);
+    glDepthMask(s->dmask);
+    glColorMask(s->cmask[0], s->cmask[1], s->cmask[2], s->cmask[3]);
+
+    /* The cache still believes all of this is set from before the pair, and
+     * after the caller's GL it may well not be.  Every setter is an
+     * "if (x != cached)" guard, so a value nothing can legitimately ask for
+     * forces each one to re-arm on the next draw. */
+    g_gx_curRop     = -1;
+    g_gx_curAlpha   = -1.f;
+    g_gx_curPatSx   = 1e30f;
+    g_gx_curTex     = 0xFFFFFFFFu;
+    g_gx_curTex2    = 0xFFFFFFFFu;
+    g_gx_curUseTex  = -1;
+    g_gx_curBlend   = -1;
+    g_gx_curFilter  = -1;
+
+    gxBindTarget();   /* framebuffer, viewport and projection in one go */
+}
+
+/* Any GL entry point, GL 1.1 or extension, by name:
+ *
+ *   void (APIENTRY *glGenBuffers)(GLsizei, GLuint*);
+ *   *(void**)&glGenBuffers = glgetproc("glGenBuffers");
+ *
+ * wglGetProcAddress() only answers for functions past GL 1.1 -- the 1.1 set
+ * is exported by opengl32.dll and wglGetProcAddress() returns NULL for it --
+ * so a miss falls back to GetProcAddress() on that module.  Returns NULL
+ * when GL is not up yet or the driver has never heard of the name; test it
+ * before calling through it. */
+GX_INLINE void* glgetproc(const char* name) {
+    void*  p = NULL;
+    HMODULE m;
+    if (!g_gx_glReady || !name || !*name) return NULL;
+    if (wglGetProcAddress) {
+        void* q = (void*)wglGetProcAddress(name);
+        /* Some drivers (llvmpipe among them) answer 1, 2, 3 or -1 instead of
+         * NULL for a name they do not know, and calling one of those is an
+         * immediate jump to a bad address. */
+        if (q && (size_t)q > (size_t)0xFFFF) p = q;
+    }
+    if (!p) {
+        m = GetModuleHandleA("opengl32.dll");
+        if (m) p = (void*)GetProcAddress(m, name);
+    }
+    return p;
+}
 
 #endif /* EASYGL_H */
+
 
