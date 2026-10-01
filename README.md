@@ -18,6 +18,8 @@ EasyX features on OpenGL
 
 initgraph、circle、putimage、outtextxy 这些名字和参数都保持原样。图形经 GPU 加速，额外支持半透明、渐变、图像混合和后处理着色器。
 
+还有很多 OpenGL 的 GPU 特性接口，可以运行着色器……
+
 用法：把 easygl.h 复制到工程目录，只在一个 .c / .cpp 文件里
 include 它，编译时链接 opengl32、gdi32、user32。
 
