@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261002
+#define EASYGL_H 20261003
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -28,6 +28,30 @@
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
  *
+ * Revision 20261003
+ *   - Three new graphics primitives.  gradrectangle() bakes one colour
+ *     into each corner, so the only fade it could express was a linear one
+ *     along an edge, and nothing could draw a glow, a conic sweep or a
+ *     fade through more than two colours.
+ *
+ *     gradlinear() / gradradial() / gradconic() take a rectangle, the
+ *     geometry of the fade, and a table of GRADSTOP { color, pos }.  The
+ *     three share one fragment shader: it turns the fragment position into
+ *     a single parameter (projection along an axis, distance from a centre,
+ *     angle around it) and looks that up in the stop table, so a shape and
+ *     a set of stops are independent.  Up to 16 stops; the table is sorted
+ *     and its positions clamped, so an out of order or out of range table
+ *     is harmless.  Colours carry RGB; the alpha of the whole gradient
+ *     comes from setalpha() and the compositing from setblendmode(), so a
+ *     glow is GX_BLEND_ADD with a fade to black.
+ *   - blurimage(dst, src, radius): a separable Gaussian in two passes
+ *     through a scratch target, radius in pixels.  dst is resized to match
+ *     src.  Wide radii are strained (above 8 px the taps walk the source in
+ *     steps), which trades a little quality for a lot fewer fetches.
+ *     Shadows, glows, depth of field and frosted glass all follow from it.
+ *   - Both need two GL entry points that were not loaded before:
+ *     glUniform1fv and glUniform4fv.
+
  * Revision 20261002 (bug fix pass)
  *   - loadimage() with an explicit size now records that size as the
  *     LOGICAL one.  It resized the texture to w x h but left logW / logH
@@ -466,8 +490,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261002
-#define EASYGL_VERSION  "20261002"
+#define EASYGL_VER      20261003
+#define EASYGL_VERSION  "20261003"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -955,6 +979,8 @@ DECLGL(void, glUniform2f, GLint, GLfloat, GLfloat)
 DECLGL(void, glUniform3f, GLint, GLfloat, GLfloat, GLfloat)
 DECLGL(void, glUniform4f, GLint, GLfloat, GLfloat, GLfloat, GLfloat)
 DECLGL(void, glUniformMatrix4fv, GLint, GLsizei, GLboolean, const GLfloat*)
+DECLGL(void, glUniform1fv, GLint, GLsizei, const GLfloat*)
+DECLGL(void, glUniform4fv, GLint, GLsizei, const GLfloat*)
 DECLGL(void, glGenVertexArrays, GLsizei, GLuint*)
 DECLGL(void, glBindVertexArray, GLuint)
 DECLGL(void, glDeleteVertexArrays, GLsizei, const GLuint*)
@@ -1011,6 +1037,7 @@ static void gxLoadGL(void) {
     LOADGL(glUseProgram);            LOADGL(glDeleteProgram);
     LOADGL(glGetUniformLocation);    LOADGL(glUniform1i);           LOADGL(glUniform1f);
     LOADGL(glUniform2f);             LOADGL(glUniformMatrix4fv);
+    LOADGL(glUniform1fv);            LOADGL(glUniform4fv);
     LOADGL(glUniform4f);
     LOADGL(glUniform3f);
     LOADGL(glEnableVertexAttribArray); LOADGL(glDisableVertexAttribArray); LOADGL(glVertexAttribPointer);
@@ -5624,6 +5651,428 @@ static void gxImageUpload(IMAGE* img, const unsigned char* px, int w, int h, boo
     }
 }
 
+/*======================================================================
+ *  11c. Multi stop gradients and blur  (easygl extensions)
+ *
+ *  gradrectangle() bakes one colour into each corner, so the only fade it
+ *  can express is linear - and only along the two edges, because four
+ *  corners interpolate bilinearly and the diagonal picks up a saddle.
+ *  Nothing in the library could draw a radial glow, a conic sweep or a
+ *  fade through more than two colours.
+ *
+ *  All three shapes share one mechanism: the rectangle is drawn as a single
+ *  quad with its own fragment shader, which turns the fragment position
+ *  into ONE parameter t (projection along an axis, distance from a centre,
+ *  or angle around it) and then looks t up in a stop table.  So the API is
+ *  orthogonal - a shape and a set of stops - and the stop table is sampled
+ *  the same way for every shape.
+ *
+ *  The quad is drawn immediately instead of being queued: it needs its own
+ *  program, and a batch is a single draw call with one program.  That is
+ *  the same trade gxPresent() makes for the post shader.  gxFlush() runs
+ *  first, so a gradient still lands after everything queued before it.
+ *
+ *  Transparency: the stop colours carry RGB only; the alpha of the whole
+ *  gradient comes from setalpha(), and the compositing from setblendmode().
+ *  For a glow, use GX_BLEND_ADD and fade to black - additive blending
+ *  makes "no light" and "transparent" the same thing, and it needs no
+ *  alpha at all.
+ *====================================================================*/
+
+/* How many stops one gradient may carry.  The shader array is the same
+ * size, so the two have to stay in step. */
+#define GX_GRAD_MAX_STOPS   16
+
+/* One stop of a gradient: a colour and where it sits, 0 .. 1. */
+typedef struct GRADSTOP {
+    COLORREF color;
+    double   pos;
+} GRADSTOP;
+
+static const char* GX_GRAD_FS =
+    "#version 120\n"
+    "uniform vec4 uStops[16];   /* rgb = colour, w = position 0..1 */\n"
+    "uniform int  uStopN;\n"
+    "uniform vec4 uGeo;         /* mode 1: start point   2/3: centre */\n"
+    "uniform vec4 uGeo2;        /* mode 1: end point     2: radii  3: a0 in turns */\n"
+    "uniform int  uMode;        /* 1 linear, 2 radial, 3 conic */\n"
+    "uniform float uAlpha;\n"
+    "varying vec4 vColor;\n"
+    "varying vec2 vUV;\n"
+    "varying vec2 vPos;\n"
+    "vec3 gxGradSample(float t)\n"
+    "{\n"
+    "    int n = uStopN;\n"
+    "    if (n <= 0) return vec3(0.0);\n"
+    "    if (n == 1) return uStops[0].rgb;\n"
+    "    t = clamp(t, 0.0, 1.0);\n"
+    "    vec3 c = uStops[0].rgb;\n"
+    "    /* The stops are sorted by the caller, so the last one whose\n"
+    "     * position is <= t is the one that wins - which is what a single\n"
+    "     * forward pass over a bounded loop gives. */\n"
+    "    for (int i = 0; i < 15; i++) {\n"
+    "        if (i < n - 1) {\n"
+    "            float p0 = uStops[i].w;\n"
+    "            float p1 = uStops[i + 1].w;\n"
+    "            float f  = (p1 > p0) ? (t - p0) / (p1 - p0) : 0.0;\n"
+    "            f = clamp(f, 0.0, 1.0);\n"
+    "            if (t >= p0) c = mix(uStops[i].rgb, uStops[i + 1].rgb, f);\n"
+    "        }\n"
+    "    }\n"
+    "    return c;\n"
+    "}\n"
+    "void main()\n"
+    "{\n"
+    "    float t;\n"
+    "    if (uMode == 1) {\n"
+    "        vec2 d = uGeo2.xy - uGeo.xy;\n"
+    "        float L2 = dot(d, d);\n"
+    "        t = (L2 > 1e-9) ? dot(vPos - uGeo.xy, d) / L2 : 0.0;\n"
+    "    } else if (uMode == 2) {\n"
+    "        vec2 q = (vPos - uGeo.xy) / uGeo2.xy;\n"
+    "        t = length(q);\n"
+    "    } else if (uMode == 3) {\n"
+    "        vec2 q = vPos - uGeo.xy;\n"
+    "        /* atan(0, 0) is undefined, so the centre is pinned to t = 0. */\n"
+    "        t = (dot(q, q) > 1e-12)\n"
+    "            ? fract(atan(q.y, q.x) * 0.15915494309 + 0.5 - uGeo2.x)\n"
+    "            : 0.0;\n"
+    "    } else {\n"
+    "        t = 0.0;\n"
+    "    }\n"
+    "    gl_FragColor = vec4(gxGradSample(t), uAlpha);\n"
+    "}\n";
+
+#define GX_BLUR_MAX_TAPS   49      /* centre + 24 to each side */
+
+static const char* GX_BLUR_FS =
+    "#version 120\n"
+    "uniform sampler2D uTex;\n"
+    "uniform vec2  uStep;      /* one tap, in texture units, along one axis */\n"
+    "uniform float uW[49];     /* centre first, then one weight per side */\n"
+    "uniform int   uN;\n"
+    "varying vec2 vUV;\n"
+    "void main()\n"
+    "{\n"
+    "    vec4 s = uW[0] * texture2D(uTex, vUV);\n"
+    "    for (int i = 1; i < 49; i++) {\n"
+    "        if (i < uN) {\n"
+    "            vec2 o = uStep * float(i);\n"
+    "            s += uW[i] * texture2D(uTex, vUV + o);\n"
+    "            s += uW[i] * texture2D(uTex, vUV - o);\n"
+    "        }\n"
+    "    }\n"
+    "    /* Straight (non premultiplied) alpha: averaging the colour of a\n"
+    "     * half transparent pixel against an opaque one pulls the colour\n"
+    "     * towards whatever is underneath, which shows up as a dark rim.\n"
+    "     * Dividing the accumulated colour by the accumulated alpha keeps\n"
+    "     * the edge the colour it was. */\n"
+    "    if (s.a > 1e-5) s.rgb /= s.a;\n"
+    "    gl_FragColor = s;\n"
+    "}\n";
+
+static GLuint g_gx_gradProg = 0, g_gx_gradVbo = 0;
+static GLint  g_gx_gradProj = -1, g_gx_gradStops = -1, g_gx_gradStopN = -1,
+              g_gx_gradGeo = -1, g_gx_gradGeo2 = -1, g_gx_gradMode = -1,
+              g_gx_gradAlpha = -1;
+
+static GLuint g_gx_blurProg = 0;
+static GLint  g_gx_blurProj = -1, g_gx_blurStep = -1,
+              g_gx_blurW = -1, g_gx_blurN = -1;
+static IMAGE  g_gx_blurTmp;
+
+/* Build the two programs on first use.  Both reuse GX_VS, so the vertex
+ * layout (aPos / aColor / aUV at 0 / 1 / 2) is the one the whole library
+ * already uses and the same glVertexAttribPointer calls apply. */
+static bool gxGradBuild(void) {
+    GLuint vs, fs;
+    GLint ok = 0;
+    char buf[512];
+    if (g_gx_gradProg) return true;
+    if (!g_gx_glReady) return false;
+    vs = gxCompile(GL_VERTEX_SHADER, GX_VS);
+    fs = gxCompile(GL_FRAGMENT_SHADER, GX_GRAD_FS);
+    g_gx_gradProg = glCreateProgram();
+    glAttachShader(g_gx_gradProg, vs);
+    glAttachShader(g_gx_gradProg, fs);
+    glBindAttribLocation(g_gx_gradProg, 0, "aPos");
+    glBindAttribLocation(g_gx_gradProg, 1, "aColor");
+    glBindAttribLocation(g_gx_gradProg, 2, "aUV");
+    glLinkProgram(g_gx_gradProg);
+    glGetProgramiv(g_gx_gradProg, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        memset(buf, 0, sizeof(buf));
+        glGetProgramInfoLog(g_gx_gradProg, 511, NULL, buf);
+        MessageBoxA(NULL, buf, "Program Error", MB_OK);
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glUseProgram(g_gx_gradProg);
+    g_gx_gradProj  = glGetUniformLocation(g_gx_gradProg, "uProj");
+    g_gx_gradStops = glGetUniformLocation(g_gx_gradProg, "uStops");
+    g_gx_gradStopN = glGetUniformLocation(g_gx_gradProg, "uStopN");
+    g_gx_gradGeo   = glGetUniformLocation(g_gx_gradProg, "uGeo");
+    g_gx_gradGeo2  = glGetUniformLocation(g_gx_gradProg, "uGeo2");
+    g_gx_gradMode  = glGetUniformLocation(g_gx_gradProg, "uMode");
+    g_gx_gradAlpha = glGetUniformLocation(g_gx_gradProg, "uAlpha");
+    glUseProgram(g_gx_prog);
+    if (!g_gx_gradVbo) glGenBuffers(1, &g_gx_gradVbo);
+    return true;
+}
+
+static bool gxBlurBuild(void) {
+    GLuint vs, fs;
+    GLint ok = 0;
+    char buf[512];
+    if (g_gx_blurProg) return true;
+    if (!g_gx_glReady) return false;
+    vs = gxCompile(GL_VERTEX_SHADER, GX_VS);
+    fs = gxCompile(GL_FRAGMENT_SHADER, GX_BLUR_FS);
+    g_gx_blurProg = glCreateProgram();
+    glAttachShader(g_gx_blurProg, vs);
+    glAttachShader(g_gx_blurProg, fs);
+    glBindAttribLocation(g_gx_blurProg, 0, "aPos");
+    glBindAttribLocation(g_gx_blurProg, 1, "aColor");
+    glBindAttribLocation(g_gx_blurProg, 2, "aUV");
+    glLinkProgram(g_gx_blurProg);
+    glGetProgramiv(g_gx_blurProg, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        memset(buf, 0, sizeof(buf));
+        glGetProgramInfoLog(g_gx_blurProg, 511, NULL, buf);
+        MessageBoxA(NULL, buf, "Program Error", MB_OK);
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glUseProgram(g_gx_blurProg);
+    g_gx_blurProj = glGetUniformLocation(g_gx_blurProg, "uProj");
+    g_gx_blurStep = glGetUniformLocation(g_gx_blurProg, "uStep");
+    g_gx_blurW    = glGetUniformLocation(g_gx_blurProg, "uW");
+    g_gx_blurN    = glGetUniformLocation(g_gx_blurProg, "uN");
+    glUniform1i(glGetUniformLocation(g_gx_blurProg, "uTex"), 0);
+    glUseProgram(g_gx_prog);
+    return true;
+}
+
+static void gxGradPaint(double l, double t, double r, double b, int mode,
+                        double g0x, double g0y, double g1x, double g1y,
+                        const GRADSTOP* stops, int n) {
+    float verts[48];
+    float arr[4 * GX_GRAD_MAX_STOPS];
+    GRADSTOP s[GX_GRAD_MAX_STOPS];
+    double tmp;
+    int cnt, i, k;
+
+    if (!stops || n <= 0) return;
+    if (l > r) { tmp = l; l = r; r = tmp; }
+    if (t > b) { tmp = t; t = b; b = tmp; }
+
+    cnt = n;
+    if (cnt > GX_GRAD_MAX_STOPS) cnt = GX_GRAD_MAX_STOPS;
+
+    /* Copy, clamp, sort.  Sorting is what makes an out of order table
+     * harmless instead of producing a gradient that doubles back. */
+    for (i = 0; i < cnt; i++) {
+        s[i] = stops[i];
+        if (s[i].pos < 0.0) s[i].pos = 0.0;
+        if (s[i].pos > 1.0) s[i].pos = 1.0;
+    }
+    for (i = 1; i < cnt; i++) {
+        GRADSTOP key = s[i];
+        k = i - 1;
+        while (k >= 0 && s[k].pos > key.pos) { s[k + 1] = s[k]; k--; }
+        s[k + 1] = key;
+    }
+    for (i = 0; i < cnt; i++) {
+        arr[i * 4 + 0] = (float)GetRValue(s[i].color) / 255.f;
+        arr[i * 4 + 1] = (float)GetGValue(s[i].color) / 255.f;
+        arr[i * 4 + 2] = (float)GetBValue(s[i].color) / 255.f;
+        arr[i * 4 + 3] = (float)s[i].pos;
+    }
+
+    {
+        float x0 = (float)l, y0 = (float)t;
+        float x1 = (float)(r + 1.0), y1 = (float)(b + 1.0);
+        k = 0;
+        /* EasyX right / bottom are inclusive, so the quad spans [l, r+1). */
+        verts[k++]=x0; verts[k++]=y0; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=0.f; verts[k++]=0.f;
+        verts[k++]=x1; verts[k++]=y0; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=0.f;
+        verts[k++]=x1; verts[k++]=y1; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f;
+        verts[k++]=x0; verts[k++]=y0; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=0.f; verts[k++]=0.f;
+        verts[k++]=x1; verts[k++]=y1; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f;
+        verts[k++]=x0; verts[k++]=y1; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=1.f; verts[k++]=0.f; verts[k++]=1.f;
+    }
+
+    gxFlush();
+    if (!gxGradBuild()) return;
+
+    glUseProgram(g_gx_gradProg);
+    glUniformMatrix4fv(g_gx_gradProj, 1, GL_FALSE, g_gx_proj);
+    glUniform4fv(g_gx_gradStops, cnt, arr);
+    glUniform1i(g_gx_gradStopN, cnt);
+    glUniform4f(g_gx_gradGeo,  (float)g0x, (float)g0y, 0.f, 0.f);
+    glUniform4f(g_gx_gradGeo2, (float)g1x, (float)g1y, 0.f, 0.f);
+    glUniform1i(g_gx_gradMode, mode);
+    glUniform1f(g_gx_gradAlpha, g_gx_alpha);
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_gradVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 32, (const void*)0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 32, (const void*)8);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, (const void*)24);
+    gxSetRopState(R2_COPYPEN);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glUseProgram(g_gx_prog);
+    gxSetRopState(g_gx_rop2);
+}
+
+/* Linear gradient across a rectangle: position 0 at (x0,y0), 1 at (x1,y1).
+ * Outside that segment the end stops are held, as in every other gradient
+ * API.  To fade across the rectangle itself pass its own corners - a
+ * vertical fade is gradlinear(l, t, r, b, l, t, l, b, stops, n). */
+static GX_UNUSED void gradlinear(double l, double t, double r, double b,
+                                 double x0, double y0, double x1, double y1,
+                                 const GRADSTOP* stops, int n) {
+    gxGradPaint(l, t, r, b, 1, x0, y0, x1, y1, stops, n);
+}
+
+/* Radial gradient: t is 0 at the centre and 1 on the ellipse of half axes
+ * rx / ry.  A circle is rx == ry. */
+static GX_UNUSED void gradradial(double l, double t, double r, double b,
+                                 double cx, double cy, double rx, double ry,
+                                 const GRADSTOP* stops, int n) {
+    if (rx < 1e-3) rx = 1e-3;      /* the shader divides by both */
+    if (ry < 1e-3) ry = 1e-3;
+    gxGradPaint(l, t, r, b, 2, cx, cy, rx, ry, stops, n);
+}
+
+/* Conic gradient: t follows the angle around (cx, cy), starting at a0
+ * radians (0 is the +x axis, the angle growing the way the screen's y does)
+ * and sweeping once clockwise over the full turn. */
+static GX_UNUSED void gradconic(double l, double t, double r, double b,
+                                double cx, double cy, double a0,
+                                const GRADSTOP* stops, int n) {
+    gxGradPaint(l, t, r, b, 3, cx, cy, a0 / 6.283185307179586, 0.0, stops, n);
+}
+
+/* Gaussian blur of src into dst, radius in pixels.
+ *
+ * Two passes of a separable kernel (horizontal, then vertical) through a
+ * scratch target, so the cost is O(n * taps) rather than O(n * taps^2).
+ * A wide radius is also strained: above 8 px the taps walk the source in
+ * steps, which costs a little quality and saves a lot of texture fetches.
+ *
+ * dst is resized to match src when it does not already.  src and dst must
+ * be different images. */
+static GX_UNUSED void blurimage(IMAGE* dst, const IMAGE* src, double radius) {
+    static const float ident[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    float w[GX_BLUR_MAX_TAPS];
+    double rs, sigma, sum;
+    int sw, sh, step, hw, i;
+
+    if (!g_gx_glReady || !dst || !src || dst == src) return;
+    if (!gxImageOk(src) || src->width < 1 || src->height < 1) return;
+
+    sw = src->width;
+    sh = src->height;
+    if (!gxImageOk(dst) || dst->width != sw || dst->height != sh)
+        Resize(dst, sw, sh);
+    if (!gxImageOk(dst)) return;
+
+    if (!(radius >= 0.5)) {
+        /* No blur asked for: one tap of weight 1 makes the two passes an
+         * exact copy, so there is no separate path to keep in step. */
+        hw = 1;
+        w[0] = 1.f;
+        w[1] = 0.f;
+        step = 1;
+    } else {
+        step = (radius > 8.0) ? (int)ceil(radius / 8.0) : 1;
+        if (step < 1) step = 1;
+        rs = radius / (double)step;
+        if (rs < 0.5) rs = 0.5;
+        /* sigma = rs / 2 and a half width of 1.5 * rs is +-3 sigma, which
+         * is where a Gaussian is already down to about 1%. */
+        sigma = rs / 2.0;
+        hw = (int)ceil(rs * 1.5);
+        if (hw < 1) hw = 1;
+        if (hw > (GX_BLUR_MAX_TAPS - 1) / 2) hw = (GX_BLUR_MAX_TAPS - 1) / 2;
+        sum = 0.0;
+        for (i = 0; i <= hw; i++) {
+            double d = (double)i;
+            double v = exp(-(d * d) / (2.0 * sigma * sigma));
+            w[i] = (float)v;
+            sum += (i == 0) ? v : 2.0 * v;
+        }
+        if (sum <= 0.0) { w[0] = 1.f; hw = 1; }
+        else for (i = 0; i <= hw; i++) w[i] = (float)(w[i] / sum);
+    }
+
+    gxFlush();
+    if (!gxBlurBuild()) return;
+
+    if (!gxImageOk(&g_gx_blurTmp) || g_gx_blurTmp.width != sw ||
+        g_gx_blurTmp.height != sh) {
+        gxImageDestroy(&g_gx_blurTmp);
+        gxImageAlloc(&g_gx_blurTmp, sw, sh);
+    }
+    if (!gxImageOk(&g_gx_blurTmp)) return;
+
+    glUseProgram(g_gx_blurProg);
+    glUniformMatrix4fv(g_gx_blurProj, 1, GL_FALSE, ident);
+    glUniform1i(g_gx_blurN, hw + 1);
+    glUniform1fv(g_gx_blurW, hw + 1, w);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindBuffer(GL_ARRAY_BUFFER, g_gx_blitVbo);
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 32, (const void*)0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 32, (const void*)8);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, (const void*)24);
+    /* The blur replaces what is underneath; neither the clip box nor a
+     * blend mode should leak into it. */
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_COLOR_LOGIC_OP);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_blurTmp.fbo);
+    glViewport(0, 0, sw, sh);
+    glBindTexture(GL_TEXTURE_2D, src->tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glUniform2f(g_gx_blurStep, (float)step / (float)sw, 0.f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, dst->fbo);
+    glViewport(0, 0, sw, sh);
+    glBindTexture(GL_TEXTURE_2D, g_gx_blurTmp.tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glUniform2f(g_gx_blurStep, 0.f, (float)step / (float)sh);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glUseProgram(g_gx_prog);
+    gxImgBufDrop(dst);                       /* the pixels changed */
+    if (g_gx_workImg == dst) gxSyncWorkTarget();
+    gxBindTarget();
+    gxApplyClip();
+    gxSetRopState(g_gx_rop2);
+}
+
 /* Read a bottom-up RGBA block out of a render target. */
 static unsigned char* gxReadTarget(GLuint fbo, int x, int y, int w, int h) {
     unsigned char* px;
@@ -7276,6 +7725,11 @@ static void gxDestroyGL(void) {
     }
     gxPostDestroy();
     if (g_gx_prog) glDeleteProgram(g_gx_prog);
+    if (g_gx_gradProg) glDeleteProgram(g_gx_gradProg);
+    if (g_gx_gradVbo)  glDeleteBuffers(1, &g_gx_gradVbo);
+    if (g_gx_blurProg) glDeleteProgram(g_gx_blurProg);
+    gxImageDestroy(&g_gx_blurTmp);
+    g_gx_gradProg = g_gx_gradVbo = g_gx_blurProg = 0;
     g_gx_vbo = g_gx_blitVbo = g_gx_fbo = g_gx_canvasTex = g_gx_atlasTex = g_gx_prog = 0;
     memset(&g_gx_canvasTarget, 0, sizeof(g_gx_canvasTarget));
     g_gx_glReady = false;
