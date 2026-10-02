@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261001
+#define EASYGL_H 20261002
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -27,6 +27,39 @@
  *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
+ *
+ * Revision 20261002 (bug fix pass)
+ *   - loadimage() with an explicit size now records that size as the
+ *     LOGICAL one.  It resized the texture to w x h but left logW / logH
+ *     at the size the FILE had, and putimage() reads the logical pair
+ *     when the destination size is omitted - so
+ *
+ *         loadimage(&img, L"a.png", 800, 600);   (file is 400x300)
+ *         putimage(0, 0, &img);                  (drew 400x300)
+ *
+ *     drew a 800x600 texture at 400x300.  Only a load that actually
+ *     rescaled was affected, which is why it went unnoticed: asking for
+ *     the size the file already has took the other branch.
+ *   - loadimage() refreshes the working target when the image it just
+ *     reloaded is the selected one.  Swapping img->tex / img->fbo leaves
+ *     g_gx_workTarget holding the pair gxImageDestroy() has already
+ *     deleted, so with
+ *
+ *         SetWorkingImage(&img);  loadimage(&img, L"a.png", 800, 600);
+ *
+ *     every draw after that was bound to a deleted framebuffer and did
+ *     not appear.  Resize(), rotateimage() and flipimage() already did
+ *     this; this path did not.
+ *   - gxImageAlloc() releases the texture when the framebuffer comes
+ *     back incomplete.  It deleted the fbo and returned with img->tex
+ *     already generated, and since gxImageDestroy() had cleared the magic
+ *     field the image was thereafter treated as uninitialised - so the
+ *     texture name was never freed.
+ *   - gxImageUpload() indexes its flip buffer with size_t.  The
+ *     allocation already used size_t and only the subscripts were int,
+ *     so a large image could wrap them negative.  Needs tens of
+ *     thousands of pixels per row to reach, but the two spellings of one
+ *     computation should not disagree.
  *
  * Revision 20261001 (bug fix pass)
  *   - getaspectratio() / getorigin() report what the caller PASSED to
@@ -433,8 +466,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261001
-#define EASYGL_VERSION  "20261001"
+#define EASYGL_VER      20261002
+#define EASYGL_VERSION  "20261002"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -5532,7 +5565,10 @@ static void gxImageAlloc(IMAGE* img, int w, int h) {
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         glBindFramebuffer(GL_FRAMEBUFFER, g_gx_canvasTarget.fbo);
         glDeleteFramebuffers(1, &img->fbo);
+        glDeleteTextures(1, &img->tex);
         img->fbo = 0;
+        img->tex = 0;      /* the texture was created already; leaking it
+                              would strand the name for good */
         return;
     }
     glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
@@ -5581,7 +5617,8 @@ static void gxImageUpload(IMAGE* img, const unsigned char* px, int w, int h, boo
         unsigned char* flip = (unsigned char*)malloc((size_t)w * (size_t)h * 4);
         if (!flip) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); return; }
         for (row = 0; row < h; row++)
-            memcpy(&flip[row * w * 4], &px[(h - 1 - row) * w * 4], (size_t)w * 4);
+            memcpy(&flip[(size_t)row * (size_t)w * 4],
+                   &px[(size_t)(h - 1 - row) * (size_t)w * 4], (size_t)w * 4);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, flip);
         free(flip);
     }
@@ -6019,8 +6056,19 @@ static bool gxLoadImageFile(const WCHAR* file, IMAGE* img, int w, int h, bool re
             gxImageDestroy(img);
             img->tex = tmp.tex; img->fbo = tmp.fbo;
             img->width = w; img->height = h;
+            /* logW / logH too, or putimage() draws the resized texture at
+             * the size the FILE had: gxImageUpload() above built the image
+             * at iw x ih and set both from that, and the pixel size alone
+             * is not what the draw path reads. */
+            img->logW = w; img->logH = h;
             img->flags = flags;
             img->magic = GXIMG_MAGIC;   /* gxImageDestroy() cleared it */
+            /* The texture and framebuffer behind this IMAGE were just
+             * swapped, so the mirror g_gx_workTarget holds is stale - and
+             * the pair gxImageDestroy() deleted is gone.  Without this a
+             * loadimage() on the image that happens to be selected leaves
+             * every later draw bound to a deleted framebuffer. */
+            if (g_gx_workImg == img) gxSyncWorkTarget();
         } else {
             gxImageDestroy(&tmp);
         }
