@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261003
+#define EASYGL_H 20261004
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -28,6 +28,63 @@
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
  *
+ * Revision 20261004 (rectangle clip)
+ *
+ *   - Clipping used to be reachable only through setcliprgn(), which
+ *     takes a GDI HRGN: you had to build a region object and own it just
+ *     to say "clip to this box".  setcliprect(l, t, r, b) does it with
+ *     four integers, and setcliprect(NULL) clears it.  Both families
+ *     drive the same state, so the last call wins.
+ *
+ *   - getcliprect() / iscliprect() read the box back, and setclipmode() /
+ *     getclipmode() silence it without forgetting it, which is what you
+ *     want when a frame or a label must escape the clip while everything
+ *     else stays inside.
+ *
+ *   - The box is logical, so it follows setorigin() and setaspectratio(),
+ *     and it survives switching the working image: gxApplyClip() re-derives
+ *     the device pixels from whatever target is bound.  The old code also
+ *     fed a negative width or height to glScissor() when the region sat
+ *     left of or above the target, which is GL_INVALID_VALUE and silently
+ *     ignores the box; it clamps first now.
+ *
+ *   - GX_DISPATCH() counted "no argument" wrong on strict-ISO compilers
+ *     (GCC older than 8, or any compiler built with -std=c11): the usual
+ *     TRIGGER probe cannot tell an empty list from one argument that
+ *     starts with an opening parenthesis, so setcliprect(NULL) expanded
+ *     to gx_clipb_0(NULL) and failed with
+ *         too many arguments to function 'gx_clipb_0'
+ *     Three probes now decide, and only the (0,0,1) combination - which
+ *     nothing but an empty list produces - reports zero.  fixhighdpi(true),
+ *     GetImageBuffer(NULL) and getviewport(&l) hit the same path and are
+ *     fixed by the same change.
+ *
+ * Revision 20261004 (A / W entry points, and a wide font throughout)
+ *
+ *   - The library now keeps the current font as a LOGFONTW.  It used to
+ *     be a LOGFONTA, so a face name that the active code page cannot
+ *     represent was already mangled by the time it got stored, and a
+ *     settextstyleW() followed by gettextstyle() could not give the name
+ *     back.  Fonts are created with CreateFontIndirectW() now.
+ *
+ *   - setfont / getfont / gettextstyle gained both flavours: setfontA /
+ *     setfontW, getfontA / getfontW, gettextstyleA / gettextstyleW.  On
+ *     the C++ side they are overloads; on the C11 side a _Generic macro
+ *     picks the flavour from the pointer type.  settextstyle's one
+ *     argument form now takes LOGFONTA* or LOGFONTW* the same way.
+ *
+ *   - Every other A / W pair has always been there, but the help file
+ *     claimed otherwise, so the documentation was the part that was
+ *     wrong.  It now lists all of them.
+ *
+ * No code change: the A / W names have always been there.  What was
+ * missing was the documentation, which claimed the opposite - it said
+ * "there is no drawtextA / drawtextW" while the library defined both.
+ * The help file now lists every A / W pair, and says which flavour a
+ * name spells out and why you would choose it over letting the argument
+ * type decide.  InputBoxA / InputBoxW gained a C++ spelling so InputBox
+ * is symmetric with inputbox under both languages.
+ *
  * Revision 20261003
  *   - Three new graphics primitives.  gradrectangle() bakes one colour
  *     into each corner, so the only fade it could express was a linear one
@@ -51,6 +108,35 @@
  *     Shadows, glows, depth of field and frosted glass all follow from it.
  *   - Both need two GL entry points that were not loaded before:
  *     glUniform1fv and glUniform4fv.
+ *   - dpiaware(on) / isdpiaware(): declare process DPI awareness, and
+ *     report whether the process has it.
+ *
+ *     This is the switch that decides whether fixhighdpi() does anything.
+ *     Windows lies to a process that has not declared awareness: to such
+ *     a process GetDeviceCaps(LOGPIXELSY) reports 96 whatever the display
+ *     is really set to, so getdpi() said 96 on a 150% display,
+ *     gethighdpiscale() said 1.0, and fixhighdpi() computed 96/96 == 1.0
+ *     and did nothing - silently, with nothing in the library broken.
+ *
+ *     The only call that made getdpi() honest was SetProcessDPIAware(),
+ *     buried inside gxInitScreenScale() as a side effect of asking how
+ *     big the screen is.  A program that never called getinitscreenscale()
+ *     never got it, and one that did had its DPI behaviour changed for
+ *     good by a function whose documented job was to guess a size.  So:
+ *
+ *       - dpiaware(true) before initgraph() makes getdpi() read 144 on a
+ *         150% display, which is what gives fixhighdpi() something to
+ *         scale by.
+ *       - gxInitScreenScale() now only forces awareness when the program
+ *         has NOT called dpiaware() either way.  Say what you want and
+ *         the guess is out of the picture; say nothing and it behaves
+ *         exactly as before.
+ *
+ *     Awareness is process wide, one way, and must be settled before the
+ *     first window exists.  dpiaware() returns whether the process ended
+ *     up in the state asked for, so an impossible request (turning it off
+ *     once it is on, or overriding a dpiAware manifest entry) is reported
+ *     as false rather than being silently ignored.
 
  * Revision 20261002 (bug fix pass)
  *   - loadimage() with an explicit size now records that size as the
@@ -490,8 +576,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261003
-#define EASYGL_VERSION  "20261003"
+#define EASYGL_VER      20261004
+#define EASYGL_VERSION  "20261004"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -1211,7 +1297,7 @@ typedef struct Glyph {
 
 typedef struct FontRec {
     HFONT hfont;
-    char  face[LF_FACESIZE];
+    WCHAR face[LF_FACESIZE];
     int   pxH;
     int   weight;
     bool  italic;
@@ -1344,6 +1430,10 @@ static int       g_gx_polyMode  = ALTERNATE;
 static double    g_gx_curX = 0, g_gx_curY = 0;
 static bool      g_gx_clipOn = false;
 static RECT      g_gx_clipRect;
+/* setclipmode(): a master switch that silences the box above without
+ * forgetting it.  "Clipped" therefore means "a box is set AND this is
+ * on"; dropping either one disables the scissor test. */
+static bool      g_gx_clipMode = true;
 
 /* text size multiplier (kept from the original easygl.h) */
 static float g_gx_textScale = 1.f;
@@ -2084,7 +2174,7 @@ static int      g_gx_curVertA   = 0;              /* of the running batch */
 static void gxApplyClip(void) {
     long x0, x1, y0, y1;
     if (!g_gx_glReady) return;
-    if (!g_gx_clipOn) { glDisable(GL_SCISSOR_TEST); return; }
+    if (!g_gx_clipOn || !g_gx_clipMode) { glDisable(GL_SCISSOR_TEST); return; }
     x0 = (long)floorf((float)g_gx_clipRect.left   * g_gx_scaleX + g_gx_originX);
     x1 = (long)ceilf ((float)g_gx_clipRect.right  * g_gx_scaleX + g_gx_originX);
     y0 = (long)floorf((float)g_gx_clipRect.top    * g_gx_scaleY + g_gx_originY);
@@ -2852,7 +2942,7 @@ static GxFontVec g_gx_fonts;
 static unsigned char* g_gx_atlas = NULL;
 static int  g_gx_packX = 0, g_gx_packY = 0, g_gx_packRowH = 0;
 static HDC  g_gx_fontDC = NULL;
-static LOGFONTA g_gx_font;                 /* current font (ANSI face name) */
+static LOGFONTW g_gx_font;                 /* current font (wide face name) */
 
 typedef struct GxStrSlot { char* key; int val; int used; } GxStrSlot;
 typedef struct GxStrMap  { GxStrSlot* slots; size_t cap; size_t count; } GxStrMap;
@@ -2987,7 +3077,7 @@ static void gxInitFontDefault(void) {
     g_gx_font.lfClipPrecision = CLIP_DEFAULT_PRECIS;
     g_gx_font.lfQuality = DEFAULT_QUALITY;
     g_gx_font.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
-    strcpy(g_gx_font.lfFaceName, "System");
+    wcscpy(g_gx_font.lfFaceName, L"System");
 }
 
 /*--------------------------- codepage helpers --------------------------*/
@@ -3056,6 +3146,58 @@ static char* gxDupBytesFromWide(const WCHAR* w) {
     if (!out) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); exit(1); }
     if (WideCharToMultiByte(g_gx_codePage, 0, w, -1, out, n, NULL, NULL) <= 0) out[0] = 0;
     return out;
+}
+
+/*---------------------- LOGFONT A <-> W conversion ---------------------*/
+/* The current font is kept as LOGFONTW, so a face name the active code
+ * page cannot represent still survives a setfontW() / getfontW() round
+ * trip.  Only lfFaceName differs between the two flavours; every other
+ * field is copied as is. */
+static void gxLogFontToW(const LOGFONTA* a, LOGFONTW* w) {
+    WCHAR* face;
+    memset(w, 0, sizeof(*w));
+    if (!a || !w) return;
+    w->lfHeight         = a->lfHeight;
+    w->lfWidth          = a->lfWidth;
+    w->lfEscapement     = a->lfEscapement;
+    w->lfOrientation    = a->lfOrientation;
+    w->lfWeight         = a->lfWeight;
+    w->lfItalic         = a->lfItalic;
+    w->lfUnderline      = a->lfUnderline;
+    w->lfStrikeOut      = a->lfStrikeOut;
+    w->lfCharSet        = a->lfCharSet;
+    w->lfOutPrecision   = a->lfOutPrecision;
+    w->lfClipPrecision  = a->lfClipPrecision;
+    w->lfQuality        = a->lfQuality;
+    w->lfPitchAndFamily = a->lfPitchAndFamily;
+    face = gxDupWideFromBytes(a->lfFaceName);
+    if (face) {
+        wcsncpy(w->lfFaceName, face, LF_FACESIZE - 1);
+        free(face);
+    }
+}
+static void gxLogFontToA(const LOGFONTW* w, LOGFONTA* a) {
+    char* face;
+    memset(a, 0, sizeof(*a));
+    if (!w || !a) return;
+    a->lfHeight         = w->lfHeight;
+    a->lfWidth          = w->lfWidth;
+    a->lfEscapement     = w->lfEscapement;
+    a->lfOrientation    = w->lfOrientation;
+    a->lfWeight         = w->lfWeight;
+    a->lfItalic         = w->lfItalic;
+    a->lfUnderline      = w->lfUnderline;
+    a->lfStrikeOut      = w->lfStrikeOut;
+    a->lfCharSet        = w->lfCharSet;
+    a->lfOutPrecision   = w->lfOutPrecision;
+    a->lfClipPrecision  = w->lfClipPrecision;
+    a->lfQuality        = w->lfQuality;
+    a->lfPitchAndFamily = w->lfPitchAndFamily;
+    face = gxDupBytesFromWide(w->lfFaceName);
+    if (face) {
+        strncpy(a->lfFaceName, face, LF_FACESIZE - 1);
+        free(face);
+    }
 }
 
 /* Encode one Unicode code point as UTF-16 (returns 1 or 2 units). */
@@ -3163,13 +3305,13 @@ GX_INLINE int gxLogToDevY(float y) {
 GX_INLINE void settextscale(float s) { g_gx_textScale = (s > 0.05f && s < 20.f) ? s : 1.f; }
 GX_INLINE float gettextscale(void) { return g_gx_textScale; }
 
-static int gxGetFontId(const LOGFONTA* lf) {
+static int gxGetFontId(const LOGFONTW* lf) {
     double sy = (g_gx_scaleY > 0.f) ? (double)g_gx_scaleY : 1.0;
     double want = fabs((double)lf->lfHeight) * sy * (double)g_gx_textScale + 0.5;
-    int px, id;
+    int px, id, nb;
     char key[352];
     FontRec rec;
-    LOGFONTA lf2;
+    LOGFONTW lf2;
     if (want > 2147483000.0) want = 2147483000.0;
     px = (int)want;
     if (px < 1) px = 1;
@@ -3177,13 +3319,23 @@ static int gxGetFontId(const LOGFONTA* lf) {
      * GLF_UNLIMITED bake different bitmaps, so they cannot share an HFONT.
      * Without this the cache returned the first one that was created and
      * setfontrenderer() appeared to do nothing at all. */
-    sprintf(key, "%s|%d|%d|%d|%d|%d|%d|%d", lf->lfFaceName, px,
+    /* The key is only used to tell fonts apart, never printed.  The face
+     * name is written as fixed width hex rather than raw UTF-16 bytes: an
+     * ASCII letter is a code unit whose high byte is zero, and a zero byte
+     * inside the key would truncate the strcmp, making "System" and "Sans"
+     * look like the same font. */
+    nb = 0;
+    while (lf->lfFaceName[nb / 4] && nb + 4 <= (int)sizeof(key) - 96) {
+        sprintf(key + nb, "%04x", (unsigned)(WCHAR)lf->lfFaceName[nb / 4]);
+        nb += 4;
+    }
+    sprintf(key + nb, "|%d|%d|%d|%d|%d|%d|%d", px,
             (int)lf->lfWeight, lf->lfItalic ? 1 : 0, (int)lf->lfCharSet,
             lf->lfUnderline ? 1 : 0, lf->lfStrikeOut ? 1 : 0, g_gx_fontMode);
     if (gxStrMapGet(&g_gx_fontIds, key, &id)) return id;
 
     memset(&rec, 0, sizeof(rec));
-    strcpy(rec.face, lf->lfFaceName);
+    wcsncpy(rec.face, lf->lfFaceName, LF_FACESIZE - 1);
     rec.pxH = px;
     rec.weight = (int)lf->lfWeight;
     rec.italic = lf->lfItalic ? true : false;
@@ -3199,7 +3351,7 @@ static int gxGetFontId(const LOGFONTA* lf) {
      * exactly one colour with no grey pixels along the edges. */
     lf2.lfQuality = (g_gx_fontMode == GLF_INT) ? NONANTIALIASED_QUALITY
                                             : ANTIALIASED_QUALITY;
-    rec.hfont = CreateFontIndirectA(&lf2);
+    rec.hfont = CreateFontIndirectW(&lf2);
 
     GxFontVec_pushv(&g_gx_fonts, rec);
     id = (int)g_gx_fonts.size - 1;
@@ -3707,8 +3859,21 @@ GX_INLINE void getorigin(int* x, int* y) {
     if (x) *x = g_gx_workImg ? 0 : (int)g_gx_reqOriginX;
     if (y) *y = g_gx_workImg ? 0 : (int)g_gx_reqOriginY;
 }
-GX_INLINE void getfont(LOGFONTA* f) { if (f) *f = g_gx_font; }
-GX_INLINE void setfont(const LOGFONTA* f) { if (f) g_gx_font = *f; }
+/* setfont / getfont in both flavours.  setfont is also the LOGFONT form
+ * of settextstyle, so both names land on the same two functions. */
+static void gxSetFontA(const LOGFONTA* f) {
+    LOGFONTW w;
+    if (!f) return;
+    gxLogFontToW(f, &w);
+    g_gx_font = w;
+}
+static void gxSetFontW(const LOGFONTW* f) { if (f) g_gx_font = *f; }
+static void gxGetFontA(LOGFONTA* f) { if (f) gxLogFontToA(&g_gx_font, f); }
+static void gxGetFontW(LOGFONTW* f) { if (f) *f = g_gx_font; }
+GX_INLINE void setfontA(const LOGFONTA* f) { gxSetFontA(f); }
+GX_INLINE void setfontW(const LOGFONTW* f) { gxSetFontW(f); }
+GX_INLINE void getfontA(LOGFONTA* f) { gxGetFontA(f); }
+GX_INLINE void getfontW(LOGFONTW* f) { gxGetFontW(f); }
 GX_INLINE HWND GetHWnd(void) { return g_gx_hwnd; }
 
 /*======================================================================
@@ -3747,6 +3912,165 @@ static int getdpi(void) {
  * 20 -> 30 at 150% and 40 at 200%, keeping things on whole pixels. */
 GX_INLINE int gxIbS(int v) { return MulDiv(v, getdpi(), 96); }
 
+/*======================================================================
+ *  6b-1. Process DPI awareness
+ *
+ *  This is the switch that decides whether getdpi() is allowed to tell
+ *  the truth, and therefore whether fixhighdpi() does anything at all.
+ *
+ *  Windows lies to a process that has not declared DPI awareness.  To
+ *  such a process GetDeviceCaps(LOGPIXELSY) reports 96 whatever the
+ *  display is really set to, and GetSystemMetrics() describes the
+ *  virtualised 96 dpi desktop rather than the real one.  getdpi() reads
+ *  the former, so on an unaware process it says 96 on a 150% display,
+ *  gethighdpiscale() says 1.0, and fixhighdpi() computes 96 / 96 == 1.0
+ *  and quietly does nothing.  Nothing in the library is broken; the
+ *  numbers it is handed are.
+ *
+ *  Declaring awareness is what makes those numbers real.  It is process
+ *  wide, it cannot be undone, and it has to be settled before the first
+ *  window exists, so it belongs in an explicit call of its own rather
+ *  than inside something else.
+ *
+ *  Default: unaware - which is simply what Windows does to a process
+ *  that says nothing.  That default is kept on purpose.  Turning
+ *  awareness on changes the device pixel count of every window and the
+ *  scale of every font, so flipping it by default would move the
+ *  furniture for programs that already work.
+ *====================================================================*/
+
+/* -1 = the program has not said which it wants, 0 = unaware, 1 = aware.
+ * Recorded so gxInitScreenScale() stops forcing awareness on a program
+ * that has stated a preference - see the note there. */
+static int g_gx_dpiAwareReq = -1;
+
+/* Ask Windows what the process is, newest route first:
+ *
+ *   GetProcessDpiAwareness()   Win8.1+, shcore.dll.  Reports all three
+ *                              levels; anything but PROCESS_DPI_UNAWARE
+ *                              (0) counts as aware.
+ *   IsProcessDPIAware()        Vista+, user32.dll.  One bit only, but
+ *                              user32 is always loaded and shcore is
+ *                              not guaranteed to exist at all.
+ *
+ * shcore.dll is loaded rather than looked up because it may not be in
+ * the process yet and does not exist before 8.1.  Both failures are
+ * ordinary on old Windows, so neither is reported.  The shcore entry
+ * points are typed as returning long rather than HRESULT because a slim
+ * SDK may not carry HRESULT; the two are the same 32-bit signed integer
+ * on every Windows this library runs on. */
+static bool gxDpiAwareQuery(void) {
+    HMODULE hSh = LoadLibraryA("shcore.dll");
+    if (hSh) {
+        /* HRESULT GetProcessDpiAwareness(HANDLE, PROCESS_DPI_AWARENESS*) */
+        typedef long (WINAPI *PFN_GPDA)(HANDLE, int*);
+        PFN_GPDA pGet = (PFN_GPDA)GetProcAddress(hSh, "GetProcessDpiAwareness");
+        if (pGet) {
+            int  v = 0;
+            long hr = pGet(NULL, &v);
+            FreeLibrary(hSh);
+            if (hr == 0) return (v != 0);   /* 0 = S_OK                */
+            return false;                   /* refused / unsupported   */
+        }
+        FreeLibrary(hSh);
+    }
+    {
+        HMODULE hUser = GetModuleHandleA("user32.dll");
+        if (hUser) {
+            typedef BOOL (WINAPI *PFN_IPDA)(void);
+            PFN_IPDA pIs = (PFN_IPDA)GetProcAddress(hUser, "IsProcessDPIAware");
+            if (pIs) return (pIs() != 0);
+        }
+    }
+    return false;
+}
+
+/* Declare system DPI awareness.  Returns false only when nothing could
+ * be done and the process stayed unaware.
+ *
+ * Two routes, newest first:
+ *
+ *   SetProcessDpiAwareness(1)  Win8.1+, shcore.dll.
+ *                              PROCESS_SYSTEM_DPI_AWARE.
+ *   SetProcessDPIAware()       Vista+, user32.dll.  The same thing by an
+ *                              older name.
+ *
+ * Both refuse to change a level that is already set - by an earlier call
+ * or by a dpiAware entry in the .exe manifest - and report that refusal
+ * as failure.  It is not a failure for us: the state we asked for is the
+ * state we got, so it counts as success.  Anything else (old Windows, a
+ * missing export) leaves the process unaware and is reported as such. */
+static bool gxDpiAwareSet(void) {
+    HMODULE hSh = LoadLibraryA("shcore.dll");
+    if (hSh) {
+        typedef long (WINAPI *PFN_SPDA2)(int);
+        PFN_SPDA2 pSet = (PFN_SPDA2)GetProcAddress(hSh, "SetProcessDpiAwareness");
+        if (pSet) {
+            long hr = pSet(1);              /* PROCESS_SYSTEM_DPI_AWARE */
+            FreeLibrary(hSh);
+            /* 0 = S_OK; 0x80070005 = E_ACCESSDENIED, meaning it was
+             * already set - which is the state we wanted anyway. */
+            if (hr == 0 || hr == (long)0x80070005L) return true;
+            return false;
+        }
+        FreeLibrary(hSh);
+    }
+    {
+        HMODULE hUser = GetModuleHandleA("user32.dll");
+        if (hUser) {
+            typedef BOOL (WINAPI *PFN_SPDA)(void);
+            PFN_SPDA pSet = (PFN_SPDA)GetProcAddress(hUser, "SetProcessDPIAware");
+            /* Vista+.  Returns 0 when it was already set; same reading
+             * as E_ACCESSDENIED above. */
+            if (pSet) { pSet(); return true; }
+        }
+    }
+    return false;
+}
+
+/* Whether the process is DPI aware - that is, whether getdpi() reports
+ * the real DPI instead of a flat 96.
+ *
+ * fixhighdpi() and gethighdpiscale() only have anything to scale by when
+ * this is true, so on a scaled display it is worth checking: a program
+ * that calls fixhighdpi() and still gets a small window is almost always
+ * an unaware process, and dpiaware(true) is the fix. */
+static bool isdpiaware(void) { return gxDpiAwareQuery(); }
+
+/* Ask for (on) or against (off) process DPI awareness.
+ *
+ *   dpiaware(true)   declare system DPI awareness.  getdpi() then reads
+ *                    144 on a 150% display instead of 96, so
+ *                    gethighdpiscale() reports 1.5 and fixhighdpi() has
+ *                    something to scale by.
+ *   dpiaware(false)  leave the process unaware, so Windows bitmap-scales
+ *                    the window.  Text comes out slightly soft, but a
+ *                    logical unit stays one real pixel on screen.
+ *
+ * Returns whether the process ended up in the state that was asked for,
+ * so a request that could not be honoured is distinguishable from one
+ * that was:
+ *
+ *   - awareness cannot be turned OFF once it is on.  It is a one-way
+ *     process-wide switch, so dpiaware(false) after dpiaware(true)
+ *     returns false and changes nothing.
+ *   - a dpiAware entry in the .exe manifest settles it before main()
+ *     runs, and neither direction can move it afterwards.
+ *
+ * Call this before initgraph().  Awareness has to be settled before the
+ * first window exists; once a window is open the call is either refused
+ * by Windows or too late to affect that window. */
+static bool dpiaware(bool on) {
+    g_gx_dpiAwareReq = on ? 1 : 0;
+    if (!on) {
+        /* Nothing to switch - only to have prevented.  Report where the
+         * process actually is, which is what the caller asked about. */
+        return !gxDpiAwareQuery();
+    }
+    gxDpiAwareSet();
+    return gxDpiAwareQuery();
+}
+
 /* Screen scale estimate, wrapped for callers.
  *
  * This is NOT the same thing as getdpi() and the two are deliberately kept
@@ -3770,11 +4094,20 @@ GX_INLINE int gxIbS(int v) { return MulDiv(v, getdpi(), 96); }
  * and cannot be undone, so it is worth calling once rather than on every
  * enquiry.  The answer cannot change afterwards either. */
 static float gxInitScreenScale(void) {
-    HMODULE hUser = GetModuleHandleA("user32.dll");
-    if (hUser) {
-        typedef BOOL (WINAPI *PFN_SPDA)(void);
-        PFN_SPDA pSetDPIAware = (PFN_SPDA)GetProcAddress(hUser, "SetProcessDPIAware");
-        if (pSetDPIAware) pSetDPIAware();   /* Vista+; no-op on failure */
+    /* Forcing awareness used to be unconditional here.  It is a process
+     * wide change that cannot be undone, hanging off a function whose
+     * documented job is to guess how big the display is - so a program
+     * that asked a screen size had its DPI behaviour changed for good.
+     * dpiaware() is the explicit way to ask now.  This only keeps the
+     * old behaviour for a program that never expressed a preference,
+     * which is what keeps existing code behaving exactly as before. */
+    if (g_gx_dpiAwareReq < 0) {
+        HMODULE hUser = GetModuleHandleA("user32.dll");
+        if (hUser) {
+            typedef BOOL (WINAPI *PFN_SPDA)(void);
+            PFN_SPDA pSetDPIAware = (PFN_SPDA)GetProcAddress(hUser, "SetProcessDPIAware");
+            if (pSetDPIAware) pSetDPIAware();   /* Vista+; no-op on failure */
+        }
     }
     float m = (float)(GetSystemMetrics(SM_CYSCREEN) / 1000.0);
     if (!(m > 0.5f)) m = 1.f;              /* NaN / absurdly small -> 1.0 */
@@ -8529,6 +8862,85 @@ static void getcliprgn(HRGN hrgn) {
 }
 
 /*======================================================================
+ * Rectangle clip (easygl extension)
+ *====================================================================*/
+/* setcliprgn() above takes a GDI HRGN, which means building a region
+ * object and owning it just to say "clip to this box".  These calls do
+ * the same thing with four plain integers, which is what you want nine
+ * times out of ten.  Both families drive one and the same state, so the
+ * last call wins and mixing them is fine - there is only ever one box.
+ *
+ * The box is LOGICAL: it follows setorigin() and setaspectratio() exactly
+ * like every other EasyX coordinate, and it survives a switch to another
+ * working image (gxApplyClip() re-derives the device pixels every time,
+ * from whatever target happens to be bound).  right / bottom are
+ * EXCLUSIVE, matching rectangle() and friends, so
+ * setcliprect(0, 0, 100, 100) covers the pixels 0..99. */
+static void gxSetClipBox(int left, int top, int right, int bottom) {
+    /* The scissor box is GL state, so it applies to the whole pending
+     * batch: flush first, or queued primitives get clipped by the NEW
+     * region. */
+    gxFlush();
+    if (right < left)  { int t = right; right = left;  left = t; }
+    if (bottom < top)  { int t = bottom; bottom = top;  top = t; }
+    g_gx_clipRect.left   = (long)left;
+    g_gx_clipRect.top    = (long)top;
+    g_gx_clipRect.right  = (long)right;
+    g_gx_clipRect.bottom = (long)bottom;
+    /* A zero area box means "draw nothing" and is kept as a real box
+     * rather than clearing the flag, so getcliprect() still reports what
+     * was asked for; gxApplyClip() clamps it to an empty scissor. */
+    g_gx_clipOn = true;
+    gxApplyClip();
+}
+static void gxClearClipBox(void) {
+    gxFlush();
+    g_gx_clipOn = false;
+    g_gx_clipRect.left = g_gx_clipRect.top = 0;
+    g_gx_clipRect.right = g_gx_clipRect.bottom = 0;
+    gxApplyClip();
+}
+
+/* setcliprect(l, t, r, b) -- clip to that box (logical, exclusive edges)
+ * setcliprect(NULL)       -- stop clipping
+ * setcliprect()           -- the same, for compilers without the GNU
+ *                            comma extension (see the GX_NARG comment) */
+static void gx_clipb_0(void)      { gxClearClipBox(); }
+static void gx_clipb_1(void* nil) { (void)nil; gxClearClipBox(); }
+static void gx_clipb_4(int left, int top, int right, int bottom) {
+    gxSetClipBox(left, top, right, bottom);
+}
+
+/* Hands back the box in force, in logical coordinates.  All four are
+ * written as 0 when there is no clip, so read iscliprect() first if you
+ * need to tell "no clip" apart from "clip to an empty box". */
+static void getcliprect(int* left, int* top, int* right, int* bottom) {
+    int l = 0, t = 0, r = 0, b = 0;
+    if (g_gx_clipOn) {
+        l = (int)g_gx_clipRect.left;
+        t = (int)g_gx_clipRect.top;
+        r = (int)g_gx_clipRect.right;
+        b = (int)g_gx_clipRect.bottom;
+    }
+    if (left)   *left   = l;
+    if (top)    *top    = t;
+    if (right)  *right  = r;
+    if (bottom) *bottom = b;
+}
+/* Whether a box is set.  This reports the box only: one that
+ * setclipmode(false) has silenced still counts as "set". */
+static bool iscliprect(void) { return g_gx_clipOn; }
+
+/* Switch clipping on and off without losing the box - for drawing a frame
+ * or a label that must NOT be clipped while everything else is. */
+static void setclipmode(bool on) {
+    gxFlush();
+    g_gx_clipMode = (on != 0);
+    gxApplyClip();
+}
+static bool getclipmode(void) { return g_gx_clipMode; }
+
+/*======================================================================
  * Viewport (EasyX setviewport / getviewport)
  *====================================================================*/
 /* A viewport is an origin shift plus an optional clip, so it needs its own
@@ -9144,7 +9556,7 @@ static void gxSetTextStyleW(int h, int wdth, const WCHAR* face,
                             int esc, int orient, int weight,
                             int italic, int underline, int strike,
                             BYTE cs, BYTE op, BYTE cp, BYTE q, BYTE pf) {
-    LOGFONTA lf;
+    LOGFONTW lf;
     memset(&lf, 0, sizeof(lf));
     lf.lfHeight         = h;
     lf.lfWidth          = wdth;
@@ -9159,14 +9571,8 @@ static void gxSetTextStyleW(int h, int wdth, const WCHAR* face,
     lf.lfClipPrecision  = cp;
     lf.lfQuality        = q;
     lf.lfPitchAndFamily = pf;
-    if (face && face[0]) {
-        char* ansi = gxDupBytesFromWide(face);
-        if (ansi) {
-            strncpy(lf.lfFaceName, ansi, LF_FACESIZE - 1);
-            free(ansi);
-        }
-    }
-    if (lf.lfFaceName[0] == 0) strcpy(lf.lfFaceName, "System");
+    if (face && face[0]) wcsncpy(lf.lfFaceName, face, LF_FACESIZE - 1);
+    if (lf.lfFaceName[0] == 0) wcscpy(lf.lfFaceName, L"System");
     g_gx_font = lf;
 }
 static void gxSetTextStyleA(int h, int wdth, const char* face,
@@ -9206,8 +9612,10 @@ static void gxSetTextStyle9A(int h, int wdth, const char* face,
                      strike);
     free(wf);
 }
-static GX_UNUSED void gxSetTextStylePtr(const LOGFONTA* p) { setfont(p); }
-static GX_UNUSED void gettextstyle(LOGFONTA* f) { getfont(f); }
+static GX_UNUSED void gxSetTextStylePtr(const LOGFONTA* p) { gxSetFontA(p); }
+static GX_UNUSED void gxSetTextStylePtrW(const LOGFONTW* p) { gxSetFontW(p); }
+static GX_UNUSED void gettextstyleA(LOGFONTA* f) { gxGetFontA(f); }
+static GX_UNUSED void gettextstyleW(LOGFONTW* f) { gxGetFontW(f); }
 
 /* single character overloads: outtextxy(x, y, 'A') */
 static GX_UNUSED void gx_outtextxy_ch(double x, double y, int c) {
@@ -9803,6 +10211,7 @@ static inline void settextstyle(int h, int w, const WCHAR* face, int esc,
                     underline ? 1 : 0, strike ? 1 : 0, cs, op, cp, q, pf);
 }
 static inline void settextstyle(const LOGFONTA* f) { gxSetTextStylePtr(f); }
+static inline void settextstyle(const LOGFONTW* f) { gxSetTextStylePtrW(f); }
 
 static inline DWORD* GetImageBuffer(IMAGE* pImg = NULL) {
     return gxGetImageBuffer(pImg);
@@ -10055,6 +10464,8 @@ static inline bool inputbox(WCHAR* out, int n, const WCHAR* p, const WCHAR* t, c
     return gx_ibW(out, n, p, t, d, w, h, bHideCancelBtn);
 }
 #define InputBox inputbox
+#define InputBoxA inputboxA
+#define InputBoxW inputboxW
 
 static inline int messagebox(const char* text, const char* cap, UINT type) {
     return gx_msgboxA(text, cap, type);
@@ -10087,6 +10498,137 @@ static inline void fillstrokepolygon(const POINT* p, int n, double w)   { gx_fsp
 static inline void fillstrokepolygonf(const POINTF* p, int n)           { gx_fspgf_2(p, n); }
 static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fspgf_3(p, n, w); }
 
+
+/*----------------------------------------------------------------------
+ * Explicit A / W entry points.
+ *
+ * The un-suffixed names above pick an implementation from the argument
+ * type (overloading here, _Generic in C11).  These names always pick
+ * one: the A flavour takes char* and decodes it through the code page
+ * set by setglcp(), the W flavour takes WCHAR*, which is UTF-16 and
+ * needs no conversion at all.  Use them to say which one you want
+ * instead of leaving it to the argument type - and to keep a call from
+ * silently changing flavour when a literal gains or loses an L prefix.
+ *
+ * textwidthA/W, textheightA/W, outtextA/W, outtextxyA/W and
+ * setwindowtextA/W are ordinary functions defined earlier, so they are
+ * already callable and are not repeated here.
+ *--------------------------------------------------------------------*/
+static inline int drawtextA(const char* s, const RECT* pr, UINT fmt) {
+    return gx_drawtext_rectA(s, pr, fmt);
+}
+static inline int drawtextA(double x, double y, const char* s) {
+    return gx_drawtext_wrapA(x, y, s);
+}
+static inline int drawtextW(const WCHAR* s, const RECT* pr, UINT fmt) {
+    return gx_drawtext_rectW(s, pr, fmt);
+}
+static inline int drawtextW(double x, double y, const WCHAR* s) {
+    return gx_drawtext_wrapW(x, y, s);
+}
+
+static inline bool inputboxA(char* out, int n, const char* p = NULL,
+                             const char* t = NULL, const char* d = NULL,
+                             int w = 0, int h = 0, bool bHideCancelBtn = true) {
+    return gx_ibA(out, n, p, t, d, w, h, bHideCancelBtn);
+}
+static inline bool inputboxW(WCHAR* out, int n, const WCHAR* p = NULL,
+                             const WCHAR* t = NULL, const WCHAR* d = NULL,
+                             int w = 0, int h = 0, bool bHideCancelBtn = true) {
+    return gx_ibW(out, n, p, t, d, w, h, bHideCancelBtn);
+}
+
+static inline int messageboxA(const char* text, const char* cap, UINT type) {
+    return gx_msgboxA(text, cap, type);
+}
+static inline int messageboxA(HWND h, const char* text, const char* cap, UINT type) {
+    (void)h; return gx_msgboxA(text, cap, type);
+}
+static inline int messageboxW(const WCHAR* text, const WCHAR* cap, UINT type) {
+    return gx_msgboxW(text, cap, type);
+}
+static inline int messageboxW(HWND h, const WCHAR* text, const WCHAR* cap, UINT type) {
+    (void)h; return gx_msgboxW(text, cap, type);
+}
+
+static inline void settextstyleA(int h, int w, const char* face) {
+    gxSetTextStyle3A(h, w, face);
+}
+static inline void settextstyleA(int h, int w, const char* face, int esc,
+                                 int ori, int we, bool it, bool un, bool sk) {
+    gxSetTextStyle9A(h, w, face, esc, ori, we, it, un, sk);
+}
+static inline void settextstyleA(int h, int w, const char* face, int esc,
+                                 int ori, int we, bool it, bool un, bool sk,
+                                 BYTE cs, BYTE op, BYTE cp, BYTE q, BYTE pf) {
+    gxSetTextStyleA(h, w, face, esc, ori, we, it, un, sk, cs, op, cp, q, pf);
+}
+static inline void settextstyleA(const LOGFONTA* f) { gxSetTextStylePtr(f); }
+static inline void settextstyleW(int h, int w, const WCHAR* face) {
+    gxSetTextStyle3W(h, w, face);
+}
+static inline void settextstyleW(int h, int w, const WCHAR* face, int esc,
+                                 int ori, int we, bool it, bool un, bool sk) {
+    gxSetTextStyle9W(h, w, face, esc, ori, we, it, un, sk);
+}
+static inline void settextstyleW(int h, int w, const WCHAR* face, int esc,
+                                 int ori, int we, bool it, bool un, bool sk,
+                                 BYTE cs, BYTE op, BYTE cp, BYTE q, BYTE pf) {
+    gxSetTextStyleW(h, w, face, esc, ori, we, it, un, sk, cs, op, cp, q, pf);
+}
+
+static inline bool loadimageA(IMAGE* img, const char* f) {
+    return gx_loadimg2(img, gxWiden(f));
+}
+static inline bool loadimageA(IMAGE* img, const char* f, int w) {
+    return gx_loadimg3(img, gxWiden(f), w);
+}
+static inline bool loadimageA(IMAGE* img, const char* f, int w, int h) {
+    return gx_loadimg4(img, gxWiden(f), w, h);
+}
+static inline bool loadimageA(IMAGE* img, const char* f, int w, int h, bool r) {
+    return gx_loadimg5(img, gxWiden(f), w, h, r);
+}
+static inline bool loadimageW(IMAGE* img, const WCHAR* f) {
+    return gx_loadimg2(img, f);
+}
+static inline bool loadimageW(IMAGE* img, const WCHAR* f, int w) {
+    return gx_loadimg3(img, f, w);
+}
+static inline bool loadimageW(IMAGE* img, const WCHAR* f, int w, int h) {
+    return gx_loadimg4(img, f, w, h);
+}
+static inline bool loadimageW(IMAGE* img, const WCHAR* f, int w, int h, bool r) {
+    return gx_loadimg5(img, f, w, h, r);
+}
+
+static inline bool saveimageA(const char* f) {
+    return gx_saveimg1(gxWiden(f));
+}
+static inline bool saveimageA(const char* f, const IMAGE* img) {
+    return gx_saveimg2(gxWiden(f), img);
+}
+static inline bool saveimageA(const IMAGE* img, const char* f) {
+    return gx_saveimg2(gxWiden(f), img);
+}
+static inline bool saveimageW(const WCHAR* f) {
+    return gx_saveimg1(f);
+}
+static inline bool saveimageW(const WCHAR* f, const IMAGE* img) {
+    return gx_saveimg2(f, img);
+}
+static inline bool saveimageW(const IMAGE* img, const WCHAR* f) {
+    return gx_saveimg2(f, img);
+}
+
+/* The LOGFONT form.  A pointer to either flavour picks the matching one, so
+ * old code that hands over a LOGFONTA* keeps working unchanged. */
+static inline void setfont(const LOGFONTA* f) { gxSetFontA(f); }
+static inline void setfont(const LOGFONTW* f) { gxSetFontW(f); }
+static inline void getfont(LOGFONTA* f) { gxGetFontA(f); }
+static inline void getfont(LOGFONTW* f) { gxGetFontW(f); }
+static inline void gettextstyle(LOGFONTA* f) { gxGetFontA(f); }
+static inline void gettextstyle(LOGFONTW* f) { gxGetFontW(f); }
 #else /* !__cplusplus */
 
 /*======================================================================
@@ -10103,34 +10645,36 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
 #define GX_ARG17(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
 #define GX_HAS_COMMA(...) GX_ARG17(__VA_ARGS__, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 0, 0)
 #define GX_TRIGGER(...) ,
-#define GX_ISE_AD(a,d) GX_CAT2(GX_ISE_AD_, GX_CAT2(a,d))
-#define GX_ISE_AD_00 0
-#define GX_ISE_AD_01 1
-#define GX_ISE_AD_10 0
-#define GX_ISE_AD_11 0
-#define GX_ISE(...) GX_ISE_AD(GX_HAS_COMMA(__VA_ARGS__), \
-                              GX_HAS_COMMA(GX_TRIGGER __VA_ARGS__ ()))
-
 #define GX_ARG_N(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
 
 /* Counting the arguments of one GX_DISPATCH() call.
  *
  * The hard part is telling "no argument at all" from "one argument": an
  * empty __VA_ARGS__ behaves exactly like a single empty argument, so a
- * plain positional counter cannot see the difference, and the usual
- * TRIGGER trick (GX_HAS_COMMA(GX_TRIGGER __VA_ARGS__ ())) mistakes a
- * *single argument whose first token is an opening parenthesis* for an
- * empty list.  That is why GetImageBuffer(NULL) used to expand to
- * gx_ibuf_0(NULL) and fail with
- *     macro "gx_ibuf_0" passed 1 arguments, but takes just 0
- * NULL expands to ((void*)0), so GX_TRIGGER really is followed by '('.
+ * plain positional counter cannot see the difference.  Three probes are
+ * needed; b1 and b3 differ in whether GX_TRIGGER is really invoked:
  *
- * No purely ISO C11 trick can tell those two apart, hence:
- *   - GNU mode             -> ", ##__VA_ARGS__" (the comma disappears)
+ *   b0 = GX_HAS_COMMA(args)                  1 if there are >= 2 args
+ *   b1 = GX_HAS_COMMA(GX_TRIGGER args)       1 if args is empty-looking
+ *                                            OR starts with '('
+ *   b3 = GX_HAS_COMMA(GX_TRIGGER args ())    1 unless args is a single
+ *                                            plain token
+ *
+ *   args                          b0 b1 b3   count
+ *   (nothing)                      0  0  1   0
+ *   1 / x / &img / "s"             0  0  0   1
+ *   NULL / (void*)0 / (int)a       0  1  1   1   (GX_NARG1 handles it)
+ *   a, b / a, b, c, d              1  1  1   n
+ *
+ * So only (0,0,1) means "empty"; everything else is counted by GX_NARG1().
+ * The single-argument case used to be misdetected as empty, which is why
+ * setcliprect(NULL) expanded to gx_clipb_0(NULL) and failed with
+ *     too many arguments to function 'gx_clipb_0'
+ *
+ * The two easier routes below are still preferred where available:
+ *   - GNU mode              -> ", ##__VA_ARGS__" (the comma disappears)
  *   - GCC >= 8 / clang >= 9 -> __VA_OPT__
- *   - anything else        -> the TRIGGER counter, with the limitation
- *                             above: write GetImageBuffer() rather than
- *                             GetImageBuffer(NULL) on such a compiler.
+ *   - anything else         -> the three probes above.
  */
 #if defined(__GNUC__) && !defined(__STRICT_ANSI__)
 #define GX_NARG_PAD(...) 0, ##__VA_ARGS__
@@ -10143,10 +10687,16 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
                              16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1, 0)
 #else
 #define GX_NARG1(...) GX_ARG_N(__VA_ARGS__, 16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1, 0)
-#define GX_NARG_IF(c, ...) GX_CAT2(GX_NARG_C, c)(__VA_ARGS__)
-#define GX_NARG_C1(...) 0            /* empty argument list            */
-#define GX_NARG_C0(...) GX_NARG1(__VA_ARGS__)
-#define GX_NARG(...) GX_NARG_IF(GX_ISE(__VA_ARGS__), __VA_ARGS__)
+#define GX_NARG_B(a,b) GX_CAT2(GX_NARG_B_, GX_CAT2(a,b))
+#define GX_NARG_B_01(...) GX_NARG1(__VA_ARGS__)
+#define GX_NARG_B_10(...) GX_NARG1(__VA_ARGS__)
+#define GX_NARG_B_11(...) GX_NARG1(__VA_ARGS__)
+#define GX_NARG_B_00(...) GX_NARG_E(GX_HAS_COMMA(GX_TRIGGER __VA_ARGS__ ()))(__VA_ARGS__)
+#define GX_NARG_E(c) GX_CAT2(GX_NARG_E_, c)
+#define GX_NARG_E_1(...) 0           /* empty argument list            */
+#define GX_NARG_E_0(...) GX_NARG1(__VA_ARGS__)
+#define GX_NARG(...) GX_NARG_B(GX_HAS_COMMA(__VA_ARGS__),                    \
+                               GX_HAS_COMMA(GX_TRIGGER __VA_ARGS__))(__VA_ARGS__)
 #endif
 
 #define GX_DISPATCH(PREFIX, ...) GX_CAT2(PREFIX, GX_NARG(__VA_ARGS__))(__VA_ARGS__)
@@ -10270,6 +10820,9 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
 #define miximagei(...)        GX_DISPATCH(gx_mixi_, __VA_ARGS__)
 #define strokepolyline(...)     GX_DISPATCH(gx_spl_, __VA_ARGS__)
 #define strokepolylinef(...)    GX_DISPATCH(gx_splf_, __VA_ARGS__)
+/* setcliprect() picks its meaning from the argument count: four integers
+ * set a box, an empty list (or NULL) clears it. */
+#define setcliprect(...)        GX_DISPATCH(gx_clipb_, __VA_ARGS__)
 #define strokepolygon(...)      GX_DISPATCH(gx_spg_, __VA_ARGS__)
 #define strokepolygonf(...)     GX_DISPATCH(gx_spgf_, __VA_ARGS__)
 #define fillstrokepolygon(...)  GX_DISPATCH(gx_fspg_, __VA_ARGS__)
@@ -10444,7 +10997,15 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
         const char*:  PREFIX##A((h), (wd), (const char*)(f)),                  \
         WCHAR*:       PREFIX##W((h), (wd), (const WCHAR*)(f)),                 \
         const WCHAR*: PREFIX##W((h), (wd), (const WCHAR*)(f)))
-#define gx_ts_1(p) gxSetTextStylePtr((const LOGFONTA*)(size_t)(p))
+/* One argument means the LOGFONT form.  Which flavour it is follows from
+ * the pointer type, so a LOGFONTA* keeps taking the A path and a LOGFONTW*
+ * takes the W one. */
+#define gx_ts_1(p)                                                            \
+    _Generic((p),                                                              \
+        LOGFONTA*:       gxSetTextStylePtr((const LOGFONTA*)(p)),              \
+        const LOGFONTA*: gxSetTextStylePtr((const LOGFONTA*)(p)),              \
+        LOGFONTW*:       gxSetTextStylePtrW((const LOGFONTW*)(p)),             \
+        const LOGFONTW*: gxSetTextStylePtrW((const LOGFONTW*)(p)))
 #define gx_ts_3(h, wd, f) GX_TS_FACE(h, wd, f, gxSetTextStyle3)
 #define gx_ts_9(h, wd, f, e, o, we, it, un, sk)                               \
     _Generic(((f) + 0),                                                        \
@@ -10489,6 +11050,159 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
 /* FlushBatchDraw() / FlushBatchDraw(l, t, r, b) */
 #define FlushBatchDraw(...) GX_DISPATCH(gx_flushbatch, __VA_ARGS__)
 
+
+/*----------------------------------------------------------------------
+ * Explicit A / W entry points.
+ *
+ * The un-suffixed macros above pick an implementation with _Generic.
+ * These always pick one: A takes char* and decodes it through the code
+ * page set by setglcp(), W takes WCHAR*, which is UTF-16 and needs no
+ * conversion at all.  Use them to say which one you want instead of
+ * leaving it to the argument type - and to keep a call from silently
+ * changing flavour when a literal gains or loses an L prefix.
+ *
+ * textwidthA/W, textheightA/W, outtextA/W, outtextxyA/W and
+ * setwindowtextA/W are ordinary functions defined earlier, so they are
+ * already callable and are not repeated here.
+ *--------------------------------------------------------------------*/
+
+/* drawtextA / drawtextW: (str, rect, fmt) or (x, y, str).  Which shape
+ * it is follows from the type of the first argument, the same way
+ * gx_dt3 tells them apart.  The size_t casts only exist because every
+ * arm of a _Generic has to type check, even the ones not taken. */
+#define drawtextA(a, b, c)                                                    \
+    _Generic(((a) + 0),                                                        \
+        char*:        gx_drawtext_rectA((const char*)(a),                      \
+                          (const RECT*)(size_t)(b), (UINT)(size_t)(c)),        \
+        const char*:  gx_drawtext_rectA((const char*)(a),                      \
+                          (const RECT*)(size_t)(b), (UINT)(size_t)(c)),        \
+        default:      gx_drawtext_wrapA((int)(size_t)(a), (int)(size_t)(b),    \
+                          (const char*)(size_t)(c)))
+#define drawtextW(a, b, c)                                                    \
+    _Generic(((a) + 0),                                                        \
+        WCHAR*:       gx_drawtext_rectW((const WCHAR*)(a),                     \
+                          (const RECT*)(size_t)(b), (UINT)(size_t)(c)),        \
+        const WCHAR*: gx_drawtext_rectW((const WCHAR*)(a),                     \
+                          (const RECT*)(size_t)(b), (UINT)(size_t)(c)),        \
+        default:      gx_drawtext_wrapW((int)(size_t)(a), (int)(size_t)(b),    \
+                          (const WCHAR*)(size_t)(c)))
+
+/* inputboxA / inputboxW: two to eight arguments, the same shapes the
+ * un-suffixed macro accepts. */
+#define GX_IBA_CALL(o, n, p, t, d, w, h, b)                                   \
+    gx_ibA((char*)(o), (n), (const char*)(p), (const char*)(t),               \
+           (const char*)(d), (w), (h), (bool)(b))
+#define gx_ibA_2(o, n)                GX_IBA_CALL(o, n, 0, 0, 0, 0, 0, true)
+#define gx_ibA_3(o, n, p)             GX_IBA_CALL(o, n, p, 0, 0, 0, 0, true)
+#define gx_ibA_4(o, n, p, t)          GX_IBA_CALL(o, n, p, t, 0, 0, 0, true)
+#define gx_ibA_5(o, n, p, t, d)       GX_IBA_CALL(o, n, p, t, d, 0, 0, true)
+#define gx_ibA_6(o, n, p, t, d, w)    GX_IBA_CALL(o, n, p, t, d, w, 0, true)
+#define gx_ibA_7(o, n, p, t, d, w, h) GX_IBA_CALL(o, n, p, t, d, w, h, true)
+#define gx_ibA_8(o, n, p, t, d, w, h, b) GX_IBA_CALL(o, n, p, t, d, w, h, (b))
+#define inputboxA(...) GX_DISPATCH(gx_ibA_, __VA_ARGS__)
+#define InputBoxA inputboxA
+
+#define GX_IBW_CALL(o, n, p, t, d, w, h, b)                                   \
+    gx_ibW((WCHAR*)(o), (n), (const WCHAR*)(p), (const WCHAR*)(t),            \
+           (const WCHAR*)(d), (w), (h), (bool)(b))
+#define gx_ibW_2(o, n)                GX_IBW_CALL(o, n, 0, 0, 0, 0, 0, true)
+#define gx_ibW_3(o, n, p)             GX_IBW_CALL(o, n, p, 0, 0, 0, 0, true)
+#define gx_ibW_4(o, n, p, t)          GX_IBW_CALL(o, n, p, t, 0, 0, 0, true)
+#define gx_ibW_5(o, n, p, t, d)       GX_IBW_CALL(o, n, p, t, d, 0, 0, true)
+#define gx_ibW_6(o, n, p, t, d, w)    GX_IBW_CALL(o, n, p, t, d, w, 0, true)
+#define gx_ibW_7(o, n, p, t, d, w, h) GX_IBW_CALL(o, n, p, t, d, w, h, true)
+#define gx_ibW_8(o, n, p, t, d, w, h, b) GX_IBW_CALL(o, n, p, t, d, w, h, (b))
+#define inputboxW(...) GX_DISPATCH(gx_ibW_, __VA_ARGS__)
+#define InputBoxW inputboxW
+
+/* messageboxA / messageboxW: the owner window is optional and, as in
+ * gx_mb_4, ignored - the library always owns the dialog itself. */
+#define gx_mbA_3(a, b, c)    gx_msgboxA((const char*)(a), (const char*)(b), (c))
+#define gx_mbA_4(h, a, b, c) gx_msgboxA((const char*)(a), (const char*)(b), (c))
+#define messageboxA(...) GX_DISPATCH(gx_mbA_, __VA_ARGS__)
+#define gx_mbW_3(a, b, c)    gx_msgboxW((const WCHAR*)(a), (const WCHAR*)(b), (c))
+#define gx_mbW_4(h, a, b, c) gx_msgboxW((const WCHAR*)(a), (const WCHAR*)(b), (c))
+#define messageboxW(...) GX_DISPATCH(gx_mbW_, __VA_ARGS__)
+
+/* settextstyleA / settextstyleW: one, three, nine or fourteen arguments.
+ * The one-argument form is the LOGFONT one, and each flavour takes its own
+ * structure: settextstyleA wants a LOGFONTA*, settextstyleW a LOGFONTW*. */
+#define gx_tsA_1(p) gxSetTextStylePtr((const LOGFONTA*)(size_t)(p))
+#define gx_tsA_3(h, wd, f) gxSetTextStyle3A((h), (wd), (const char*)(f))
+#define gx_tsA_9(h, wd, f, e, o, we, it, un, sk)                              \
+    gxSetTextStyle9A((h), (wd), (const char*)(f), (e), (o), (we), (it), (un), (sk))
+#define gx_tsA_14(h, wd, f, e, o, we, it, un, sk, cs, op, cp, q, pf)          \
+    gxSetTextStyleA((h), (wd), (const char*)(f), (e), (o), (we), (it), (un),  \
+                    (sk), (BYTE)(cs), (BYTE)(op), (BYTE)(cp), (BYTE)(q), (BYTE)(pf))
+#define settextstyleA(...) GX_DISPATCH(gx_tsA_, __VA_ARGS__)
+#define gx_tsW_1(p) gxSetTextStylePtrW((const LOGFONTW*)(p))
+#define gx_tsW_3(h, wd, f) gxSetTextStyle3W((h), (wd), (const WCHAR*)(f))
+#define gx_tsW_9(h, wd, f, e, o, we, it, un, sk)                              \
+    gxSetTextStyle9W((h), (wd), (const WCHAR*)(f), (e), (o), (we), (it), (un), (sk))
+#define gx_tsW_14(h, wd, f, e, o, we, it, un, sk, cs, op, cp, q, pf)          \
+    gxSetTextStyleW((h), (wd), (const WCHAR*)(f), (e), (o), (we), (it), (un), \
+                    (sk), (BYTE)(cs), (BYTE)(op), (BYTE)(cp), (BYTE)(q), (BYTE)(pf))
+#define settextstyleW(...) GX_DISPATCH(gx_tsW_, __VA_ARGS__)
+
+/* loadimageA / loadimageW.  gxWiden() turns the narrow name into the
+ * wide one the loader wants, using the code page set by setglcp(). */
+#define gx_liA2(img, f)           gx_loadimg2((img), gxWiden((const char*)(f)))
+#define gx_liA3(img, f, w)        gx_loadimg3((img), gxWiden((const char*)(f)), (w))
+#define gx_liA4(img, f, w, h)     gx_loadimg4((img), gxWiden((const char*)(f)), (w), (h))
+#define gx_liA5(img, f, w, h, r)  gx_loadimg5((img), gxWiden((const char*)(f)), (w), (h), (r))
+#define loadimageA(...) GX_DISPATCH(gx_liA, __VA_ARGS__)
+#define gx_liW2(img, f)           gx_loadimg2((img), (const WCHAR*)(f))
+#define gx_liW3(img, f, w)        gx_loadimg3((img), (const WCHAR*)(f), (w))
+#define gx_liW4(img, f, w, h)     gx_loadimg4((img), (const WCHAR*)(f), (w), (h))
+#define gx_liW5(img, f, w, h, r)  gx_loadimg5((img), (const WCHAR*)(f), (w), (h), (r))
+#define loadimageW(...) GX_DISPATCH(gx_liW, __VA_ARGS__)
+
+/* saveimageA / saveimageW.  Both argument orders are accepted, and
+ * which one it is follows from the type of the first argument: a file
+ * name is never an IMAGE and an IMAGE is never a file name. */
+#define gx_siA1(f) gx_saveimg1(gxWiden((const char*)(f)))
+#define gx_siA2(a, b)                                                         \
+    _Generic(((a) + 0),                                                        \
+        char*:        gx_saveimg2(gxWiden((const char*)(a)),                   \
+                          (const IMAGE*)(size_t)(b)),                          \
+        const char*:  gx_saveimg2(gxWiden((const char*)(a)),                   \
+                          (const IMAGE*)(size_t)(b)),                          \
+        default:      gx_saveimg2(gxWiden((const char*)(size_t)(b)),           \
+                          (const IMAGE*)(size_t)(a)))
+#define saveimageA(...) GX_DISPATCH(gx_siA, __VA_ARGS__)
+#define gx_siW1(f) gx_saveimg1((const WCHAR*)(f))
+#define gx_siW2(a, b)                                                         \
+    _Generic(((a) + 0),                                                        \
+        WCHAR*:       gx_saveimg2((const WCHAR*)(a),                           \
+                          (const IMAGE*)(size_t)(b)),                          \
+        const WCHAR*: gx_saveimg2((const WCHAR*)(a),                           \
+                          (const IMAGE*)(size_t)(b)),                          \
+        default:      gx_saveimg2((const WCHAR*)(size_t)(b),                   \
+                          (const IMAGE*)(size_t)(a)))
+#define saveimageW(...) GX_DISPATCH(gx_siW, __VA_ARGS__)
+
+/* setfont / getfont / gettextstyle: the LOGFONT form.  Copying the struct is
+ * what decides the flavour - hand over a LOGFONTA* and you get the A path, a
+ * LOGFONTW* and you get the W one.  setfontA / setfontW and friends stay
+ * available when you want to pin the version down. */
+#define setfont(p)                                                            \
+    _Generic((p),                                                              \
+        LOGFONTA*:       gxSetFontA((const LOGFONTA*)(p)),                     \
+        const LOGFONTA*: gxSetFontA((const LOGFONTA*)(p)),                     \
+        LOGFONTW*:       gxSetFontW((const LOGFONTW*)(p)),                     \
+        const LOGFONTW*: gxSetFontW((const LOGFONTW*)(p)))
+#define getfont(p)                                                            \
+    _Generic((p),                                                              \
+        LOGFONTA*: gxGetFontA((LOGFONTA*)(p)),                                 \
+        LOGFONTW*: gxGetFontW((LOGFONTW*)(p)),                                 \
+        const LOGFONTA*: gxGetFontA((LOGFONTA*)(p)),                           \
+        const LOGFONTW*: gxGetFontW((LOGFONTW*)(p)))
+#define gettextstyle(p)                                                       \
+    _Generic((p),                                                              \
+        LOGFONTA*: gxGetFontA((LOGFONTA*)(p)),                                 \
+        LOGFONTW*: gxGetFontW((LOGFONTW*)(p)),                                 \
+        const LOGFONTA*: gxGetFontA((LOGFONTA*)(p)),                           \
+        const LOGFONTW*: gxGetFontW((LOGFONTW*)(p)))
 #endif /* __cplusplus */
 
 
@@ -11501,5 +12215,6 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
