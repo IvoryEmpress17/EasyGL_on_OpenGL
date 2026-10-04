@@ -25,10 +25,15 @@
  *            implementation baked one glyph per *byte* and produced two
  *            nonsense glyphs per Han character.
  *
+ * SVG      : built in, no second header. The SVGIMG half of the library -
+ *            loadsvg / loadsvgfromfile / putsvg / drawsvg / drawsvgfile /
+ *            savesvgfile / freesvg - is part of this file and of this
+ *            version; see "SVG support" further down.
+ *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
  *
- * Revision 20261004 (rectangle clip)
+ * Revision 20261004 (rectangle clip, A / W entry points, wide font)
  *
  *   - Clipping used to be reachable only through setcliprgn(), which
  *     takes a GDI HRGN: you had to build a region object and own it just
@@ -59,7 +64,6 @@
  *     GetImageBuffer(NULL) and getviewport(&l) hit the same path and are
  *     fixed by the same change.
  *
- * Revision 20261004 (A / W entry points, and a wide font throughout)
  *
  *   - The library now keeps the current font as a LOGFONTW.  It used to
  *     be a LOGFONTA, so a face name that the active code page cannot
@@ -84,6 +88,27 @@
  * name spells out and why you would choose it over letting the argument
  * type decide.  InputBoxA / InputBoxW gained a C++ spelling so InputBox
  * is symmetric with inputbox under both languages.
+ *
+ *   - SVG support is now part of the library: loadsvg() /
+ *     loadsvgfile() / loadsvgfromfile() / putsvg() / drawsvg() /
+ *     drawsvgfile() / savesvgfile() / freesvg() and the SVGIMG they work
+ *     on.  A document is loaded into an SVGIMG the way a picture is
+ *     loaded into an IMAGE, and putsvg() re-parses the source each time,
+ *     so it scales without going soft.  Supported: svg / g / defs /
+ *     symbol / use, rect (rx ry), circle, ellipse, line, polyline,
+ *     polygon, path, text, tspan, linearGradient, radialGradient, stop
+ *     and clipPath; fill, fill-rule, fill-opacity, stroke, stroke-width,
+ *     stroke-opacity, stroke-linecap, stroke-linejoin, stroke-dasharray,
+ *     stroke-dashoffset, opacity, transform, style, viewBox and the
+ *     gradient attributes; the whole path grammar M m L l H h V v C c S s
+ *     Q q T t A a Z z; #rgb / #rrggbb / #rrggbbaa / rgb() / the CSS names
+ *     / none / url(#id); translate scale rotate matrix skewX skewY.  Not
+ *     supported: filter, pattern, marker, <style> blocks, SMIL.
+ *     A gradient inside a shape is done with an off-screen mask - fill
+ *     the shape white on black, multiply the gradient in, add the result
+ *     back - which is why a shape and a stop table are independent.
+ *     loadsvgfromfile() is the loadimage() of SVG: a missing, empty or
+ *     mistyped file leaves the SVGIMG holding what it held before.
  *
  * Revision 20261003
  *   - Three new graphics primitives.  gradrectangle() bakes one colour
@@ -4938,6 +4963,145 @@ static void gxPolyStrokeF(const POINTF* pts, int n, bool closed) {
     gxPolyStrokeXY(pts ? (const float*)pts : NULL, n, closed);
 }
 
+/* Multi ring variant of gxPolyFillXY().
+ *
+ * One ring cannot describe a shape with holes: the loop is always closed
+ * back onto itself, so the inner contour of an "o" fills as a solid disc
+ * of its own.  A fill rule only means something across the whole edge set
+ * of one path - ALTERNATE counts crossings, WINDING sums directions - so
+ * every ring of a path has to go into a single fill.
+ *
+ * p holds all rings concatenated as interleaved x,y; counts[r] is the
+ * vertex count of ring r.  Rings with fewer than 3 vertices are skipped.
+ * The scanline itself is unchanged, which is the point: sorting the
+ * crossings of the combined edge set and pairing them by the current
+ * mode gives even odd and non zero winding for free. */
+static void gxPolyFillXYMulti(const float* p, const int* counts, int nrings)
+{
+    float ymin, ymax, span, step, yTop, yBot, yMid;
+    float* xs;
+    int*   dir;
+    int i, k, r, rowN, total, off, nx;
+
+    if (p == NULL || counts == NULL || nrings <= 0) return;
+    total = 0;
+    for (r = 0; r < nrings; r++) {
+        if (counts[r] > 0) total += counts[r];
+    }
+    if (total < 3) return;
+    if (!gxBeginFill()) return;
+
+    ymin = ymax = p[1];
+    for (r = 0, i = 0; r < nrings; r++) {
+        for (k = 0; k < counts[r]; k++, i++) {
+            float v = p[i * 2 + 1];
+            if (v < ymin) ymin = v;
+            if (v > ymax) ymax = v;
+        }
+    }
+    span = ymax - ymin;
+    if (!(span > 0.f)) return;              /* flat shape: no area */
+
+    step = gxInvScaleY();                   /* 1 device pixel, logical units */
+    if (!(step > 0.f)) step = span;
+    if (step > span) step = span;
+    if (span / step > 20000.f) step = span / 20000.f;   /* runaway guard */
+
+    xs  = (float*)malloc(sizeof(float) * (size_t)total);
+    dir = (int*)malloc(sizeof(int) * (size_t)total);
+    if (!xs || !dir) { free(xs); free(dir); return; }
+
+    rowN = 0;
+    for (yTop = ymin; yTop < ymax; yTop += step) {
+        yBot = yTop + step;
+        if (yBot > ymax) yBot = ymax;
+        yMid = (yTop + yBot) * 0.5f;
+        nx = 0;
+        off = 0;
+        for (r = 0; r < nrings; r++) {
+            int c = counts[r];
+            if (c >= 3) {
+                for (i = 0; i < c; i++) {
+                    int j = (i + 1) % c;
+                    float y1 = p[(off + i) * 2 + 1], y2 = p[(off + j) * 2 + 1];
+                    float x1 = p[(off + i) * 2],     x2 = p[(off + j) * 2];
+                    float lo, hi;
+                    if (y1 == y2) continue;                     /* horizontal */
+                    lo = (y1 < y2) ? y1 : y2;
+                    hi = (y1 < y2) ? y2 : y1;
+                    if (yMid < lo || yMid >= hi) continue;      /* half open */
+                    xs[nx] = x1 + (yMid - y1) / (y2 - y1) * (x2 - x1);
+                    dir[nx] = (y2 > y1) ? 1 : -1;
+                    nx++;
+                }
+            }
+            off += c;
+        }
+        if (nx >= 2) {
+            /* insertion sort on x (n is small, and it is stable enough) */
+            for (i = 1; i < nx; i++) {
+                float kx = xs[i];
+                int   kd = dir[i];
+                int   h  = i - 1;
+                while (h >= 0 && xs[h] > kx) {
+                    xs[h + 1] = xs[h]; dir[h + 1] = dir[h]; h--;
+                }
+                xs[h + 1] = kx; dir[h + 1] = kd;
+            }
+            if (g_gx_polyMode == WINDING) {
+                int   wind = 0;
+                float sx = 0.f;
+                for (k = 0; k < nx; k++) {
+                    int prev = wind;
+                    wind += dir[k];
+                    if (prev == 0 && wind != 0) {
+                        sx = xs[k];
+                    } else if (prev != 0 && wind == 0 && xs[k] > sx) {
+                        gxQuad(sx, yTop, xs[k], yBot, g_gx_fillColor);
+                    }
+                }
+            } else {                                    /* ALTERNATE */
+                for (k = 0; k + 1 < nx; k += 2) {
+                    if (xs[k + 1] > xs[k])
+                        gxQuad(xs[k], yTop, xs[k + 1], yBot, g_gx_fillColor);
+                }
+            }
+        }
+        if (((++rowN) & 255) == 0 && g_gx_vbuf.size > 200000u) gxFlush();
+    }
+    free(xs);
+    free(dir);
+    gxCheckFlush();
+}
+
+/* POINTF rings: the array already is interleaved floats. */
+static void gxPolyFillMultiF(const POINTF* pts, const int* counts, int nrings)
+{
+    gxPolyFillXYMulti(pts ? (const float*)pts : NULL, counts, nrings);
+}
+
+/* POINT rings have to be unpacked first, same as gxPolyUnpack() does for
+ * the single ring case. */
+static void gxPolyFillMultiP(const POINT* pts, const int* counts, int nrings)
+{
+    float* buf;
+    int i, r, total = 0;
+
+    if (pts == NULL || counts == NULL || nrings <= 0) return;
+    for (r = 0; r < nrings; r++) {
+        if (counts[r] > 0) total += counts[r];
+    }
+    if (total < 3) return;
+    buf = (float*)malloc(sizeof(float) * (size_t)total * 2u);
+    if (!buf) return;
+    for (i = 0; i < total; i++) {
+        buf[i * 2]     = (float)pts[i].x;
+        buf[i * 2 + 1] = (float)pts[i].y;
+    }
+    gxPolyFillXYMulti(buf, counts, nrings);
+    free(buf);
+}
+
 /* easygl extension (no EasyX equivalent): a triangle with its own colour
  * at each corner.  The shader already interpolates a per vertex colour, so
  * this costs three vertices - where painting the same gradient through
@@ -5008,6 +5172,48 @@ static void fillpolygonf(const POINTF* pts, int n) {
 static void solidpolygonf(const POINTF* pts, int n) {
     if (pts == NULL || n < 3) return;
     gxPolyFillF(pts, n);
+}
+
+/* Fill a shape made of several rings - one outer contour plus any number of
+ * holes - in a single pass.  This is the only form in which a fill rule is
+ * meaningful: both ALTERNATE and WINDING work on the crossings of the whole
+ * edge set, so handing the rings in one at a time turns every hole into a
+ * solid disc.
+ *
+ * pts is every ring concatenated, counts[r] is the vertex count of ring r,
+ * nrings is how many there are.  Ring order does not matter; rings with
+ * fewer than 3 vertices are ignored.  Honours setpolyfillmode().
+ *
+ * These four are an easygl extension - EasyX has no multi ring fill. */
+static void solidpolygonmultif(const POINTF* pts, const int* counts, int nrings)
+{
+    if (pts == NULL || counts == NULL || nrings <= 0) return;
+    gxPolyFillMultiF(pts, counts, nrings);
+}
+static void fillpolygonmultif(const POINTF* pts, const int* counts, int nrings)
+{
+    int r, off = 0;
+    if (pts == NULL || counts == NULL || nrings <= 0) return;
+    gxPolyFillMultiF(pts, counts, nrings);
+    for (r = 0; r < nrings; r++) {
+        if (counts[r] >= 2) gxPolyStrokeF(pts + off, counts[r], true);
+        off += counts[r];
+    }
+}
+static void solidpolygonmulti(const POINT* pts, const int* counts, int nrings)
+{
+    if (pts == NULL || counts == NULL || nrings <= 0) return;
+    gxPolyFillMultiP(pts, counts, nrings);
+}
+static void fillpolygonmulti(const POINT* pts, const int* counts, int nrings)
+{
+    int r, off = 0;
+    if (pts == NULL || counts == NULL || nrings <= 0) return;
+    gxPolyFillMultiP(pts, counts, nrings);
+    for (r = 0; r < nrings; r++) {
+        if (counts[r] >= 2) gxPolyStroke(pts + off, counts[r], true);
+        off += counts[r];
+    }
 }
 
 /*------------------------------- triangles -----------------------------
@@ -10136,6 +10342,130 @@ static GX_UNUSED void HSVtoHSL(float H, float S, float V,
     (void)H;                    /* hue is unchanged by the conversion */
 }
 
+/* ==================================================================
+ * SVG
+ * ================================================================== */
+
+/* The SVG half carries no version of its own: it ships with the header,
+ * so a build is pinned with #if EASYGL_H >= 20261004 and the version is
+ * read with GetEasyGLVer(). */
+
+/* One loaded document, the SVG counterpart of easygl's IMAGE.  src is a
+ * private copy of the source text, so an SVGIMG owns memory and has to
+ * be released with freesvg() when you are done with it.  A zeroed struct
+ * is a valid empty document. */
+/* SVGIMG is a plain struct, so a stack "SVGIMG e;" is full of garbage -
+ * the same hazard easygl guards against with IMAGE.magic.  freesvg() used
+ * to test e->src and free() it, so the very first loadsvg() freed whatever
+ * the stack happened to hold and crashed.  The magic field makes the
+ * uninitialised case harmless: the first call zeroes the struct instead. */
+#define SVGIMG_MAGIC 0x5356u          /* 'SV' */
+
+typedef struct SVGIMG {
+    char*  src;      /* NUL-terminated copy of the document, NULL = empty */
+    int    width;    /* intrinsic width in px, from width= or the viewBox  */
+    int    height;   /* intrinsic height in px, from height= or viewBox    */
+    double vbW, vbH; /* the viewBox size, kept for reference               */
+    unsigned int magic;  /* SVGIMG_MAGIC once the struct is usable        */
+} SVGIMG;
+
+/* A document that can be drawn: initialised and holding a source. */
+static GX_UNUSED bool gxsDocOk(const SVGIMG* e)
+{
+    return (e != NULL) && (e->magic == SVGIMG_MAGIC) && (e->src != NULL);
+}
+
+#ifndef GX_SVG_PI
+#define GX_SVG_PI 3.14159265358979323846
+#endif
+
+/* Upper bounds for the off-screen gradient mask. Anything larger falls
+ * back to a flat fill, so one huge bounding box cannot eat hundreds of
+ * megabytes. */
+#ifndef GX_SVG_MAX_MASK
+#define GX_SVG_MAX_MASK 2048
+#endif
+
+/* The largest source a file reader will accept, in bytes.  A directory,
+ * a device or a file that was handed over by mistake is refused instead
+ * of being read into memory.  Raise it for a genuinely huge document. */
+#ifndef GX_SVG_MAX_SRC
+#define GX_SVG_MAX_SRC (16 * 1024 * 1024)
+#endif
+
+/* ==================================================================
+ * Dispatch
+ * ================================================================== */
+
+#define GXS_NARG(...) GXS_NARG_(__VA_ARGS__, GXS_RSEQ_N())
+#define GXS_NARG_(...) GXS_ARG_N(__VA_ARGS__)
+#define GXS_ARG_N(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
+#define GXS_RSEQ_N() 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+#define GXS_CAT(a, b) GXS_CAT_(a, b)
+#define GXS_CAT_(a, b) a##b
+
+/* C++ resolves by overload; those static inlines sit at the bottom of
+ * this file, next to the functions they forward to.  C has to go through
+ * a macro, and the two-argument file helpers ask _Generic about the
+ * character type as well, so that a WCHAR path reaches the W entry. */
+
+/* Forward declarations for the SVG half. Everything is marked GX_UNUSED:
+ * a drawing library
+ * has helpers that not every program reaches, and gcc -Wall -Wextra
+ * would otherwise complain about each of them. */
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
+static GX_UNUSED char* gxsStrDup(const char* s);
+static GX_UNUSED char* gxsUnescape(const char* s);
+static GX_UNUSED char* gxsReadFile(const char* path);
+static GX_UNUSED char* gxsReadFileW(const WCHAR* path);
+static GX_UNUSED int  gxsWriteFile(const char* path, const char* text, size_t n);
+static GX_UNUSED int  gxsWriteFileW(const WCHAR* path, const char* text, size_t n);
+static GX_UNUSED int  gxsHasRootSvg(const char* s);
+static GX_UNUSED int  gxsLoadSrcInto(SVGIMG* e, int w, int h, const char* svg);
+static GX_UNUSED int  gxsLoadSrc(SVGIMG* e, const char* svg);
+static GX_UNUSED int  gxsLoadSrc2(SVGIMG* e, int w, int h, const char* svg);
+static GX_UNUSED int  gxsLoadFileA(SVGIMG* e, const char* path);
+static GX_UNUSED int  gxsLoadFileW(SVGIMG* e, const WCHAR* path);
+static GX_UNUSED int  gxsLoadFromFile(SVGIMG* e, char* (*read)(const void*),
+                                       const void* path, int w, int h);
+static GX_UNUSED char* gxsReadFileA(const void* path);
+static GX_UNUSED char* gxsReadFileWCb(const void* path);
+static GX_UNUSED int  gxsLoadFromFileA(SVGIMG* e, const char* path, int w, int h);
+static GX_UNUSED int  gxsLoadFromFileW(SVGIMG* e, const WCHAR* path, int w, int h);
+static GX_UNUSED int  gxsSaveA(const SVGIMG* e, const char* path);
+static GX_UNUSED int  gxsSaveW(const SVGIMG* e, const WCHAR* path);
+static GX_UNUSED void freesvg(SVGIMG* e);
+static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxsPut4(IMAGE* img, double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxsPut5(double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+#ifndef __cplusplus
+static GX_UNUSED void gxs_put_1(const SVGIMG* e);
+static GX_UNUSED void gxs_put_2(IMAGE* img, const SVGIMG* e);
+static GX_UNUSED int  gxs_load_2(SVGIMG* e, const char* svg);
+static GX_UNUSED int  gxs_load_4(SVGIMG* e, int w, int h, const char* svg);
+static GX_UNUSED void gxs_put_3(double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxs_put_4(IMAGE* img, double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxs_put_5(double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxs_put_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+#endif
+static GX_UNUSED void gxs_draw_1(const char* svg);
+static GX_UNUSED void gxs_draw_2(IMAGE* img, const char* svg);
+static GX_UNUSED void gxs_draw_3(double x, double y, const char* svg);
+static GX_UNUSED void gxs_draw_4(IMAGE* img, double x, double y, const char* svg);
+static GX_UNUSED void gxs_draw_5(double x, double y, double w, double h, const char* svg);
+static GX_UNUSED void gxs_draw_6(IMAGE* img, double x, double y, double w, double h, const char* svg);
+static GX_UNUSED int  gxs_dfile_1(const char* path);
+static GX_UNUSED int  gxs_dfile_2(IMAGE* img, const char* path);
+static GX_UNUSED int  gxs_dfile_3(double x, double y, const char* path);
+static GX_UNUSED int  gxs_dfile_4(IMAGE* img, double x, double y, const char* path);
+static GX_UNUSED int  gxs_dfile_5(double x, double y, double w, double h, const char* path);
+static GX_UNUSED int  gxs_dfile_6(IMAGE* img, double x, double y, double w, double h, const char* path);
+static GX_UNUSED int  gxsFile(int n, IMAGE* img, double x, double y, double w, double h, const char* path);
+static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h, const char* svg);
+#endif
+
+
 #ifdef __cplusplus
 
 /*======================================================================
@@ -10629,6 +10959,90 @@ static inline void getfont(LOGFONTA* f) { gxGetFontA(f); }
 static inline void getfont(LOGFONTW* f) { gxGetFontW(f); }
 static inline void gettextstyle(LOGFONTA* f) { gxGetFontA(f); }
 static inline void gettextstyle(LOGFONTW* f) { gxGetFontW(f); }
+
+/* Clipping.  The C side reaches gx_clipb_0/1/4 through the setcliprect()
+ * macro, which has no C++ counterpart, so the three spellings are spelled
+ * out here as ordinary overloads:
+ *     setcliprect(l, t, r, b)  clip to that box
+ *     setcliprect(NULL)        stop clipping
+ *     setcliprect()            the same
+ * clearcliprect() is the plain name for the last one. */
+static inline void setcliprect(int left, int top, int right, int bottom) {
+    gxSetClipBox(left, top, right, bottom);
+}
+static inline void setcliprect(void* nil) { (void)nil; gxClearClipBox(); }
+static inline void setcliprect(void)      { gxClearClipBox(); }
+static inline void clearcliprect(void)    { gxClearClipBox(); }
+
+static GX_UNUSED int  loadsvg(SVGIMG* e, const char* svg)
+{ return gxsLoadSrc(e, svg); }
+static GX_UNUSED int  loadsvg(SVGIMG* e, int w, int h, const char* svg)
+{ return gxsLoadSrc2(e, w, h, svg); }
+static GX_UNUSED int  loadsvgfile(SVGIMG* e, const char* path)
+{ return gxsLoadFileA(e, path); }
+static GX_UNUSED int  loadsvgfile(SVGIMG* e, const WCHAR* path)
+{ return gxsLoadFileW(e, path); }
+static GX_UNUSED int  loadsvgfromfile(SVGIMG* e, const char* path)
+{ return gxsLoadFromFileA(e, path, 0, 0); }
+static GX_UNUSED int  loadsvgfromfile(SVGIMG* e, const WCHAR* path)
+{ return gxsLoadFromFileW(e, path, 0, 0); }
+static GX_UNUSED int  loadsvgfromfile(SVGIMG* e, const char* path, int w, int h)
+{ return gxsLoadFromFileA(e, path, w, h); }
+static GX_UNUSED int  loadsvgfromfile(SVGIMG* e, const WCHAR* path, int w, int h)
+{ return gxsLoadFromFileW(e, path, w, h); }
+static GX_UNUSED int  loadsvgfromfileA(SVGIMG* e, const char* path)
+{ return gxsLoadFromFileA(e, path, 0, 0); }
+static GX_UNUSED int  loadsvgfromfileA(SVGIMG* e, const char* path, int w, int h)
+{ return gxsLoadFromFileA(e, path, w, h); }
+static GX_UNUSED int  loadsvgfromfileW(SVGIMG* e, const WCHAR* path)
+{ return gxsLoadFromFileW(e, path, 0, 0); }
+static GX_UNUSED int  loadsvgfromfileW(SVGIMG* e, const WCHAR* path, int w, int h)
+{ return gxsLoadFromFileW(e, path, w, h); }
+static GX_UNUSED int  savesvgfile(const SVGIMG* e, const char* path)
+{ return gxsSaveA(e, path); }
+static GX_UNUSED int  savesvgfile(const SVGIMG* e, const WCHAR* path)
+{ return gxsSaveW(e, path); }
+static GX_UNUSED int  savesvgfile(const char* path, const SVGIMG* e)
+{ return gxsSaveA(e, path); }
+static GX_UNUSED int  savesvgfile(const WCHAR* path, const SVGIMG* e)
+{ return gxsSaveW(e, path); }
+static GX_UNUSED void putsvg(const SVGIMG* e)
+{ gxsPut3(0, 0, e); }
+static GX_UNUSED void putsvg(IMAGE* img, const SVGIMG* e)
+{ gxsPut4(img, 0, 0, e); }
+static GX_UNUSED void putsvg(double x, double y, const SVGIMG* e)
+{ gxsPut3(x, y, e); }
+static GX_UNUSED void putsvg(IMAGE* img, double x, double y, const SVGIMG* e)
+{ gxsPut4(img, x, y, e); }
+static GX_UNUSED void putsvg(double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut5(x, y, w, h, e); }
+static GX_UNUSED void putsvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut6(img, x, y, w, h, e); }
+static GX_UNUSED void drawsvg(const char* svg)
+{ gxs_draw_1(svg); }
+static GX_UNUSED void drawsvg(IMAGE* img, const char* svg)
+{ gxs_draw_2(img, svg); }
+static GX_UNUSED void drawsvg(double x, double y, const char* svg)
+{ gxs_draw_3(x, y, svg); }
+static GX_UNUSED void drawsvg(IMAGE* img, double x, double y, const char* svg)
+{ gxs_draw_4(img, x, y, svg); }
+static GX_UNUSED void drawsvg(double x, double y, double w, double h, const char* svg)
+{ gxs_draw_5(x, y, w, h, svg); }
+static GX_UNUSED void drawsvg(IMAGE* img, double x, double y, double w, double h, const char* svg)
+{ gxs_draw_6(img, x, y, w, h, svg); }
+static GX_UNUSED int  drawsvgfile(const char* path)
+{ return gxs_dfile_1(path); }
+static GX_UNUSED int  drawsvgfile(IMAGE* img, const char* path)
+{ return gxs_dfile_2(img, path); }
+static GX_UNUSED int  drawsvgfile(double x, double y, const char* path)
+{ return gxs_dfile_3(x, y, path); }
+static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, const char* path)
+{ return gxs_dfile_4(img, x, y, path); }
+static GX_UNUSED int  drawsvgfile(double x, double y, double w, double h, const char* path)
+{ return gxs_dfile_5(x, y, w, h, path); }
+static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, double h, const char* path)
+{ return gxs_dfile_6(img, x, y, w, h, path); }
+
 #else /* !__cplusplus */
 
 /*======================================================================
@@ -11203,7 +11617,2659 @@ static inline void gettextstyle(LOGFONTW* f) { gxGetFontW(f); }
         LOGFONTW*: gxGetFontW((LOGFONTW*)(p)),                                 \
         const LOGFONTA*: gxGetFontA((LOGFONTA*)(p)),                           \
         const LOGFONTW*: gxGetFontW((LOGFONTW*)(p)))
+#define loadsvg(...)     GXS_CAT(gxs_load_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define putsvg(...)      GXS_CAT(gxs_put_,   GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define drawsvg(...)     GXS_CAT(gxs_draw_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define drawsvgfile(...) GXS_CAT(gxs_dfile_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define GXS_ISWIDE(f) _Generic((f),                                     \
+        const WCHAR* : 1, WCHAR* : 1,                                    \
+        const char*  : 0, char*  : 0, default : 0)
+#define GXS_ISIMG(f) _Generic((f),                                      \
+        const SVGIMG* : 1, SVGIMG* : 1, default : 0)
+#define loadsvgfile(e, f)                                              \
+    (GXS_ISWIDE(f) ? gxsLoadFileW((e), (const WCHAR*)(f))            \
+                    : gxsLoadFileA((e), (const char*)(f)))
+/* loadsvgfromfile(&e, path) and loadsvgfromfile(&e, path, w, h): the
+ * argument count picks the shape, _Generic picks the character type, the
+ * same two steps loadsvgfile() takes. */
+#define GXS_LFF2(e, f)                                                \
+    (GXS_ISWIDE(f) ? gxsLoadFromFileW((e), (const WCHAR*)(f), 0, 0)  \
+                    : gxsLoadFromFileA((e), (const char*)(f), 0, 0))
+#define GXS_LFF4(e, f, w, h)                                          \
+    (GXS_ISWIDE(f) ? gxsLoadFromFileW((e), (const WCHAR*)(f), (w), (h)) \
+                    : gxsLoadFromFileA((e), (const char*)(f), (w), (h)))
+#define loadsvgfromfile(...) GXS_CAT(gxs_lff_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define gxs_lff_2(e, f)          GXS_LFF2((e), (f))
+#define gxs_lff_4(e, f, w, h)    GXS_LFF4((e), (f), (w), (h))
+#define loadsvgfromfileA(...) GXS_CAT(gxs_lffa_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define gxs_lffa_2(e, f)       gxsLoadFromFileA((e), (const char*)(f), 0, 0)
+#define gxs_lffa_4(e, f, w, h) gxsLoadFromFileA((e), (const char*)(f), (w), (h))
+#define loadsvgfromfileW(...) GXS_CAT(gxs_lffw_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define gxs_lffw_2(e, f)       gxsLoadFromFileW((e), (const WCHAR*)(f), 0, 0)
+#define gxs_lffw_4(e, f, w, h) gxsLoadFromFileW((e), (const WCHAR*)(f), (w), (h))
+#define savesvgfile(a, b)                                              \
+    (GXS_ISIMG(a)                                                     \
+        ? (GXS_ISWIDE(b) ? gxsSaveW((const SVGIMG*)(a), (const WCHAR*)(b)) \
+                          : gxsSaveA((const SVGIMG*)(a), (const char*)(b))) \
+        : (GXS_ISWIDE(a) ? gxsSaveW((const SVGIMG*)(b), (const WCHAR*)(a)) \
+                          : gxsSaveA((const SVGIMG*)(b), (const char*)(a))))
+#else
+#define loadsvgfile(e, f) gxsLoadFileA((e), (const char*)(f))
+#define savesvgfile(a, b) gxsSaveA((const SVGIMG*)(a), (const char*)(b))
+#define loadsvgfromfile(...) GXS_CAT(gxs_lff_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define gxs_lff_2(e, f)       gxsLoadFromFileA((e), (const char*)(f), 0, 0)
+#define gxs_lff_4(e, f, w, h) gxsLoadFromFileA((e), (const char*)(f), (w), (h))
+/* loadsvgfromfileA / loadsvgfromfileW: the flavour spelled out, for a
+ * wrapper that knows which one it wants. */
+#define loadsvgfromfileA(...) GXS_CAT(gxs_lffa_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define gxs_lffa_2(e, f)       gxsLoadFromFileA((e), (const char*)(f), 0, 0)
+#define gxs_lffa_4(e, f, w, h) gxsLoadFromFileA((e), (const char*)(f), (w), (h))
+#define loadsvgfromfileW(...) GXS_CAT(gxs_lffw_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define gxs_lffw_2(e, f)       gxsLoadFromFileW((e), (const WCHAR*)(f), 0, 0)
+#define gxs_lffw_4(e, f, w, h) gxsLoadFromFileW((e), (const WCHAR*)(f), (w), (h))
+#endif
+
 #endif /* __cplusplus */
+
+/* ==================================================================
+ * SVG
+ * ================================================================== */
+
+/* ==================================================================
+ * Basic types
+ * ================================================================== */
+
+typedef struct GXSPt { double x, y; } GXSPt;
+
+/* One sub-path. closed decides whether stroking joins the ends. */
+typedef struct GXSSub {
+    GXSPt* p;
+    int     n, cap;
+    int     closed;
+} GXSSub;
+
+typedef struct GXSPath {
+    GXSSub* s;
+    int      n, cap;
+} GXSPath;
+
+/* 2x3 affine matrix, same order as SVG matrix(a b c d e f) */
+typedef struct GXSMat { double a, b, c, d, e, f; } GXSMat;
+
+/* The whole paint state: fill, stroke, rules. Inherited down <g>. */
+typedef struct GXSStyle {
+    COLORREF fill;
+    int      fillNone;
+    int      fillGrad;        /* >=0: index of the url(#id) gradient             */
+    int      fillRule;        /* 0 nonzero  1 evenodd */
+    double   fillOpacity;
+
+    COLORREF stroke;
+    int      strokeNone;
+    double   strokeW;
+    int      cap, join;
+    double   strokeOpacity;
+
+    double   opacity;
+
+    double   dash[16];
+    int      dashN;
+    double   dashOff;
+
+    double   fontSize;
+    int      anchor;          /* 0 start  1 middle  2 end */
+    char     face[64];
+
+    int      clipId;          /* >=0: index of the clip-path region              */
+} GXSStyle;
+
+typedef struct GXSGrad {
+    char     id[64];
+    int      type;            /* 1 linear  2 radial */
+    double   x1, y1, x2, y2;  /* linear */
+    double   cx, cy, r;       /* radial */
+    int      units;           /* 0 objectBoundingBox (default) 1 userSpaceOnUse */
+    GRADSTOP stop[16];
+    int      n;
+    int      valid;
+} GXSGrad;
+
+typedef struct GXSClip {
+    char   id[64];
+    double l, t, r, b;
+    int    valid;
+} GXSClip;
+
+typedef struct GXSCtx {
+    GXSGrad* grad;  int gradN,  gradCap;
+    GXSClip* clip;  int clipN,  clipCap;
+    GXSMat   xf;             /* current transform: viewBox plus every transform */
+    double    vbX, vbY, vbW, vbH;
+    int       hasVB;
+    double    fitX, fitY, fitW, fitH;   /* the target rectangle                  */
+    int       useFit;
+    char*     buf;            /* writable copy of the source, cut in place      */
+    char*     src0;           /* second, untouched copy: <use> looks ids up here */
+    IMAGE*    target;
+    int       depth;
+} GXSCtx;
+
+/* How deep <use> may nest.  A symbol that references itself, directly or
+ * through another one, would otherwise recurse until the stack runs out. */
+#ifndef GXS_MAX_DEPTH
+#define GXS_MAX_DEPTH 24
+#endif
+
+/* ==================================================================
+ * Small helpers
+ * ================================================================== */
+
+static int gxsIsSpace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static void gxsSkipWs(const char** p)
+{
+    while (**p && gxsIsSpace(**p)) (*p)++;
+}
+
+/* Number: optional sign, fraction, exponent */
+static int gxsNum(const char** p, double* out)
+{
+    const char* s = *p;
+    double v = 0.0, frac = 0.1;
+    int neg = 0, any = 0, hasDot = 0;
+    gxsSkipWs(&s);
+    if (*s == '+') s++;
+    else if (*s == '-') { neg = 1; s++; }
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); any = 1; s++; }
+    if (*s == '.') {
+        hasDot = 1; s++;
+        while (*s >= '0' && *s <= '9') { v += (*s - '0') * frac; frac *= 0.1; any = 1; s++; }
+    }
+    if (!any) return 0;
+    if ((*s == 'e' || *s == 'E')) {
+        const char* q = s + 1; int en = 0, ea = 0;
+        if (*q == '+' || *q == '-') { if (*q == '-') en = 1; q++; }
+        while (*q >= '0' && *q <= '9') { ea = ea * 10 + (*q - '0'); q++; }
+        if (ea || q > s + 1) {
+            double m = 1.0; while (ea--) m *= 10.0;
+            v = en ? v / m : v * m;
+            s = (const char*)q;
+        }
+    }
+    (void)hasDot;
+    *out = neg ? -v : v;
+    *p = s;
+    return 1;
+}
+
+static double gxsClampD(double v, double lo, double hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* ==================================================================
+ * Colors
+ * ================================================================== */
+
+static const struct { const char* n; int r, g, b; } GXS_COLORS[] = {
+    { "aliceblue",240,248,255 }, { "antiquewhite",250,235,215 },
+    { "aqua",0,255,255 },        { "aquamarine",127,255,212 },
+    { "azure",240,255,255 },     { "beige",245,245,220 },
+    { "bisque",255,228,196 },    { "black",0,0,0 },
+    { "blanchedalmond",255,235,205 }, { "blue",0,0,255 },
+    { "blueviolet",138,43,226 }, { "brown",165,42,42 },
+    { "burlywood",222,184,135 }, { "cadetblue",95,158,160 },
+    { "chartreuse",127,255,0 },  { "chocolate",210,105,30 },
+    { "coral",255,127,80 },      { "cornflowerblue",100,149,237 },
+    { "cornsilk",255,248,220 },  { "crimson",220,20,60 },
+    { "cyan",0,255,255 },        { "darkblue",0,0,139 },
+    { "darkcyan",0,139,139 },    { "darkgoldenrod",184,134,11 },
+    { "darkgray",169,169,169 },  { "darkgreen",0,100,0 },
+    { "darkgrey",169,169,169 },  { "darkkhaki",189,183,107 },
+    { "darkmagenta",139,0,139 }, { "darkolivegreen",85,107,47 },
+    { "darkorange",255,140,0 },  { "darkorchid",153,50,204 },
+    { "darkred",139,0,0 },       { "darksalmon",233,150,122 },
+    { "darkseagreen",143,188,143 }, { "darkslateblue",72,61,139 },
+    { "darkslategray",47,79,79 },{ "darkturquoise",0,206,209 },
+    { "darkviolet",148,0,211 },  { "deeppink",255,20,147 },
+    { "deepskyblue",0,191,255 }, { "dimgray",105,105,105 },
+    { "dimgrey",105,105,105 },   { "dodgerblue",30,144,255 },
+    { "firebrick",178,34,34 },   { "floralwhite",255,250,240 },
+    { "forestgreen",34,139,34 }, { "fuchsia",255,0,255 },
+    { "gainsboro",220,220,220 }, { "ghostwhite",248,248,255 },
+    { "gold",255,215,0 },        { "goldenrod",218,165,32 },
+    { "gray",128,128,128 },      { "grey",128,128,128 },
+    { "green",0,128,0 },         { "greenyellow",173,255,47 },
+    { "honeydew",240,255,240 },  { "hotpink",255,105,180 },
+    { "indianred",205,92,92 },   { "indigo",75,0,130 },
+    { "ivory",255,255,240 },     { "khaki",240,230,140 },
+    { "lavender",230,230,250 },  { "lavenderblush",255,240,245 },
+    { "lawngreen",124,252,0 },   { "lemonchiffon",255,250,205 },
+    { "lightblue",173,216,230 }, { "lightcoral",240,128,128 },
+    { "lightcyan",224,255,255 }, { "lightgoldenrodyellow",250,250,210 },
+    { "lightgray",211,211,211 }, { "lightgreen",144,238,144 },
+    { "lightgrey",211,211,211 }, { "lightpink",255,182,193 },
+    { "lightsalmon",255,160,122 }, { "lightseagreen",32,178,170 },
+    { "lightskyblue",135,206,250 }, { "lightslategray",119,136,153 },
+    { "lightsteelblue",176,196,222 }, { "lightyellow",255,255,224 },
+    { "lime",0,255,0 },          { "limegreen",50,205,50 },
+    { "linen",250,240,230 },     { "magenta",255,0,255 },
+    { "maroon",128,0,0 },        { "mediumaquamarine",102,205,170 },
+    { "mediumblue",0,0,205 },    { "mediumorchid",186,85,211 },
+    { "mediumpurple",147,112,219 }, { "mediumseagreen",60,179,113 },
+    { "mediumslateblue",123,104,238 }, { "mediumspringgreen",0,250,154 },
+    { "mediumturquoise",72,209,204 }, { "mediumvioletred",199,21,133 },
+    { "midnightblue",25,25,112 },{ "mintcream",245,255,250 },
+    { "mistyrose",255,228,225 }, { "moccasin",255,228,181 },
+    { "navajowhite",255,222,173 },{ "navy",0,0,128 },
+    { "oldlace",253,245,230 },   { "olive",128,128,0 },
+    { "olivedrab",107,142,35 },  { "orange",255,165,0 },
+    { "orangered",255,69,0 },    { "orchid",218,112,214 },
+    { "palegoldenrod",238,232,170 }, { "palegreen",152,251,152 },
+    { "paleturquoise",175,238,238 }, { "palevioletred",219,112,147 },
+    { "papayawhip",255,239,213 },{ "peachpuff",255,218,185 },
+    { "peru",205,133,63 },       { "pink",255,192,203 },
+    { "plum",221,160,221 },      { "powderblue",176,224,230 },
+    { "purple",128,0,128 },      { "red",255,0,0 },
+    { "rosybrown",188,143,143 }, { "royalblue",65,105,225 },
+    { "saddlebrown",139,69,19 }, { "salmon",250,128,114 },
+    { "sandybrown",244,164,96 }, { "seagreen",46,139,87 },
+    { "seashell",255,245,238 },  { "sienna",160,82,45 },
+    { "silver",192,192,192 },    { "skyblue",135,206,235 },
+    { "slateblue",106,90,205 },  { "slategray",112,128,144 },
+    { "snow",255,250,250 },      { "springgreen",0,255,127 },
+    { "steelblue",70,130,180 },  { "tan",210,180,140 },
+    { "teal",0,128,128 },        { "thistle",216,191,216 },
+    { "tomato",255,99,71 },      { "turquoise",64,224,208 },
+    { "violet",238,130,238 },    { "wheat",245,222,179 },
+    { "white",255,255,255 },     { "whitesmoke",245,245,245 },
+    { "yellow",255,255,0 },      { "yellowgreen",154,205,50 }
+};
+
+static int gxsHexVal(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Returns 1 on success. isNone=1 means "none", gradId>=0 means url(#id). */
+static int gxsColor(const char* s, COLORREF* out, int* isNone, int* gradId, GXSCtx* cx)
+{
+    size_t i, n;
+    if (isNone) *isNone = 0;
+    if (gradId) *gradId = -1;
+    if (!s) return 0;
+    gxsSkipWs(&s);
+    n = strlen(s);
+    while (n > 0 && gxsIsSpace(s[n - 1])) n--;
+
+    if (n == 4 && strncmp(s, "none", 4) == 0) { if (isNone) *isNone = 1; return 1; }
+    if (n == 12 && strncmp(s, "currentColor", 12) == 0) { *out = getlinecolor(); return 1; }
+
+    if (s[0] == '#') {
+        int len = (int)n - 1, h[8], k;
+        if (len != 3 && len != 4 && len != 6 && len != 8) { *out = RGB(0, 0, 0); return 1; }
+        for (k = 0; k < len; k++) { h[k] = gxsHexVal(s[k + 1]); if (h[k] < 0) { *out = RGB(0,0,0); return 1; } }
+        if (len == 3 || len == 4) {
+            int r = h[0] * 17, g = h[1] * 17, b = h[2] * 17;
+            *out = RGB(r, g, b); return 1;
+        }
+        *out = RGB(h[0] * 16 + h[1], h[2] * 16 + h[3], h[4] * 16 + h[5]);
+        return 1;
+    }
+
+    if ((n > 4 && strncmp(s, "rgb(", 4) == 0) || (n > 5 && strncmp(s, "rgba(", 5) == 0)) {
+        const char* p = s; while (*p && *p != '(') p++; p++;
+        double v[3] = { 0, 0, 0 }; int got = 0; char pct[3] = { 0, 0, 0 };
+        for (i = 0; i < 3; i++) {
+            const char* b = p;
+            double d;
+            if (!gxsNum(&p, &d)) break;
+            if (b < s + n && p > b && p - b > 0 && *(p - 1) == 0) break;
+            { const char* q = b; while (q < p && *q) { if (*q == '%') pct[i] = 1; q++; } }
+            v[i] = pct[i] ? d * 2.55 : d;
+            got++;
+            while (*p && (*p == ',' || *p == ' ')) p++;
+        }
+        if (got == 3) {
+            *out = RGB((int)gxsClampD(v[0], 0, 255), (int)gxsClampD(v[1], 0, 255),
+                       (int)gxsClampD(v[2], 0, 255));
+            return 1;
+        }
+        *out = RGB(0, 0, 0); return 1;
+    }
+
+    if (n > 5 && strncmp(s, "url(", 4) == 0) {
+        const char* p = s + 4;
+        char name[64]; size_t k = 0;
+        while (*p && *p != '#' && *p != ')') p++;
+        if (*p == '#') p++;
+        while (*p && *p != ')' && k < sizeof(name) - 1) name[k++] = *p++;
+        name[k] = 0;
+        if (cx && gradId) {
+            for (i = 0; i < (size_t)cx->gradN; i++)
+                if (strcmp(cx->grad[i].id, name) == 0) { *gradId = (int)i; return 1; }
+        }
+        /* Undefined: per the spec a dangling url() means "do not paint" */
+        if (isNone) *isNone = 1;
+        return 1;
+    }
+
+    for (i = 0; i < sizeof(GXS_COLORS) / sizeof(GXS_COLORS[0]); i++) {
+        if (strlen(GXS_COLORS[i].n) == n && strncmp(s, GXS_COLORS[i].n, n) == 0) {
+            *out = RGB(GXS_COLORS[i].r, GXS_COLORS[i].g, GXS_COLORS[i].b);
+            return 1;
+        }
+    }
+    *out = RGB(0, 0, 0);
+    return 1;
+}
+
+/* ==================================================================
+ * Matrices
+ * ================================================================== */
+
+/* What the root <svg> says about its own size.  docW / docH are the
+ * width= / height= values in px; a percentage is reported as 0, because
+ * "as large as the parent" is not a size in px. */
+typedef struct GXSSize {
+    double vbX, vbY, vbW, vbH;
+    int    hasVB;
+    double docW, docH;
+} GXSSize;
+
+
+static GXSMat gxsMatId(void) { GXSMat m = { 1, 0, 0, 1, 0, 0 }; return m; }
+
+static GXSMat gxsMatMul(const GXSMat* A, const GXSMat* B)
+{
+    GXSMat m;
+    m.a = A->a * B->a + A->c * B->b;
+    m.b = A->b * B->a + A->d * B->b;
+    m.c = A->a * B->c + A->c * B->d;
+    m.d = A->b * B->c + A->d * B->d;
+    m.e = A->a * B->e + A->c * B->f + A->e;
+    m.f = A->b * B->e + A->d * B->f + A->f;
+    return m;
+}
+
+static GXSPt gxsXf(const GXSMat* m, double x, double y)
+{
+    GXSPt p;
+    p.x = m->a * x + m->c * y + m->e;
+    p.y = m->b * x + m->d * y + m->f;
+    return p;
+}
+
+/* Absolute scale only: grows lengths such as stroke-width */
+static double gxsMatScale(const GXSMat* m)
+{
+    double s1 = sqrt(m->a * m->a + m->b * m->b);
+    double s2 = sqrt(m->c * m->c + m->d * m->d);
+    return (s1 + s2) * 0.5;
+}
+
+/* ==================================================================
+ * Path container
+ * ================================================================== */
+
+static void gxsPathInit(GXSPath* p) { p->s = NULL; p->n = 0; p->cap = 0; }
+static void gxsPathFree(GXSPath* p)
+{
+    int i;
+    for (i = 0; i < p->n; i++) free(p->s[i].p);
+    free(p->s);
+    p->s = NULL; p->n = 0; p->cap = 0;
+}
+
+static GXSSub* gxsSubNew(GXSPath* p)
+{
+    if (p->n == p->cap) {
+        int nc = p->cap ? p->cap * 2 : 8;
+        GXSSub* t = (GXSSub*)realloc(p->s, (size_t)nc * sizeof(GXSSub));
+        if (!t) return NULL;
+        p->s = t; p->cap = nc;
+    }
+    memset(&p->s[p->n], 0, sizeof(GXSSub));
+    p->n++;
+    return &p->s[p->n - 1];
+}
+
+static int gxsSubPush(GXSSub* s, double x, double y)
+{
+    if (s->n == s->cap) {
+        int nc = s->cap ? s->cap * 2 : 16;
+        GXSPt* t = (GXSPt*)realloc(s->p, (size_t)nc * sizeof(GXSPt));
+        if (!t) return 0;
+        s->p = t; s->cap = nc;
+    }
+    s->p[s->n].x = x; s->p[s->n].y = y; s->n++;
+    return 1;
+}
+
+/* ==================================================================
+ * Attributes
+ * ================================================================== */
+
+#define GXS_MAXATTR 40
+
+typedef struct GXSAttr {
+    char* name;
+    char* val;
+} GXSAttr;
+
+typedef struct GXSTag {
+    char     name[32];
+    GXSAttr a[GXS_MAXATTR];
+    int      na;
+    int      selfClose;
+    int      closing;
+} GXSTag;
+
+static const char* gxsAttr(const GXSTag* t, const char* n)
+{
+    int i;
+    for (i = 0; i < t->na; i++)
+        if (strcmp(t->a[i].name, n) == 0) return t->a[i].val;
+    return NULL;
+}
+
+/* Both xlink:href and href are accepted */
+static const char* gxsHref(const GXSTag* t)
+{
+    const char* v = gxsAttr(t, "href");
+    if (!v) v = gxsAttr(t, "xlink:href");
+    return v;
+}
+
+/* A font name out of a font-family list.  The list is comma separated
+ * and each name may be quoted - font-family='Times New Roman', serif and
+ * font-family="'Times New Roman', serif" are the same thing - so the
+ * quotes and the surrounding space have to come off before the name is
+ * handed to settextstyle(): a face name that still carries its quotes
+ * matches nothing and silently falls back to the default. */
+static void gxsCopyFace(char* dst, size_t cap, const char* v)
+{
+    size_t k = 0, n;
+    if (!v) { dst[0] = 0; return; }
+    while (*v && gxsIsSpace((unsigned char)*v)) v++;
+    if (*v == '\'' || *v == '"') {
+        char q = *v++;
+        while (*v && *v != q && k + 1 < cap) dst[k++] = *v++;
+    } else {
+        while (*v && *v != ',' && k + 1 < cap) dst[k++] = *v++;
+    }
+    dst[k] = 0;
+    n = strlen(dst);
+    while (n > 0 && gxsIsSpace((unsigned char)dst[n - 1])) dst[--n] = 0;
+}
+
+/* A private copy of a NUL-terminated string, NULL when out of memory.
+ * malloc + memcpy rather than strdup(): strdup is POSIX, not ISO C, and
+ * a MinGW build with -std=c11 has no declaration for it. */
+static char* gxsStrDup(const char* s)
+{
+    size_t n;
+    char* d;
+    if (!s) return NULL;
+    n = strlen(s) + 1;
+    d = (char*)malloc(n);
+    if (!d) return NULL;
+    memcpy(d, s, n);
+    return d;
+}
+
+/* Decode the XML entities in a text run into a fresh buffer, which the
+ * caller frees.  Returns NULL when out of memory, in which case the caller
+ * draws nothing rather than drawing the raw markup. */
+static char* gxsUnescape(const char* s)
+{
+    char* out;
+    size_t k = 0;
+    if (!s) return NULL;
+    out = (char*)malloc(strlen(s) + 1);
+    if (!out) return NULL;
+    while (*s) {
+        if (*s == '&') {
+            const char* e = strchr(s, ';');
+            const char* q;
+            if (e && e - s > 1 && e - s < 12) {
+                size_t len = (size_t)(e - s - 1);
+                const char* nm = s + 1;
+                if (len == 3 && strncmp(nm, "amp", 3) == 0) { out[k++] = '&'; s = e + 1; continue; }
+                if (len == 2 && strncmp(nm, "lt", 2) == 0) { out[k++] = '<'; s = e + 1; continue; }
+                if (len == 2 && strncmp(nm, "gt", 2) == 0) { out[k++] = '>'; s = e + 1; continue; }
+                if (len == 4 && strncmp(nm, "quot", 4) == 0) { out[k++] = '"'; s = e + 1; continue; }
+                if (len == 4 && strncmp(nm, "apos", 4) == 0) { out[k++] = '\''; s = e + 1; continue; }
+                if (nm[0] == '#') {                 /* &#65; or &#x41; */
+                    unsigned long cp = 0;
+                    int base = 10, ok = 1;
+                    q = nm + 1;
+                    if (*q == 'x' || *q == 'X') { base = 16; q++; }
+                    if (q >= e) ok = 0;
+                    for (; q < e && ok; q++) {
+                        int d;
+                        if (*q >= '0' && *q <= '9') d = *q - '0';
+                        else if (base == 16 && *q >= 'a' && *q <= 'f') d = *q - 'a' + 10;
+                        else if (base == 16 && *q >= 'A' && *q <= 'F') d = *q - 'A' + 10;
+                        else { ok = 0; break; }
+                        cp = cp * (unsigned long)base + (unsigned long)d;
+                    }
+                    if (ok && cp < 0x10000) {
+                        if (cp < 0x80) {
+                            out[k++] = (char)cp;
+                        } else if (cp < 0x800) {
+                            out[k++] = (char)(0xC0 | (cp >> 6));
+                            out[k++] = (char)(0x80 | (cp & 0x3F));
+                        } else {
+                            out[k++] = (char)(0xE0 | (cp >> 12));
+                            out[k++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                            out[k++] = (char)(0x80 | (cp & 0x3F));
+                        }
+                        s = e + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out[k++] = *s++;
+    }
+    out[k] = 0;
+    return out;
+}
+
+/* Numeric attribute, def when missing */
+static double gxsD(const GXSTag* t, const char* n, double def)
+{
+    const char* v = gxsAttr(t, n);
+    double d;
+    const char* p = v;
+    if (!v) return def;
+    if (!gxsNum(&p, &d)) return def;
+    return d;
+}
+
+/* A length such as width="200" or height="200px".  Returns 0 when the
+ * attribute is missing or written as a percentage: that means "as large
+ * as the parent", which is not a size in px. */
+static GX_UNUSED double gxsDim(const GXSTag* t, const char* n)
+{
+    const char* v = gxsAttr(t, n);
+    size_t k;
+    double out = 0;
+    if (!v) return 0;
+    k = strlen(v);
+    while (k > 0 && (unsigned char)v[k - 1] <= ' ') k--;
+    if (k > 0 && v[k - 1] == '%') return 0;
+    gxsNum(&v, &out);
+    return out > 0 ? out : 0;
+}
+
+/* ==================================================================
+ * XML scanning
+ * ================================================================== */
+
+static int gxsIsNameCh(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ':' || c == '.';
+}
+
+/* Split the attributes inside <...> into NUL-terminated pieces */
+static void gxsParseAttrs(char* s, GXSTag* t)
+{
+    t->na = 0;
+    while (*s && t->na < GXS_MAXATTR) {
+        char *ns, *vs, *vsEnd;
+        int q;
+        while (*s && gxsIsSpace(*s)) s++;
+        if (!*s) return;
+        if (*s == '/' && s[1] == '>') { t->selfClose = 1; return; }
+        if (*s == '>') return;
+        ns = s;
+        while (*s && !gxsIsSpace(*s) && *s != '=') s++;
+        if (!*s || *s != '=') { while (*s && *s != '>' && !gxsIsSpace(*s)) s++; continue; }
+        *s++ = 0;
+        while (*s && gxsIsSpace(*s)) s++;
+        if (*s != '"' && *s != '\'') { while (*s && !gxsIsSpace(*s) && *s != '>') s++; continue; }
+        q = *s++;
+        vs = s;
+        while (*s && *s != q) s++;
+        vsEnd = s;
+        if (*s) s++;
+        *vsEnd = 0;
+        t->a[t->na].name = ns;
+        t->a[t->na].val = vs;
+        t->na++;
+    }
+}
+
+/* Read the next tag from *p. Returns 0 at the end of the document */
+static int gxsNextTag(char** p, GXSTag* t)
+{
+    char* s = *p;
+    memset(t, 0, sizeof(*t));
+    for (;;) {
+        while (*s && *s != '<') s++;
+        if (!*s) { *p = s; return 0; }
+        if (s[1] == '!' || s[1] == '?') {          /* comment / declaration / DOCTYPE */
+            char* e = s + 2;
+            if (s[1] == '!' && s[2] == '-' && s[3] == '-') { char* z = strstr(s + 4, "-->"); e = z ? z + 3 : s + 4; }
+            else { while (*e && *e != '>') e++; if (*e) e++; }
+            s = e; continue;
+        }
+        break;
+    }
+    s++;
+    if (*s == '/') { t->closing = 1; s++; }
+    {
+        char* ns = s; int k = 0;
+        while (*s && gxsIsNameCh(*s) && k < 31) { t->name[k++] = *s++; }
+        t->name[k] = 0;
+        (void)ns;
+    }
+    {
+        char* ts = s;
+        while (*ts && *ts != '>') {
+            if (*ts == '/' && ts[1] == '>') break;      /* stop on the '/' of "/>" */
+            ts++;
+        }
+        /* Terminate the attribute text and then step PAST the closing
+         * bracket.  Writing the NUL first and afterwards testing
+         * *s == '>' can never be true - the character is already gone, so
+         * the pointer stopped dead on the NUL and the next call returned 0
+         * immediately.  Only the very first tag of a document was ever
+         * parsed, which is why nothing was ever drawn. */
+        if (*ts == '/') {
+            t->selfClose = 1;
+            *ts = 0;
+            gxsParseAttrs(s, t);
+            s = ts + 2;                                  /* skip "/>" */
+        } else if (*ts == '>') {
+            *ts = 0;
+            gxsParseAttrs(s, t);
+            s = ts + 1;                                  /* skip ">" */
+        } else {
+            gxsParseAttrs(s, t);                        /* malformed: ran to the end */
+            s = ts;
+        }
+    }
+    *p = s;
+    return 1;
+}
+
+/* ==================================================================
+ * transform
+ * ================================================================== */
+
+static void gxsSkipSep(const char** p)
+{
+    while (**p && (gxsIsSpace(**p) || **p == ',')) (*p)++;
+}
+
+static GXSMat gxsTransform(const char* s)
+{
+    GXSMat m = gxsMatId();
+    const char* p = s;
+    if (!p) return m;
+    while (*p) {
+        GXSMat t = gxsMatId();
+        gxsSkipWs(&p);
+        if (!*p) break;
+        if (strncmp(p, "translate", 9) == 0) {
+            double x = 0, y = 0; p += 9; gxsSkipSep(&p);
+            if (!gxsNum(&p, &x)) break;
+            gxsSkipSep(&p); gxsNum(&p, &y);
+            t.e = x; t.f = y;
+        } else if (strncmp(p, "scale", 5) == 0) {
+            double x = 1, y = 1; p += 5; gxsSkipSep(&p);
+            if (!gxsNum(&p, &x)) break;
+            gxsSkipSep(&p);
+            if (!gxsNum(&p, &y)) y = x;
+            t.a = x; t.d = y;
+        } else if (strncmp(p, "rotate", 6) == 0) {
+            double a = 0, cx = 0, cy = 0; p += 6; gxsSkipSep(&p);
+            if (!gxsNum(&p, &a)) break;
+            a = a * GX_SVG_PI / 180.0;
+            gxsSkipSep(&p);
+            if (gxsNum(&p, &cx)) { gxsSkipSep(&p); gxsNum(&p, &cy); }
+            {
+                double c = cos(a), s2 = sin(a);
+                GXSMat r; r.a = c; r.b = s2; r.c = -s2; r.d = c; r.e = 0; r.f = 0;
+                GXSMat o = gxsMatId(); o.e = cx; o.f = cy;
+                GXSMat n2 = gxsMatId(); n2.e = -cx; n2.f = -cy;
+                GXSMat tmp = gxsMatMul(&r, &n2);
+                t = gxsMatMul(&o, &tmp);
+            }
+        } else if (strncmp(p, "matrix", 6) == 0) {
+            double v[6]; int i, ok = 1; p += 6; gxsSkipSep(&p);
+            for (i = 0; i < 6; i++) { gxsSkipSep(&p); if (!gxsNum(&p, &v[i])) { ok = 0; break; } }
+            if (!ok) break;
+            t.a = v[0]; t.b = v[1]; t.c = v[2]; t.d = v[3]; t.e = v[4]; t.f = v[5];
+        } else if (strncmp(p, "skewX", 5) == 0) {
+            double a; p += 5; gxsSkipSep(&p);
+            if (!gxsNum(&p, &a)) break;
+            t.c = tan(a * GX_SVG_PI / 180.0);
+        } else if (strncmp(p, "skewY", 5) == 0) {
+            double a; p += 5; gxsSkipSep(&p);
+            if (!gxsNum(&p, &a)) break;
+            t.b = tan(a * GX_SVG_PI / 180.0);
+        } else {
+            p++; continue;
+        }
+        m = gxsMatMul(&m, &t);
+        while (*p && *p != ')') p++;
+        if (*p == ')') p++;
+        gxsSkipSep(&p);
+    }
+    return m;
+}
+
+/* ==================================================================
+ * The d of <path>
+ * ================================================================== */
+
+static void gxsCubic(GXSSub* s, double x0, double y0,
+                      double x1, double y1, double x2, double y2,
+                      double x3, double y3, int depth)
+{
+    double mx, my, dx1, dy1, dx2, dy2, f;
+    if (depth > 12) { gxsSubPush(s, x3, y3); return; }
+    mx = (x1 + x2) * 0.5; my = (y1 + y2) * 0.5;
+    dx1 = fabs(x1 - x0) + fabs(y1 - y0);
+    dy1 = fabs(x2 - x1) + fabs(y2 - y1);
+    dx2 = fabs(x3 - x2) + fabs(y3 - y2);
+    dy2 = fabs(x3 - mx) + fabs(y3 - my);
+    f = dx1 + dy1 + dx2 + dy2;
+    if (f < 1.5) { gxsSubPush(s, x3, y3); return; }
+    {
+        double x01 = (x0 + x1) * 0.5, y01 = (y0 + y1) * 0.5;
+        double x12 = (x1 + x2) * 0.5, y12 = (y1 + y2) * 0.5;
+        double x23 = (x2 + x3) * 0.5, y23 = (y2 + y3) * 0.5;
+        double xa = (x01 + x12) * 0.5, ya = (y01 + y12) * 0.5;
+        double xb = (x12 + x23) * 0.5, yb = (y12 + y23) * 0.5;
+        double xc = (xa + xb) * 0.5, yc = (ya + yb) * 0.5;
+        gxsCubic(s, x0, y0, x01, y01, xa, ya, xc, yc, depth + 1);
+        gxsCubic(s, xc, yc, xb, yb, x23, y23, x3, y3, depth + 1);
+    }
+}
+
+static void gxsQuad(GXSSub* s, double x0, double y0,
+                     double cx, double cy, double x1, double y1, int depth)
+{
+    if (depth > 12) { gxsSubPush(s, x1, y1); return; }
+    {
+        double f = fabs(cx - x0) * 4 + fabs(cy - y0) * 4;
+        if (f < 1.5) { gxsSubPush(s, x1, y1); return; }
+    }
+    {
+        double x01 = (x0 + cx) * 0.5, y01 = (y0 + cy) * 0.5;
+        double x12 = (cx + x1) * 0.5, y12 = (cy + y1) * 0.5;
+        double xc = (x01 + x12) * 0.5, yc = (y01 + y12) * 0.5;
+        gxsQuad(s, x0, y0, x01, y01, xc, yc, depth + 1);
+        gxsQuad(s, xc, yc, x12, y12, x1, y1, depth + 1);
+    }
+}
+
+/* SVG arc: endpoint to centre parameterisation, then sampled */
+static void gxsArc(GXSSub* s, double x1, double y1, double rx, double ry,
+                    double phiDeg, int fa, int fs, double x2, double y2)
+{
+    double phi, dx2, dy2, x1p, y1p, lam, sgn, num, den, coef;
+    double cxp, cyp, cx, cy, th1, dth, cosp, sinp;
+    double ux, uy, vx, vy, a1, ad;
+    int i, steps;
+    if (rx < 0) rx = -rx;
+    if (ry < 0) ry = -ry;
+    if (rx < 1e-9 || ry < 1e-9) { gxsSubPush(s, x2, y2); return; }
+    if (fabs(x1 - x2) < 1e-9 && fabs(y1 - y2) < 1e-9) return;
+
+    phi = phiDeg * GX_SVG_PI / 180.0;
+    cosp = cos(phi); sinp = sin(phi);
+    dx2 = (x1 - x2) * 0.5; dy2 = (y1 - y2) * 0.5;
+    x1p =  cosp * dx2 + sinp * dy2;
+    y1p = -sinp * dx2 + cosp * dy2;
+
+    lam = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    if (lam > 1.0) { double k = sqrt(lam); rx *= k; ry *= k; }
+
+    sgn = (fa == fs) ? -1.0 : 1.0;
+    num = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
+    den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+    if (den <= 0.0) { gxsSubPush(s, x2, y2); return; }
+    coef = sgn * sqrt(num / den > 0.0 ? num / den : 0.0);
+    cxp =  coef * (rx * y1p / ry);
+    cyp =  coef * (-ry * x1p / rx);
+    cx = cosp * cxp - sinp * cyp + (x1 + x2) * 0.5;
+    cy = sinp * cxp + cosp * cyp + (y1 + y2) * 0.5;
+
+    ux = (x1p - cxp) / rx; uy = (y1p - cyp) / ry;
+    vx = (-x1p - cxp) / rx; vy = (-y1p - cyp) / ry;
+    a1 = atan2(uy, ux);
+    ad = atan2(uy * vx - ux * vy, ux * vx + uy * vy);
+    if (!fs && ad > 0) ad -= 2 * GX_SVG_PI;
+    else if (fs && ad < 0) ad += 2 * GX_SVG_PI;
+
+    th1 = a1; dth = ad;
+    steps = (int)(fabs(dth) / (GX_SVG_PI / 18.0)) + 2;
+    if (steps > 720) steps = 720;
+    for (i = 1; i <= steps; i++) {
+        double t = th1 + dth * ((double)i / steps);
+        double ex = rx * cos(t), ey = ry * sin(t);
+        gxsSubPush(s, cosp * ex - sinp * ey + cx, sinp * ex + cosp * ey + cy);
+    }
+}
+
+/* Parse d. Points are collected as written, transformed once at the end. */
+static void gxsParsePathD(const char* d, GXSPath* out)
+{
+    const char* p = d;
+    double cx = 0, cy = 0, sx = 0, sy = 0;
+    double px = 0, py = 0, qx = 0, qy = 0;
+    char cmd = 0, prev = 0;
+    GXSSub* s = NULL;
+
+    if (!p) return;
+    while (*p) {
+        char c;
+        /* Skip separators FIRST, then look for a command letter.  The old
+         * order tested *p before skipping, so after one set of coordinates
+         * it saw the space between "M 20,150" and "L 60,110", decided this
+         * was not a command, skipped the space and then parsed "L" as the
+         * next number of the PREVIOUS command.  gxsNum() failed on the
+         * letter and the whole path returned with one point - every space
+         * separated path, which is how SVG is normally written, came out
+         * empty. */
+        gxsSkipSep(&p);
+        if (!*p) break;
+        c = *p;
+        if (((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) &&
+            c != 'e' && c != 'E') {          /* e/E may be an exponent */
+            cmd = c;
+            p++;
+        } else if (!cmd) {
+            cmd = 'M';
+        }
+        gxsSkipSep(&p);
+
+        switch (cmd) {
+        case 'M': case 'm': {
+            double x, y;
+            if (!gxsNum(&p, &x)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y)) return;
+            if (cmd == 'm') { x += cx; y += cy; }
+            cx = x; cy = y; sx = x; sy = y;
+            s = gxsSubNew(out); if (!s) return;
+            gxsSubPush(s, x, y);
+            cmd = (cmd == 'M') ? 'L' : 'l';
+            break;
+        }
+        case 'L': case 'l': {
+            double x, y;
+            if (!gxsNum(&p, &x)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y)) return;
+            if (cmd == 'l') { x += cx; y += cy; }
+            cx = x; cy = y;
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsSubPush(s, x, y);
+            break;
+        }
+        case 'H': case 'h': {
+            double x;
+            if (!gxsNum(&p, &x)) return;
+            if (cmd == 'h') x += cx;
+            cx = x;
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsSubPush(s, x, cy);
+            break;
+        }
+        case 'V': case 'v': {
+            double y;
+            if (!gxsNum(&p, &y)) return;
+            if (cmd == 'v') y += cy;
+            cy = y;
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsSubPush(s, cx, y);
+            break;
+        }
+        case 'C': case 'c': {
+            double x1, y1, x2, y2, x3, y3;
+            if (!gxsNum(&p, &x1)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y1)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &x2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &x3)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y3)) return;
+            if (cmd == 'c') { x1 += cx; y1 += cy; x2 += cx; y2 += cy; x3 += cx; y3 += cy; }
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsCubic(s, cx, cy, x1, y1, x2, y2, x3, y3, 0);
+            qx = x2; qy = y2;
+            cx = x3; cy = y3;
+            break;
+        }
+        case 'S': case 's': {
+            double x2, y2, x3, y3, x1, y1;
+            if (!gxsNum(&p, &x2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &x3)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y3)) return;
+            if (cmd == 's') { x2 += cx; y2 += cy; x3 += cx; y3 += cy; }
+            x1 = (prev == 'C' || prev == 'c' || prev == 'S' || prev == 's') ? 2 * cx - qx : cx;
+            y1 = (prev == 'C' || prev == 'c' || prev == 'S' || prev == 's') ? 2 * cy - qy : cy;
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsCubic(s, cx, cy, x1, y1, x2, y2, x3, y3, 0);
+            qx = x2; qy = y2;
+            cx = x3; cy = y3;
+            break;
+        }
+        case 'Q': case 'q': {
+            double x1, y1, x2, y2;
+            if (!gxsNum(&p, &x1)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y1)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &x2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y2)) return;
+            if (cmd == 'q') { x1 += cx; y1 += cy; x2 += cx; y2 += cy; }
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsQuad(s, cx, cy, x1, y1, x2, y2, 0);
+            qx = x1; qy = y1;
+            cx = x2; cy = y2;
+            break;
+        }
+        case 'T': case 't': {
+            double x2, y2, x1, y1;
+            if (!gxsNum(&p, &x2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y2)) return;
+            if (cmd == 't') { x2 += cx; y2 += cy; }
+            x1 = (prev == 'Q' || prev == 'q' || prev == 'T' || prev == 't') ? 2 * cx - qx : cx;
+            y1 = (prev == 'Q' || prev == 'q' || prev == 'T' || prev == 't') ? 2 * cy - qy : cy;
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsQuad(s, cx, cy, x1, y1, x2, y2, 0);
+            qx = x1; qy = y1;
+            cx = x2; cy = y2;
+            break;
+        }
+        case 'A': case 'a': {
+            double rx, ry, rot, x2, y2;
+            int fa, fs;
+            if (!gxsNum(&p, &rx)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &ry)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &rot)) return;
+    gxsSkipSep(&p);
+            { double v; if (!gxsNum(&p, &v)) return; fa = (int)(v + 0.5); }
+            gxsSkipSep(&p);
+            { double v; if (!gxsNum(&p, &v)) return; fs = (int)(v + 0.5); }
+            gxsSkipSep(&p);
+            if (!gxsNum(&p, &x2)) return;
+    gxsSkipSep(&p);
+            if (!gxsNum(&p, &y2)) return;
+            if (cmd == 'a') { x2 += cx; y2 += cy; }
+            if (!s) { s = gxsSubNew(out); if (!s) return; }
+            gxsArc(s, cx, cy, rx, ry, rot, fa ? 1 : 0, fs ? 1 : 0, x2, y2);
+            cx = x2; cy = y2;
+            break;
+        }
+        case 'Z': case 'z': {
+            if (s) { s->closed = 1; gxsSubPush(s, sx, sy); }
+            cx = sx; cy = sy;
+            break;
+        }
+        default:
+            p++; break;
+        }
+        if (cmd != 'Z' && cmd != 'z') prev = cmd == 0 ? prev : cmd;
+        else prev = cmd;
+        (void)px; (void)py;
+    }
+}
+
+static void gxsParsePoints(const char* v, GXSSub* s)
+{
+    const char* p = v;
+    if (!p) return;
+    while (*p) {
+        double x, y;
+        gxsSkipSep(&p);
+        if (!gxsNum(&p, &x)) break;
+        gxsSkipSep(&p);
+        if (!gxsNum(&p, &y)) break;
+        gxsSubPush(s, x, y);
+    }
+}
+
+/* ==================================================================
+ * defs collection (two passes: collect first, then render, so that a
+ * forward reference resolves)
+ * ================================================================== */
+
+static void gxsGradEnsure(GXSCtx* cx)
+{
+    if (cx->gradN == cx->gradCap) {
+        int nc = cx->gradCap ? cx->gradCap * 2 : 8;
+        GXSGrad* t = (GXSGrad*)realloc(cx->grad, (size_t)nc * sizeof(GXSGrad));
+        if (!t) return;
+        cx->grad = t; cx->gradCap = nc;
+    }
+}
+
+static void gxsClipEnsure(GXSCtx* cx)
+{
+    if (cx->clipN == cx->clipCap) {
+        int nc = cx->clipCap ? cx->clipCap * 2 : 8;
+        GXSClip* t = (GXSClip*)realloc(cx->clip, (size_t)nc * sizeof(GXSClip));
+        if (!t) return;
+        cx->clip = t; cx->clipCap = nc;
+    }
+}
+
+static void gxsCopyId(char* dst, const char* src)
+{
+    size_t k = 0;
+    if (!src) { dst[0] = 0; return; }
+    if (*src == '#') src++;
+    while (*src && k < 63) dst[k++] = *src++;
+    dst[k] = 0;
+}
+
+/* Same, but for reference-valued attributes: clip-path='url(#a)',
+ * href='#a', xlink:href='url(#a)'.  Only the bare id inside is wanted --
+ * comparing the whole 'url(#a)' against a stored id never matches, which
+ * silently disables every clip-path and every <use>. */
+static void gxsCopyRef(char* dst, const char* src)
+{
+    size_t n, k = 0;
+    if (!src) { dst[0] = 0; return; }
+    while (*src && gxsIsSpace((unsigned char)*src)) src++;
+    n = strlen(src);
+    if (n >= 5 && strncmp(src, "url(", 4) == 0 && src[n - 1] == ')') {
+        src += 4;
+        n -= 5;                       /* drop "url(" and the trailing ')' */
+    }
+    while (*src && gxsIsSpace((unsigned char)*src)) { src++; n--; }
+    if (*src == '#') { src++; n--; }
+    while (n > 0 && gxsIsSpace((unsigned char)src[n - 1])) n--;
+    while (k < n && k < 63) dst[k++] = *src++;
+    dst[k] = 0;
+}
+
+/* Collect <linearGradient> / <radialGradient> / <clipPath> */
+static void gxsCollectDefs(char* buf, GXSCtx* cx)
+{
+    char* work;
+    char* p;
+    GXSTag t;
+    /* The walk overwrites every '>' with NUL as it goes, so it must never
+     * run on the buffer the renderer is about to walk: that one then meets
+     * the outer <svg> with no closing bracket left, takes the malformed
+     * branch and stops dead on the NUL - every child is lost and nothing
+     * is ever drawn.  Scan a throwaway copy instead.  Nothing here keeps a
+     * pointer into the text: ids are copied out, colours and numbers are
+     * converted to values, so freeing the copy afterwards is safe. */
+    if (!buf) return;
+    work = (char*)malloc(strlen(buf) + 1);
+    if (!work) return;
+    strcpy(work, buf);
+    p = work;
+    int inDefs = 0, inGrad = 0, inClip = 0;
+    GXSGrad* g = NULL;
+    GXSClip* c = NULL;
+
+    while (gxsNextTag(&p, &t)) {
+        if (t.closing) {
+            if (strcmp(t.name, "defs") == 0) inDefs = 0;
+            else if (strcmp(t.name, "linearGradient") == 0 || strcmp(t.name, "radialGradient") == 0) inGrad = 0;
+            else if (strcmp(t.name, "clipPath") == 0) inClip = 0;
+            continue;
+        }
+        if (strcmp(t.name, "defs") == 0) { inDefs = 1; continue; }
+        if (strcmp(t.name, "linearGradient") == 0 || strcmp(t.name, "radialGradient") == 0) {
+            gxsGradEnsure(cx);
+            if (cx->gradN >= cx->gradCap) continue;
+            g = &cx->grad[cx->gradN];
+            memset(g, 0, sizeof(*g));
+            g->type = (t.name[0] == 'l') ? 1 : 2;
+            g->valid = 1;
+            gxsCopyId(g->id, gxsAttr(&t, "id"));
+            g->units = 0;
+            {
+                const char* u = gxsAttr(&t, "gradientUnits");
+                if (u && strcmp(u, "userSpaceOnUse") == 0) g->units = 1;
+            }
+            if (g->type == 1) {
+                g->x1 = gxsD(&t, "x1", 0);  g->y1 = gxsD(&t, "y1", 0);
+                g->x2 = gxsD(&t, "x2", 1);  g->y2 = gxsD(&t, "y2", 0);
+            } else {
+                g->cx = gxsD(&t, "cx", 0.5); g->cy = gxsD(&t, "cy", 0.5);
+                g->r  = gxsD(&t, "r", 0.5);
+            }
+            cx->gradN++;
+            inGrad = 1;
+            if (t.selfClose) inGrad = 0;
+            continue;
+        }
+        if (inGrad && g && strcmp(t.name, "stop") == 0) {
+            GRADSTOP* st;
+            const char* col;
+            double off;
+            int none = 0, gid = -1;
+            if (g->n >= GX_GRAD_MAX_STOPS) continue;
+            st = &g->stop[g->n];
+            off = gxsD(&t, "offset", 0);
+            if (off < 0) off = 0;
+            if (off > 1) off = 1;
+            col = gxsAttr(&t, "stop-color");
+            if (!col) {
+                const char* st2 = gxsAttr(&t, "style");
+                if (st2) {
+                    const char* q = strstr(st2, "stop-color");
+                    if (q) { q = strchr(q, ':'); if (q) {
+                        q++;
+                        while (*q && gxsIsSpace(*q)) q++;
+                        { char tmp[64]; size_t k = 0;
+                          while (*q && *q != ';' && k < 63) tmp[k++] = *q++;
+                          tmp[k] = 0;
+                          gxsColor(tmp, &st->color, &none, &gid, cx);
+                          col = "-"; }
+                    } }
+                }
+            }
+            if (col && col[0] != '-') gxsColor(col, &st->color, &none, &gid, cx);
+            else if (!col) st->color = RGB(0, 0, 0);
+            if (none) st->color = RGB(0, 0, 0);
+            st->pos = off;
+            g->n++;
+            continue;
+        }
+        if (strcmp(t.name, "clipPath") == 0) {
+            gxsClipEnsure(cx);
+            if (cx->clipN >= cx->clipCap) continue;
+            c = &cx->clip[cx->clipN];
+            memset(c, 0, sizeof(*c));
+            c->valid = 1;
+            gxsCopyId(c->id, gxsAttr(&t, "id"));
+            cx->clipN++;
+            inClip = 1;
+            if (t.selfClose) inClip = 0;
+            continue;
+        }
+        if (inClip && c) {
+            if (strcmp(t.name, "rect") == 0) {
+                double x = gxsD(&t, "x", 0), y = gxsD(&t, "y", 0);
+                double w = gxsD(&t, "width", 0), h = gxsD(&t, "height", 0);
+                c->l = x; c->t = y; c->r = x + w; c->b = y + h;
+            } else if (strcmp(t.name, "path") == 0) {
+                GXSPath pa; GXSMat idm = gxsMatId();
+                double l = 1e9, tt = 1e9, r = -1e9, b = -1e9;
+                int i, j;
+                gxsPathInit(&pa);
+                gxsParsePathD(gxsAttr(&t, "d"), &pa);
+                for (i = 0; i < pa.n; i++)
+                    for (j = 0; j < pa.s[i].n; j++) {
+                        GXSPt q = gxsXf(&idm, pa.s[i].p[j].x, pa.s[i].p[j].y);
+                        if (q.x < l) l = q.x;
+                        if (q.x > r) r = q.x;
+                        if (q.y < tt) tt = q.y;
+                        if (q.y > b) b = q.y;
+                    }
+                gxsPathFree(&pa);
+                if (l <= r) { c->l = l; c->t = tt; c->r = r; c->b = b; }
+            }
+        }
+        (void)inDefs;
+    }
+    free(work);
+}
+
+/* ==================================================================
+ * Styles
+ * ================================================================== */
+
+static void gxsStyleDefault(GXSStyle* s)
+{
+    memset(s, 0, sizeof(*s));
+    s->fill = RGB(0, 0, 0);
+    s->fillNone = 0;
+    s->fillGrad = -1;
+    s->fillRule = 0;
+    s->fillOpacity = 1;
+    s->stroke = RGB(0, 0, 0);
+    s->strokeNone = 1;
+    s->strokeW = 1;
+    s->cap = 0; s->join = 0;
+    s->strokeOpacity = 1;
+    s->opacity = 1;
+    s->dashN = 0;
+    s->dashOff = 0;
+    s->fontSize = 16;
+    s->anchor = 0;
+    strcpy(s->face, "SimSun");  /* ASCII face name: independent of the source encoding */
+    s->clipId = -1;
+}
+
+static void gxsApplyProp(GXSStyle* s, const char* name, const char* v, GXSCtx* cx)
+{
+    int none = 0, gid = -1;
+    if (!v) return;
+    if (strcmp(name, "fill") == 0) {
+        gxsColor(v, &s->fill, &none, &gid, cx);
+        s->fillNone = none;
+        s->fillGrad = gid;
+    } else if (strcmp(name, "fill-opacity") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->fillOpacity = gxsClampD(d, 0, 1);
+    } else if (strcmp(name, "fill-rule") == 0) {
+        s->fillRule = (strcmp(v, "evenodd") == 0) ? 1 : 0;
+    } else if (strcmp(name, "stroke") == 0) {
+        gxsColor(v, &s->stroke, &none, &gid, cx);
+        s->strokeNone = none;
+    } else if (strcmp(name, "stroke-width") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->strokeW = d < 0 ? 0 : d;
+    } else if (strcmp(name, "stroke-opacity") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->strokeOpacity = gxsClampD(d, 0, 1);
+    } else if (strcmp(name, "stroke-linecap") == 0) {
+        if (strcmp(v, "round") == 0) s->cap = GX_CAP_ROUND;
+        else if (strcmp(v, "square") == 0) s->cap = GX_CAP_SQUARE;
+        else s->cap = GX_CAP_BUTT;
+    } else if (strcmp(name, "stroke-linejoin") == 0) {
+        if (strcmp(v, "round") == 0) s->join = GX_JOIN_ROUND;
+        else if (strcmp(v, "bevel") == 0) s->join = GX_JOIN_BEVEL;
+        else s->join = GX_JOIN_MITER;
+    } else if (strcmp(name, "stroke-dasharray") == 0) {
+        const char* p = v;
+        s->dashN = 0;
+        if (strncmp(v, "none", 4) != 0) {
+            while (*p && s->dashN < 16) {
+                double d;
+                gxsSkipSep(&p);
+                if (!gxsNum(&p, &d)) break;
+                if (d <= 0) break;
+                s->dash[s->dashN++] = d;
+            }
+        }
+    } else if (strcmp(name, "stroke-dashoffset") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->dashOff = d;
+    } else if (strcmp(name, "opacity") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->opacity = gxsClampD(d, 0, 1);
+    } else if (strcmp(name, "font-size") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->fontSize = d > 0 ? d : 1;
+    } else if (strcmp(name, "font-family") == 0) {
+        gxsCopyFace(s->face, sizeof(s->face), v);
+    } else if (strcmp(name, "text-anchor") == 0) {
+        if (strcmp(v, "middle") == 0) s->anchor = 1;
+        else if (strcmp(v, "end") == 0) s->anchor = 2;
+        else s->anchor = 0;
+    } else if (strcmp(name, "clip-path") == 0) {
+        char id[64]; int i;
+        gxsCopyRef(id, v);
+        for (i = 0; i < cx->clipN; i++)
+            if (strcmp(cx->clip[i].id, id) == 0) { s->clipId = i; break; }
+    }
+}
+
+static void gxsApplyStyleStr(GXSStyle* s, const char* str, GXSCtx* cx)
+{
+    char* buf;
+    char* p;
+    if (!str) return;
+    buf = (char*)malloc(strlen(str) + 1);
+    if (!buf) return;
+    strcpy(buf, str);
+    p = buf;
+    while (*p) {
+        char* colon; char* semi; char* nm = p;
+        colon = strchr(p, ':');
+        if (!colon) break;
+        semi = strchr(p, ';');
+        if (!semi) semi = buf + strlen(buf);
+        *colon = 0;
+        {
+            char* v = colon + 1;
+            *semi = 0;
+            while (*nm && gxsIsSpace(*nm)) nm++;
+            { char* e = nm + strlen(nm); while (e > nm && gxsIsSpace(*(e - 1))) *(--e) = 0; }
+            while (*v && gxsIsSpace(*v)) v++;
+            { char* e = v + strlen(v); while (e > v && gxsIsSpace(*(e - 1))) *(--e) = 0; }
+            gxsApplyProp(s, nm, v, cx);
+        }
+        p = (*semi) ? semi + 1 : semi;
+    }
+    free(buf);
+}
+
+/* Presentation attributes on the element plus style="" (style wins) */
+static void gxsStyleFromTag(GXSStyle* base, const GXSTag* t, GXSCtx* cx, GXSStyle* out)
+{
+    int i;
+    *out = *base;
+    for (i = 0; i < t->na; i++) {
+        const char* n = t->a[i].name;
+        if (strncmp(n, "fill", 4) == 0 || strncmp(n, "stroke", 6) == 0 ||
+            strncmp(n, "opacity", 7) == 0 || strncmp(n, "font-", 5) == 0 ||
+            strncmp(n, "text-anchor", 11) == 0 || strncmp(n, "clip-path", 9) == 0)
+            gxsApplyProp(out, n, t->a[i].val, cx);
+    }
+    gxsApplyStyleStr(out, gxsAttr(t, "style"), cx);
+}
+
+/* ==================================================================
+ * Painting: turn one path into easygl calls
+ * ================================================================== */
+
+/* easygl alpha is transparency: 0 = opaque, 255 = invisible */
+static BYTE gxsToAlpha(double opacity)
+{
+    double a = (1.0 - gxsClampD(opacity, 0, 1)) * 255.0;
+    if (a < 0) a = 0;
+    if (a > 255) a = 255;
+    return (BYTE)(a + 0.5);
+}
+
+static void gxsPathBounds(const GXSPath* pa, double* l, double* t, double* r, double* b)
+{
+    int i, j;
+    double L = 1e18, T = 1e18, R = -1e18, B = -1e18;
+    for (i = 0; i < pa->n; i++)
+        for (j = 0; j < pa->s[i].n; j++) {
+            double x = pa->s[i].p[j].x, y = pa->s[i].p[j].y;
+            if (x < L) L = x;
+            if (x > R) R = x;
+            if (y < T) T = y;
+            if (y > B) B = y;
+        }
+    if (L > R) { L = 0; T = 0; R = 0; B = 0; }
+    *l = L; *t = T; *r = R; *b = B;
+}
+
+/* Flatten the path (already transformed) into a POINT array for easygl */
+static POINT* gxsToPts(const GXSSub* s, int* outN)
+{
+    POINT* a;
+    int i;
+    if (s->n < 1) { *outN = 0; return NULL; }
+    a = (POINT*)malloc((size_t)s->n * sizeof(POINT));
+    if (!a) { *outN = 0; return NULL; }
+    for (i = 0; i < s->n; i++) {
+        a[i].x = (LONG)(s->p[i].x + (s->p[i].x >= 0 ? 0.5 : -0.5));
+        a[i].y = (LONG)(s->p[i].y + (s->p[i].y >= 0 ? 0.5 : -0.5));
+    }
+    *outN = s->n;
+    return a;
+}
+
+/* Fill every ring of one path in a single call.
+ *
+ * Feeding the rings in one at a time is the classic way to lose holes: a
+ * single ring is always closed onto itself, so the inner contour of an "o"
+ * fills as a disc, and the fill rule never sees the outer contour it
+ * belongs to.  Both nonzero and evenodd are defined over the crossings of
+ * the whole edge set, so the rings have to go in together.
+ *
+ * Keeps the float coordinates instead of rounding through gxsToPts(),
+ * which also removes the half pixel jitter the LONG cast used to add.
+ *
+ * ox, oy: the origin to measure the vertices from, subtracted from every
+ * one of them.  A shape drawn into a mask image has to be measured from
+ * that image's corner, not from the canvas, or the shape and the mask it
+ * is supposed to sit in end up in two different places.  Pass 0, 0 to
+ * keep the absolute coordinates. */
+static void gxsFillRings(const GXSPath* pa, int mode, double ox, double oy)
+{
+    POINTF* v;
+    int* counts;
+    int i, j, k, total, rings;
+
+    if (!pa || pa->n <= 0) return;
+    counts = (int*)malloc(sizeof(int) * (size_t)pa->n);
+    if (!counts) return;
+    total = 0;
+    rings = 0;
+    for (i = 0; i < pa->n; i++) {
+        if (pa->s[i].n >= 3) { counts[rings++] = pa->s[i].n; total += pa->s[i].n; }
+    }
+    if (rings <= 0) { free(counts); return; }
+    v = (POINTF*)malloc(sizeof(POINTF) * (size_t)total);
+    if (!v) { free(counts); return; }
+    k = 0;
+    for (i = 0; i < pa->n; i++) {
+        if (pa->s[i].n < 3) continue;
+        for (j = 0; j < pa->s[i].n; j++) {
+            v[k].x = (float)(pa->s[i].p[j].x - ox);
+            v[k].y = (float)(pa->s[i].p[j].y - oy);
+            k++;
+        }
+    }
+    setpolyfillmode(mode ? ALTERNATE : WINDING);
+    solidpolygonmultif(v, counts, rings);
+    free(v);
+    free(counts);
+}
+
+/* The off-screen image the gradient mask is composed in.
+ *
+ * An IMAGE owns a GL texture and a framebuffer, and nothing in easygl
+ * releases them, so one declared inside gxsFillGradPath() stranded a pair
+ * of object names on every call - a document with a few gradients leaked
+ * a few hundred of them per redraw.  Resize() releases the old pair before
+ * it allocates a new one, so holding one image here and resizing it costs
+ * nothing and leaks nothing. */
+static IMAGE gxs_maskImg;
+static int   gxs_maskReady = 0;
+
+/* Off-screen mask: an arbitrary shape filled with a gradient.
+ * Returns 0 when the caller should fall back to a flat colour.
+ *
+ * easygl paints a gradient over a rectangle, not over a shape, so the shape
+ * becomes a mask first, out of pieces easygl already has:
+ *
+ *   1. an image the size of the bounding box, opaque black - Resize()
+ *      leaves it that way, so there is nothing to clear;
+ *   2. the path filled white on it: white is inside, black is outside;
+ *   3. the gradient multiplied in, which keeps it where the mask is white
+ *      and leaves black black;
+ *   4. the whole image added back at the same place - adding black changes
+ *      nothing, so only the inside of the shape shows up.
+ *
+ * Anti-aliased edges come out as partial coverage for free. */
+static int gxsFillGradPath(GXSCtx* cx, const GXSPath* pa, const GXSStyle* st)
+{
+    GXSGrad* g;
+    double l, t, r, b, w, h;
+    int il, it, iw, ih, k, n;
+    IMAGE* mask;
+    IMAGE* saved;
+    int oldBlend, oldMode;
+    COLORREF oldFill;
+    BYTE oldAlpha;
+    GRADSTOP st2[GX_GRAD_MAX_STOPS];
+    double gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+    double gcx = 0, gcy = 0, grx = 0, gry = 0;
+
+    if (st->fillGrad < 0 || st->fillGrad >= cx->gradN) return 0;
+    g = &cx->grad[st->fillGrad];
+    if (!g->valid || g->n < 1) return 0;
+
+    gxsPathBounds(pa, &l, &t, &r, &b);
+    w = r - l; h = b - t;
+    if (w <= 0 || h <= 0) return 0;
+    if (w > GX_SVG_MAX_MASK || h > GX_SVG_MAX_MASK) return 0;
+
+    /* The box of whole pixels the mask stands for.  The shape is drawn into
+     * it and the image is blitted back at the same box, so both have to
+     * round the same way: floor(x + 0.5), which rounds halves consistently
+     * on both sides of the axis.  A plain (int) cast truncates towards zero
+     * and shifts a box that sits left of or above the origin by a pixel. */
+    il = (int)floor(l + 0.5); it = (int)floor(t + 0.5);
+    iw = (int)floor(r + 0.5) - il;
+    ih = (int)floor(b + 0.5) - it;
+    if (iw < 1) iw = 1;
+    if (ih < 1) ih = 1;
+
+    mask = &gxs_maskImg;
+    if (!gxs_maskReady) { memset(mask, 0, sizeof(*mask)); gxs_maskReady = 1; }
+    Resize(mask, iw, ih);
+    if (mask->width != iw || mask->height != ih) return 0;
+
+    saved    = GetWorkingImage();
+    oldBlend = getblendmode();
+    oldMode  = getpolyfillmode();
+    oldFill  = getfillcolor();
+    oldAlpha = getalpha();
+
+    /* White shape on black: the coverage mask.  It is drawn shifted by the
+     * box origin, because the image's own origin is its top left corner and
+     * not the canvas's - without the shift the shape landed outside the
+     * image and the mask stayed black, which made every gradient fill come
+     * out empty. */
+    gxSetWorkingImage(mask);
+    setblendmode(GX_BLEND_ALPHA);
+    setalpha(0);
+    setfillcolor(RGB(255, 255, 255));
+    gxsFillRings(pa, st->fillRule, (double)il, (double)it);
+
+    /* Gradient geometry, in mask coordinates:
+     *   objectBoundingBox - ratios of the bounding box, so they are mapped
+     *     onto it here and shifted into the image below;
+     *   userSpaceOnUse - user coordinates, so they go through the same
+     *     transform the path went through (a gradient whose document has a
+     *     viewBox used to ignore it and land at the wrong place). */
+    if (g->units == 0) {
+        if (g->type == 1) {
+            gx0 = l + g->x1 * w; gy0 = t + g->y1 * h;
+            gx1 = l + g->x2 * w; gy1 = t + g->y2 * h;
+        } else {
+            gcx = l + g->cx * w; gcy = t + g->cy * h;
+            grx = g->r * w;      gry = g->r * h;
+        }
+    } else {
+        if (g->type == 1) {
+            GXSPt p0 = gxsXf(&cx->xf, g->x1, g->y1);
+            GXSPt p1 = gxsXf(&cx->xf, g->x2, g->y2);
+            gx0 = p0.x; gy0 = p0.y; gx1 = p1.x; gy1 = p1.y;
+        } else {
+            GXSPt p0 = gxsXf(&cx->xf, g->cx, g->cy);
+            /* both axes are probed: an anisotropic transform turns the
+             * circle into an ellipse, which is what gradradial() takes */
+            GXSPt px = gxsXf(&cx->xf, g->cx + g->r, g->cy);
+            GXSPt py = gxsXf(&cx->xf, g->cx, g->cy + g->r);
+            gcx = p0.x; gcy = p0.y;
+            grx = fabs(px.x - gcx); gry = fabs(py.y - gcy);
+        }
+    }
+
+    n = g->n; if (n > GX_GRAD_MAX_STOPS) n = GX_GRAD_MAX_STOPS;
+    for (k = 0; k < n; k++) st2[k] = g->stop[k];
+
+    setblendmode(GX_BLEND_MUL);
+    if (g->type == 1)
+        gradlinear(0, 0, (double)iw, (double)ih,
+                   gx0 - il, gy0 - it, gx1 - il, gy1 - it, st2, n);
+    else
+        gradradial(0, 0, (double)iw, (double)ih,
+                   gcx - il, gcy - it, grx, gry, st2, n);
+
+    gxSetWorkingImage(saved);
+    setpolyfillmode(oldMode);
+    setfillcolor(oldFill);
+    setblendmode(oldBlend);
+    setalpha(oldAlpha);
+
+    setblendmode(GX_BLEND_ADD);
+    setalpha(gxsToAlpha(st->fillOpacity * st->opacity));
+    putimage(il, it, mask);
+    setalpha(oldAlpha);
+    setblendmode(oldBlend);
+    return 1;
+}
+
+static COLORREF gxsGradAvg(const GXSCtx* cx, int id)
+{
+    GXSGrad* g;
+    int i;
+    double r = 0, gg = 0, b = 0;
+    if (id < 0 || id >= cx->gradN) return RGB(0, 0, 0);
+    g = &cx->grad[id];
+    if (!g->n) return RGB(0, 0, 0);
+    for (i = 0; i < g->n; i++) {
+        r += GetRValue(g->stop[i].color);
+        gg += GetGValue(g->stop[i].color);
+        b += GetBValue(g->stop[i].color);
+    }
+    return RGB((int)(r / g->n), (int)(gg / g->n), (int)(b / g->n));
+}
+
+/* Dashes: walk the polyline and cut it by the dash period. easygl has no
+ * custom dash, so the polyline is split here and stroked piece by piece.
+ *
+ * scale is the same factor the stroke width is multiplied by: the dash
+ * array is in user units, while the polyline handed in is already in
+ * device units, so a dash has to be scaled the same way the width is.
+ * Scaling the offset alone (which is what an earlier version did) left a
+ * scaled document with dashes of the wrong length. */
+static void gxsDashStroke(const POINT* p, int n, int closed, double width,
+                           const double* dash, int dashN, double off, double scale)
+{
+    double total = 0, acc, segLen;
+    int i, di = 0;
+    double remain;
+    double carry;
+    POINT* chunk;
+    int cn = 0;
+    double walk;
+    double sd[16];
+
+    if (!p || n < 2 || dashN <= 0) return;
+    if (dashN > 16) dashN = 16;
+    if (!(scale > 0)) scale = 1.0;
+
+    acc = 0;
+    for (i = 0; i < dashN; i++) {
+        sd[i] = dash[i] * scale;
+        if (sd[i] < 0) sd[i] = 0;
+        acc += sd[i];
+    }
+    if (acc <= 1e-9) return;            /* a zero dash array is "no dash" */
+    dash = sd;
+
+    /* Measure the total length first; it folds dashoffset into the period */
+    for (i = 0; i < n - 1; i++) {
+        double dx = (double)p[i + 1].x - p[i].x, dy = (double)p[i + 1].y - p[i].y;
+        total += sqrt(dx * dx + dy * dy);
+    }
+    if (closed && n > 2) {
+        double dx = (double)p[0].x - p[n - 1].x, dy = (double)p[0].y - p[n - 1].y;
+        total += sqrt(dx * dx + dy * dy);
+    }
+    if (total <= 0) return;
+
+    {
+        double o = fmod(off, acc);
+        if (o < 0) o += acc;
+        /* Turn the offset into "which dash, and how far into it" */
+        remain = dash[0];
+        carry = dash[0];
+        di = 0;
+        walk = o;
+        while (walk >= carry) {
+            walk -= carry;
+            di = (di + 1) % dashN;
+            carry = dash[di];
+        }
+        remain = carry - walk;
+    }
+
+    chunk = (POINT*)malloc((size_t)n * sizeof(POINT));
+    if (!chunk) return;
+
+    for (i = 0; i < (closed ? n : n - 1); i++) {
+        int j = (i + 1) % n;
+        double x0 = (double)p[i].x, y0 = (double)p[i].y;
+        double x1 = (double)p[j].x, y1 = (double)p[j].y;
+        double dx = x1 - x0, dy = y1 - y0;
+        segLen = sqrt(dx * dx + dy * dy);
+        if (segLen < 1e-9) continue;
+        {
+            double pos = 0;
+            while (pos < segLen) {
+                double take = segLen - pos;
+                if (take > remain) take = remain;
+                if (di % 2 == 0 && take > 1e-9) {
+                    POINT a, bpt;
+                    a.x = (LONG)(x0 + dx * (pos / segLen) + 0.5);
+                    a.y = (LONG)(y0 + dy * (pos / segLen) + 0.5);
+                    bpt.x = (LONG)(x0 + dx * ((pos + take) / segLen) + 0.5);
+                    bpt.y = (LONG)(y0 + dy * ((pos + take) / segLen) + 0.5);
+                    if (cn == 0 || chunk[cn - 1].x != a.x || chunk[cn - 1].y != a.y) {
+                        if (cn < n) chunk[cn++] = a;
+                    }
+                    if (cn < n) chunk[cn++] = bpt;
+                    if (cn >= 2 && cn <= n) { /* draw as we go, so a long run cannot overflow the buffer */ }
+                    if (cn >= n) {
+                        strokepolyline(chunk, cn, width);
+                        cn = 0;
+                        if (cn < n) chunk[cn++] = bpt;
+                    }
+                }
+                pos += take;
+                remain -= take;
+                if (remain <= 1e-9) {
+                    di = (di + 1) % dashN;
+                    remain = dash[di];
+                }
+            }
+        }
+    }
+    if (cn >= 2) strokepolyline(chunk, cn, width);
+    free(chunk);
+    (void)acc;
+}
+
+/* Fill one path, with the gradient fallback */
+static void gxsFillPath(GXSCtx* cx, const GXSPath* pa, const GXSStyle* st)
+{
+    if (st->fillNone) return;
+    if (st->fillOpacity <= 0 || st->opacity <= 0) return;
+
+    if (st->fillGrad >= 0) {
+        COLORREF avg;
+        if (gxsFillGradPath(cx, pa, st)) return;
+        avg = gxsGradAvg(cx, st->fillGrad);
+        setfillcolor(avg);
+        setalpha(gxsToAlpha(st->fillOpacity * st->opacity));
+        gxsFillRings(pa, st->fillRule, 0.0, 0.0);
+        setalpha(0);
+        return;
+    }
+
+    setfillcolor(st->fill);
+    setalpha(gxsToAlpha(st->fillOpacity * st->opacity));
+    gxsFillRings(pa, st->fillRule, 0.0, 0.0);
+    setalpha(0);
+}
+
+static void gxsStrokePath(const GXSPath* pa, const GXSStyle* st, double scale)
+{
+    int i;
+    double w;
+    if (st->strokeNone) return;
+    if (st->strokeOpacity <= 0 || st->opacity <= 0) return;
+    w = st->strokeW * scale;
+    if (w < 0.05) return;
+
+    setlinecolor(st->stroke);
+    setalpha(gxsToAlpha(st->strokeOpacity * st->opacity));
+    setstrokecap(st->cap);
+    setstrokejoin(st->join);
+    for (i = 0; i < pa->n; i++) {
+        int n = 0;
+        POINT* p = gxsToPts(&pa->s[i], &n);
+        if (!p || n < 2) { free(p); continue; }
+        if (st->dashN > 0) gxsDashStroke(p, n, pa->s[i].closed, w, st->dash, st->dashN, st->dashOff * scale, scale);
+        else if (pa->s[i].closed) strokepolygon(p, n, w);
+        else strokepolyline(p, n, w);
+        free(p);
+    }
+    setalpha(0);
+}
+
+/* ==================================================================
+ * Main render loop
+ * ================================================================== */
+
+static GX_UNUSED bool gxsTagNum2(const GXSTag*, const char*, double*);
+
+/* Turn a shape such as <rect> into a path, then fill / stroke it as usual */
+static void gxsRectPath(GXSPath* pa, double x, double y, double w, double h,
+                         double rx, double ry)
+{
+    GXSSub* s;
+    if (w <= 0 || h <= 0) return;
+    if (rx <= 0 && ry <= 0) {
+        s = gxsSubNew(pa); if (!s) return;
+        gxsSubPush(s, x, y);
+        gxsSubPush(s, x + w, y);
+        gxsSubPush(s, x + w, y + h);
+        gxsSubPush(s, x, y + h);
+        s->closed = 1;
+        return;
+    }
+    {
+        int i, steps = 8;
+        if (rx < 0) rx = -rx;
+        if (ry < 0) ry = -ry;
+        if (rx > w * 0.5) rx = w * 0.5;
+        if (ry > h * 0.5) ry = h * 0.5;
+        s = gxsSubNew(pa); if (!s) return;
+        for (i = 0; i <= steps; i++) {
+            double a = -GX_SVG_PI * 0.5 + (GX_SVG_PI * 0.5) * i / steps;
+            gxsSubPush(s, x + w - rx + rx * cos(a), y + ry + ry * sin(a));
+        }
+        for (i = 0; i <= steps; i++) {
+            double a = 0 + (GX_SVG_PI * 0.5) * i / steps;
+            gxsSubPush(s, x + w - rx + rx * cos(a), y + h - ry + ry * sin(a));
+        }
+        for (i = 0; i <= steps; i++) {
+            double a = (GX_SVG_PI * 0.5) + (GX_SVG_PI * 0.5) * i / steps;
+            gxsSubPush(s, x + rx + rx * cos(a), y + h - ry + ry * sin(a));
+        }
+        for (i = 0; i <= steps; i++) {
+            double a = GX_SVG_PI + (GX_SVG_PI * 0.5) * i / steps;
+            gxsSubPush(s, x + rx + rx * cos(a), y + ry + ry * sin(a));
+        }
+        s->closed = 1;
+    }
+}
+
+static void gxsEllipsePath(GXSPath* pa, double cx, double cy, double rx, double ry, int steps)
+{
+    GXSSub* s;
+    int i;
+    if (rx <= 0 || ry <= 0) return;
+    if (steps < 8) steps = 8;
+    if (steps > 720) steps = 720;
+    s = gxsSubNew(pa); if (!s) return;
+    for (i = 0; i < steps; i++) {
+        double a = 2 * GX_SVG_PI * i / steps;
+        gxsSubPush(s, cx + rx * cos(a), cy + ry * sin(a));
+    }
+    s->closed = 1;
+}
+
+/* Transform path points by a matrix, in place */
+static void gxsPathApply(GXSPath* pa, const GXSMat* m)
+{
+    int i, j;
+    for (i = 0; i < pa->n; i++)
+        for (j = 0; j < pa->s[i].n; j++) {
+            GXSPt q = gxsXf(m, pa->s[i].p[j].x, pa->s[i].p[j].y);
+            pa->s[i].p[j] = q;
+        }
+}
+
+static void gxsRenderChildren(char** p, GXSCtx* cx, GXSStyle* base,
+                               GXSMat xf, const char* until);
+
+static void gxsDrawShape(GXSCtx* cx, GXSPath* pa, GXSStyle* st, double scale)
+{
+    /* Clipping is global state, so it has to be put back the way it was
+     * found: clearing it outright released a clip the CALLER had set,
+     * and everything a program drew after the first clipped shape fell
+     * outside its own box. */
+    int didClip = 0, hadClip = 0;
+    int cl = 0, ct = 0, cr = 0, cb = 0;
+    if (st->clipId >= 0 && st->clipId < cx->clipN) {
+        GXSClip* c = &cx->clip[st->clipId];
+        GXSPt a = gxsXf(&cx->xf, c->l, c->t);
+        GXSPt b = gxsXf(&cx->xf, c->r, c->b);
+        int l = (int)floor(a.x + 0.5), t = (int)floor(a.y + 0.5);
+        int r = (int)floor(b.x + 0.5), bb = (int)floor(b.y + 0.5);
+        if (l > r) { int s = l; l = r; r = s; }
+        if (t > bb) { int s = t; t = bb; bb = s; }
+        hadClip = iscliprect() ? 1 : 0;
+        if (hadClip) getcliprect(&cl, &ct, &cr, &cb);
+        setcliprect(l, t, r, bb);
+        didClip = 1;
+    }
+    gxsFillPath(cx, pa, st);
+    gxsStrokePath(pa, st, scale);
+    if (didClip) {
+        if (hadClip) setcliprect(cl, ct, cr, cb);
+        else setcliprect(NULL);
+    }
+}
+
+/* Elements that never paint anything by themselves: their children are
+ * looked up by id (or not at all), so the renderer has to walk past them
+ * rather than draw them.  <clipPath> is the trap that made this list
+ * necessary -- it holds a plain <rect> which, if rendered, comes out as
+ * an opaque black shape sitting on top of the picture, because the SVG
+ * default fill is black. */
+static int gxsIsNonRender(const char* n)
+{
+    static const char* k[] = { "defs", "symbol", "clipPath", "mask",
+                               "pattern", "marker", "filter",
+                               "linearGradient", "radialGradient", 0 };
+    int i;
+    for (i = 0; k[i]; i++)
+        if (strcmp(n, k[i]) == 0) return 1;
+    return 0;
+}
+
+static void gxsRenderChildren(char** p, GXSCtx* cx, GXSStyle* base,
+                               GXSMat xf, const char* until)
+{
+    GXSTag t;
+    GXSMat savedXf = cx->xf;
+    /* A <use> whose symbol references itself recurses for ever.  Bail out
+     * of the nesting instead of running the stack out: the caller restores
+     * its own scan position, so the document stays in step. */
+    if (cx->depth >= GXS_MAX_DEPTH) return;
+    cx->xf = xf;
+    cx->depth++;
+
+    while (gxsNextTag(p, &t)) {
+        GXSStyle st;
+        GXSMat local;
+        if (t.closing) {
+            if (until && strcmp(t.name, until) == 0) break;
+            continue;
+        }
+        if (strcmp(t.name, "svg") == 0 && until == NULL) continue;
+
+        gxsStyleFromTag(base, &t, cx, &st);
+        local = gxsTransform(gxsAttr(&t, "transform"));
+        {
+            GXSMat nx = gxsMatMul(&xf, &local);
+            cx->xf = nx;
+        }
+
+        if (strcmp(t.name, "g") == 0) {
+            if (!t.selfClose) gxsRenderChildren(p, cx, &st, cx->xf, "g");
+            cx->xf = gxsMatMul(&xf, &local);
+            continue;
+        }
+        if (gxsIsNonRender(t.name)) {
+            if (!t.selfClose) {
+                char* q = *p;
+                GXSTag t2; int d = 0;
+                while (gxsNextTag(&q, &t2)) {
+                    if (t2.closing && strcmp(t2.name, t.name) == 0) { if (d == 0) { *p = q; break; } d--; }
+                    if (!t2.closing && strcmp(t2.name, t.name) == 0) d++;
+                }
+            }
+            cx->xf = gxsMatMul(&xf, &local);
+            continue;
+        }
+        if (strcmp(t.name, "rect") == 0) {
+            GXSPath pa;
+            double x = gxsD(&t, "x", 0), y = gxsD(&t, "y", 0);
+            double w = gxsD(&t, "width", 0), h = gxsD(&t, "height", 0);
+            double rx = gxsD(&t, "rx", -1), ry = gxsD(&t, "ry", -1);
+            if (rx < 0 && ry < 0) rx = ry = 0;
+            else if (rx < 0) rx = ry; else if (ry < 0) ry = rx;
+            gxsPathInit(&pa);
+            gxsRectPath(&pa, x, y, w, h, rx, ry);
+            gxsPathApply(&pa, &cx->xf);
+            gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
+            gxsPathFree(&pa);
+        } else if (strcmp(t.name, "circle") == 0) {
+            GXSPath pa;
+            double r = gxsD(&t, "r", 0);
+            gxsPathInit(&pa);
+            gxsEllipsePath(&pa, gxsD(&t, "cx", 0), gxsD(&t, "cy", 0), r, r,
+                            (int)(r * gxsMatScale(&cx->xf) * 0.6) + 12);
+            gxsPathApply(&pa, &cx->xf);
+            gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
+            gxsPathFree(&pa);
+        } else if (strcmp(t.name, "ellipse") == 0) {
+            GXSPath pa;
+            double rx = gxsD(&t, "rx", 0), ry = gxsD(&t, "ry", 0);
+            gxsPathInit(&pa);
+            gxsEllipsePath(&pa, gxsD(&t, "cx", 0), gxsD(&t, "cy", 0), rx, ry,
+                            (int)((rx + ry) * gxsMatScale(&cx->xf) * 0.3) + 12);
+            gxsPathApply(&pa, &cx->xf);
+            gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
+            gxsPathFree(&pa);
+        } else if (strcmp(t.name, "line") == 0) {
+            GXSPath pa;
+            GXSSub* s;
+            gxsPathInit(&pa);
+            s = gxsSubNew(&pa);
+            if (s) {
+                GXSPt a = gxsXf(&cx->xf, gxsD(&t, "x1", 0), gxsD(&t, "y1", 0));
+                GXSPt b = gxsXf(&cx->xf, gxsD(&t, "x2", 0), gxsD(&t, "y2", 0));
+                gxsSubPush(s, a.x, a.y);
+                gxsSubPush(s, b.x, b.y);
+            }
+            gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
+            gxsPathFree(&pa);
+        } else if (strcmp(t.name, "polyline") == 0 || strcmp(t.name, "polygon") == 0) {
+            GXSPath pa;
+            GXSSub* s;
+            gxsPathInit(&pa);
+            s = gxsSubNew(&pa);
+            if (s) {
+                int i;
+                gxsParsePoints(gxsAttr(&t, "points"), s);
+                for (i = 0; i < s->n; i++) s->p[i] = gxsXf(&cx->xf, s->p[i].x, s->p[i].y);
+                if (strcmp(t.name, "polygon") == 0) {
+                    s->closed = 1;
+                    if (s->n > 1) gxsSubPush(s, s->p[0].x, s->p[0].y);
+                }
+            }
+            gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
+            gxsPathFree(&pa);
+        } else if (strcmp(t.name, "path") == 0) {
+            GXSPath pa;
+            gxsPathInit(&pa);
+            gxsParsePathD(gxsAttr(&t, "d"), &pa);
+            gxsPathApply(&pa, &cx->xf);
+            gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
+            gxsPathFree(&pa);
+        } else if (strcmp(t.name, "text") == 0 || strcmp(t.name, "tspan") == 0) {
+            GXSPt o = gxsXf(&cx->xf, gxsD(&t, "x", 0), gxsD(&t, "y", 0));
+            char* txt = *p;
+            char* end = strchr(txt, '<');
+            int didClip = 0, hadClip = 0;
+            int cl = 0, ct = 0, cr = 0, cb = 0;
+            if (end == NULL) end = txt + strlen(txt);   /* text to the very end */
+            if (st.clipId >= 0 && st.clipId < cx->clipN) {
+                GXSClip* c = &cx->clip[st.clipId];
+                GXSPt a = gxsXf(&cx->xf, c->l, c->t);
+                GXSPt b = gxsXf(&cx->xf, c->r, c->b);
+                int l = (int)floor(a.x + 0.5), tp = (int)floor(a.y + 0.5);
+                int r = (int)floor(b.x + 0.5), bt = (int)floor(b.y + 0.5);
+                if (l > r) { int sw = l; l = r; r = sw; }
+                if (tp > bt) { int sw = tp; tp = bt; bt = sw; }
+                hadClip = iscliprect() ? 1 : 0;
+                if (hadClip) getcliprect(&cl, &ct, &cr, &cb);
+                setcliprect(l, tp, r, bt);
+                didClip = 1;
+            }
+            {
+                char save = *end;
+                char* body;
+                *end = 0;
+                /* &amp; &lt; &gt; &quot; &apos; and the numeric forms: an
+                 * escaped character used to reach outtextxy() as the five
+                 * characters it is written with, so "AT&amp;T" printed
+                 * "AT&amp;T". */
+                body = gxsUnescape(txt);
+                if (body) {
+                    if (!st.fillNone && st.fillOpacity > 0 && st.opacity > 0) {
+                        double fs = st.fontSize * gxsMatScale(&cx->xf);
+                        if (fs < 1) fs = 1;
+                        settextstyle((int)(fs + 0.5), 0, st.face);
+                        settextcolor(st.fillGrad >= 0 ? gxsGradAvg(cx, st.fillGrad) : st.fill);
+                        setalpha(gxsToAlpha(st.fillOpacity * st.opacity));
+                        if (st.anchor != 0) {
+                            int tw = textwidth(body);
+                            if (st.anchor == 1) o.x -= tw * 0.5;
+                            else o.x -= tw;
+                        }
+                        outtextxy((int)(o.x + 0.5), (int)(o.y + 0.5), body);
+                        setalpha(0);
+                    }
+                    free(body);
+                }
+                *end = save;
+                if (strcmp(t.name, "text") == 0) *p = end;
+            }
+            if (didClip) {
+                if (hadClip) setcliprect(cl, ct, cr, cb);
+                else setcliprect(NULL);
+            }
+        } else if (strcmp(t.name, "use") == 0) {
+            const char* h = gxsHref(&t);
+            if (h && cx->src0) {
+                char id[64];
+                gxsCopyRef(id, h);
+                /* Resolve the reference against a PRISTINE copy.
+                 *
+                 * gxsNextTag() writes NULs into the tag it reads, both
+                 * after the name and between the attributes, so a tag
+                 * that the renderer has already looked at has no
+                 * attribute list left: gxsAttr(&t2, "id") returns NULL
+                 * for every element, and a <use> never found anything.
+                 * Searching cx->buf therefore could not work, whatever
+                 * the document said.
+                 *
+                 * The copy is rendered from and thrown away, so a symbol
+                 * used twice is intact the second time, and a <use> on a
+                 * symbol that is still to come - or one that holds
+                 * another <use> - resolves the same way. */
+                char* doc = gxsStrDup(cx->src0);
+                if (doc) {
+                    char* q = doc;
+                    GXSTag t2; int hit = 0;
+                    while (gxsNextTag(&q, &t2)) {
+                        if (!t2.closing && (strcmp(t2.name, "symbol") == 0 ||
+                                            strcmp(t2.name, "g") == 0 ||
+                                            strcmp(t2.name, "svg") == 0)) {
+                            const char* i2 = gxsAttr(&t2, "id");
+                            if (i2 && strcmp(i2, id) == 0) { hit = 1; break; }
+                        }
+                    }
+                    if (hit && !t2.selfClose) {
+                        char* save = *p;
+                        double ux = gxsD(&t, "x", 0), uy = gxsD(&t, "y", 0);
+                        GXSMat um = gxsMatId(); um.e = ux; um.f = uy;
+                        GXSMat nx = gxsMatMul(&cx->xf, &um);
+                        gxsRenderChildren(&q, cx, &st, nx, t2.name);
+                        *p = save;
+                    }
+                    free(doc);
+                }
+            }
+        }
+        cx->xf = gxsMatMul(&xf, &local);
+        if (t.selfClose) continue;
+    }
+    cx->xf = savedXf;
+    cx->depth--;
+}
+
+/* ==================================================================
+ * Public entry points
+ * ================================================================== */
+
+/* ---- document size -------------------------------------------------- */
+
+/* Read the root <svg>: viewBox plus width / height.  Works on a private
+ * copy, so the caller's buffer is left untouched. */
+static GX_UNUSED void gxsScanRoot(const char* svg, GXSSize* s)
+{
+    char* buf;
+    char* p;
+    GXSTag t;
+
+    s->vbX = s->vbY = s->vbW = s->vbH = 0;
+    s->hasVB = 0;
+    s->docW = s->docH = 0;
+    if (!svg || !*svg) return;
+    buf = (char*)malloc(strlen(svg) + 1);
+    if (!buf) return;
+    strcpy(buf, svg);
+    p = buf;
+    while (gxsNextTag(&p, &t)) {
+        if (!t.closing && strcmp(t.name, "svg") == 0) {
+            const char* vb = gxsAttr(&t, "viewBox");
+            if (!vb) vb = gxsAttr(&t, "viewbox");
+            if (vb) {
+                const char* q = vb;
+                double a[4];
+                int k;
+                for (k = 0; k < 4; k++) { gxsSkipSep(&q); if (!gxsNum(&q, &a[k])) break; }
+                if (k == 4) {
+                    s->vbX = a[0]; s->vbY = a[1]; s->vbW = a[2]; s->vbH = a[3];
+                    s->hasVB = 1;
+                }
+            }
+            s->docW = gxsDim(&t, "width");
+            s->docH = gxsDim(&t, "height");
+            break;
+        }
+    }
+    if (s->hasVB) {
+        if (s->vbW <= 0) s->vbW = 1;
+        if (s->vbH <= 0) s->vbH = 1;
+    } else {
+        s->vbX = 0; s->vbY = 0;
+        s->vbW = s->docW > 0 ? s->docW : 100;
+        s->vbH = s->docH > 0 ? s->docH : 100;
+    }
+    free(buf);
+}
+
+/* The size a document claims for itself: width= / height= when it has
+ * them, otherwise the viewBox. */
+static GX_UNUSED void gxsIntrinsic(const GXSSize* s, int* w, int* h)
+{
+    double vw = s->vbW > 0 ? s->vbW : 100;
+    double vh = s->vbH > 0 ? s->vbH : 100;
+    *w = (int)(s->docW > 0 ? s->docW + 0.5 : vw + 0.5);
+    *h = (int)(s->docH > 0 ? s->docH + 0.5 : vh + 0.5);
+    if (*w <= 0) *w = 1;
+    if (*h <= 0) *h = 1;
+}
+
+/* Slurp a file into a NUL-terminated buffer.  NULL on any failure.
+ *
+ * ftell() is checked: on a directory or on anything else that cannot be
+ * seeked it returns -1, and casting that straight to size_t asked for
+ * four gigabytes.  A short read is not an error either - the text simply
+ * ends where the file does. */
+static GX_UNUSED char* gxsReadFile(const char* path)
+{
+    FILE* f;
+    char* b;
+    long len;
+    size_t got;
+
+    if (!path || !*path) return NULL;
+    f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    len = ftell(f);
+    if (len <= 0 || len > (long)GX_SVG_MAX_SRC) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    b = (char*)malloc((size_t)len + 1);
+    if (!b) { fclose(f); return NULL; }
+    got = fread(b, 1, (size_t)len, f);
+    b[got] = 0;
+    fclose(f);
+    return b;
+}
+
+/* The same for a wide name, opened with _wfopen().
+ *
+ * The narrow route goes through gxDupBytesFromWide(), which encodes with
+ * the ACTIVE code page: a name that page cannot represent - a Chinese
+ * folder on a machine that is not running GBK, or any character outside
+ * it - came back as a string of '?' and open() failed, so loadsvgfile()
+ * with a WCHAR path could not open files that the shell lists perfectly
+ * well.  _wfopen() takes the name as it is. */
+static GX_UNUSED char* gxsReadFileW(const WCHAR* path)
+{
+#if defined(_WIN32)
+    FILE* f;
+    char* b;
+    long len;
+    size_t got;
+
+    if (!path || !*path) return NULL;
+    f = _wfopen(path, L"rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    len = ftell(f);
+    if (len <= 0 || len > (long)GX_SVG_MAX_SRC) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    b = (char*)malloc((size_t)len + 1);
+    if (!b) { fclose(f); return NULL; }
+    got = fread(b, 1, (size_t)len, f);
+    b[got] = 0;
+    fclose(f);
+    return b;
+#else
+    char* a = gxDupBytesFromWide(path);
+    char* r;
+    if (!a) return NULL;
+    r = gxsReadFile(a);
+    free(a);
+    return r;
+#endif
+}
+
+/* Write a buffer out, byte flavour and wide flavour.  Returns 1 on
+ * success.  The wide one opens with _wfopen() for the same reason the
+ * reader does. */
+static GX_UNUSED int gxsWriteFile(const char* path, const char* text, size_t n)
+{
+    FILE* f;
+    if (!path || !text) return 0;
+    f = fopen(path, "wb");
+    if (!f) return 0;
+    if (n && fwrite(text, 1, n, f) != n) { fclose(f); return 0; }
+    if (fclose(f) != 0) return 0;
+    return 1;
+}
+
+static GX_UNUSED int gxsWriteFileW(const WCHAR* path, const char* text, size_t n)
+{
+#if defined(_WIN32)
+    FILE* f;
+    if (!path || !text) return 0;
+    f = _wfopen(path, L"wb");
+    if (!f) return 0;
+    if (n && fwrite(text, 1, n, f) != n) { fclose(f); return 0; }
+    if (fclose(f) != 0) return 0;
+    return 1;
+#else
+    char* a = gxDupBytesFromWide(path);
+    int r;
+    if (!a) return 0;
+    r = gxsWriteFile(a, text, n);
+    free(a);
+    return r;
+#endif
+}
+
+static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h,
+                                    const char* svg)
+{
+    GXSCtx cx;
+    GXSStyle base;
+    char* buf;
+    GXSMat root;
+    GXSTag t;
+    GXSSize sz;
+    IMAGE* savedImg = NULL;
+
+    if (!svg || !*svg) return;
+
+    memset(&cx, 0, sizeof(cx));
+    buf = (char*)malloc(strlen(svg) + 1);
+    if (!buf) return;
+    strcpy(buf, svg);
+    cx.buf = buf;
+    /* The pristine copy for <use>.  A missing one only costs the ability
+     * to resolve a reference, so a document that has none still draws. */
+    cx.src0 = gxsStrDup(svg);
+    cx.target = img;
+
+    /* Pass 1: the viewBox / width / height of <svg> */
+    gxsScanRoot(svg, &sz);
+    cx.hasVB = sz.hasVB;
+    cx.vbX = sz.vbX;
+    cx.vbY = sz.vbY;
+    cx.vbW = sz.vbW;
+    cx.vbH = sz.vbH;
+    if (cx.vbW <= 0) cx.vbW = 1;
+    if (cx.vbH <= 0) cx.vbH = 1;
+    if (w <= 0) w = cx.vbW;
+    if (h <= 0) h = cx.vbH;
+
+    /* Pass 2: collect defs */
+    {
+        char* q = buf;
+        gxsCollectDefs(q, &cx);
+    }
+
+    /* Root transform: viewBox to the target rectangle.  The caller always
+     * hands over a destination rectangle, so the viewBox is fitted with
+     * the SVG default preserveAspectRatio ("meet", centred).  When that
+     * rectangle is the document's own size the mapping is 1:1, which is
+     * what putsvg(x, y, &e) asks for. */
+    root = gxsMatId();
+    {
+        double s = w / cx.vbW, s2 = h / cx.vbH;
+        double sc = (s < s2) ? s : s2;         /* preserveAspectRatio: meet */
+        double ox = x + (w - cx.vbW * sc) * 0.5;
+        double oy = y + (h - cx.vbH * sc) * 0.5;
+        root.a = sc; root.d = sc; root.e = ox - cx.vbX * sc; root.f = oy - cx.vbY * sc;
+    }
+
+    /* Bind the target - and remember the one that was bound before.  The
+     * old code ended with SetWorkingImage(NULL), which threw away the
+     * caller's IMAGE: render into an IMAGE while one is already selected
+     * and every later draw silently went to the window.  Restoring the
+     * previous image is what putimage() and friends do. */
+    if (img) {
+        savedImg = GetWorkingImage();
+        gxSetWorkingImage(img);
+    }
+
+    gxsStyleDefault(&base);
+    {
+        char* q = buf;
+        GXSMat sx = root;
+        /* One pass only.  gxsNextTag() ends each tag by overwriting its
+         * '>' with NUL, so a second scan of the same buffer would find the
+         * outer <svg> and then stop on that NUL with no children left to
+         * walk.  Scanning once both picks up the base style and leaves q
+         * sitting on the content of the outer <svg>. */
+        while (gxsNextTag(&q, &t)) {
+            if (!t.closing && strcmp(t.name, "svg") == 0) {
+                gxsStyleFromTag(&base, &t, &cx, &base);
+                break;
+            }
+        }
+        gxsRenderChildren(&q, &cx, &base, sx, "svg");
+    }
+
+    if (img) gxSetWorkingImage(savedImg);
+
+    free(cx.grad);
+    free(cx.clip);
+    free(cx.src0);
+    free(buf);
+}
+
+/* ---- load / free ----------------------------------------------------- */
+
+/* Return a pointer to the first '<' in s, or NULL when there is none.
+ * Lets a document start with a UTF-8 BOM, blank lines or spaces. */
+static GX_UNUSED const char* gxsFirstLt(const char* s)
+{
+    if (!s) return NULL;
+    while (*s && *s != '<') s++;
+    return *s ? s : NULL;
+}
+
+/* Keep a private copy of a document and work out its intrinsic size.
+ * Returns 1 on success.
+ *
+ * The new source is built in a scratch document and moved into place only
+ * once every step has worked, so an SVGIMG can be loaded again in place
+ * and a load that fails leaves it holding what it held before - the same
+ * rule loadsvgfromfile() follows, and the one loadimage() follows for an
+ * IMAGE.  It used to release the old document first, which meant a bad
+ * string threw away the good one that was already there. */
+static GX_UNUSED int gxsLoadSrc2(SVGIMG* e, int w, int h, const char* svg)
+{
+    SVGIMG tmp;
+    if (!e) return 0;
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.magic = SVGIMG_MAGIC;
+    if (!gxsLoadSrcInto(&tmp, w, h, svg)) { freesvg(&tmp); return 0; }
+    freesvg(e);
+    *e = tmp;
+    return 1;
+}
+
+static GX_UNUSED int gxsLoadSrc(SVGIMG* e, const char* svg)
+{
+    return gxsLoadSrc2(e, 0, 0, svg);
+}
+
+/* Does this text look like an SVG document?  A root <svg> element is what
+ * the renderer needs: anything else - an HTML page, a PNG with a wrong
+ * name, an empty file - would be accepted by a plain "is there a '<'"
+ * test and then silently draw nothing. */
+static GX_UNUSED int gxsHasRootSvg(const char* s)
+{
+    char* buf;
+    char* p;
+    GXSTag t;
+    int hit = 0;
+    if (!s) return 0;
+    buf = (char*)malloc(strlen(s) + 1);
+    if (!buf) return 0;
+    strcpy(buf, s);
+    p = buf;
+    while (gxsNextTag(&p, &t)) {
+        if (!t.closing && strcmp(t.name, "svg") == 0) { hit = 1; break; }
+    }
+    free(buf);
+    return hit;
+}
+
+/* Keep a private copy of a document and work out its intrinsic size, into
+ * a struct the caller supplies.  Returns 1 on success.  Nothing is
+ * released on failure, so a caller can build into a scratch SVGIMG and
+ * only commit it once the whole load has worked. */
+static GX_UNUSED int gxsLoadSrcInto(SVGIMG* e, int w, int h, const char* svg)
+{
+    GXSSize sz;
+    char* c;
+    if (!e || !svg || !*svg) return 0;
+    /* Skip anything before the first '<': a UTF-8 BOM (EF BB BF), leading
+     * whitespace or a stray newline would all hide the root <svg> element. */
+    svg = gxsFirstLt(svg);
+    if (!svg) return 0;
+    if (!gxsHasRootSvg(svg)) return 0;
+    c = (char*)malloc(strlen(svg) + 1);
+    if (!c) return 0;
+    strcpy(c, svg);
+    gxsScanRoot(svg, &sz);
+    e->src = c;
+    e->vbW = sz.vbW > 0 ? sz.vbW : 100;
+    e->vbH = sz.vbH > 0 ? sz.vbH : 100;
+    if (w > 0 && h > 0) {                     /* caller overrides the size */
+        e->width = w;
+        e->height = h;
+    } else {
+        gxsIntrinsic(&sz, &e->width, &e->height);
+    }
+    e->magic = SVGIMG_MAGIC;
+    return 1;
+}
+
+/* Read a file into an SVGIMG.  w, h <= 0 means "the size the document
+ * claims for itself".
+ *
+ * The load goes into a scratch document first and is moved into place
+ * only when every step has worked, so a failure - the file is missing,
+ * is not an SVG, is empty - leaves whatever the SVGIMG held before
+ * intact instead of leaving it empty.  That is what makes it safe to
+ * reload in place, and it is what loadimage() does with an IMAGE. */
+static GX_UNUSED int gxsLoadFromFile(SVGIMG* e, char* (*read)(const void*),
+                                      const void* path, int w, int h)
+{
+    SVGIMG tmp;
+    char* b;
+    int r;
+    if (!e || !read || !path) return 0;
+    b = read(path);
+    if (!b) return 0;
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.magic = SVGIMG_MAGIC;
+    r = gxsLoadSrcInto(&tmp, w, h, b);
+    free(b);
+    if (!r) { freesvg(&tmp); return 0; }
+    freesvg(e);
+    *e = tmp;
+    return 1;
+}
+
+static GX_UNUSED char* gxsReadFileA(const void* path)
+{
+    return gxsReadFile((const char*)path);
+}
+
+static GX_UNUSED char* gxsReadFileWCb(const void* path)
+{
+    return gxsReadFileW((const WCHAR*)path);
+}
+
+/* loadsvgfromfile(&e, path [, w, h]) - read a file into an SVGIMG, the
+ * way loadimage() reads one into an IMAGE.  Returns 1 on success. */
+static GX_UNUSED int gxsLoadFromFileA(SVGIMG* e, const char* path, int w, int h)
+{
+    return gxsLoadFromFile(e, gxsReadFileA, (const void*)path, w, h);
+}
+
+static GX_UNUSED int gxsLoadFromFileW(SVGIMG* e, const WCHAR* path, int w, int h)
+{
+    return gxsLoadFromFile(e, gxsReadFileWCb, (const void*)path, w, h);
+}
+
+static GX_UNUSED int gxsLoadFileA(SVGIMG* e, const char* path)
+{
+    return gxsLoadFromFileA(e, path, 0, 0);
+}
+
+static GX_UNUSED int gxsLoadFileW(SVGIMG* e, const WCHAR* path)
+{
+    return gxsLoadFromFileW(e, path, 0, 0);
+}
+
+/* Write the held source back out. Returns 1 on success. */
+static GX_UNUSED int gxsSaveA(const SVGIMG* e, const char* path)
+{
+    if (!gxsDocOk(e) || !path) return 0;
+    return gxsWriteFile(path, e->src, strlen(e->src));
+}
+
+static GX_UNUSED int gxsSaveW(const SVGIMG* e, const WCHAR* path)
+{
+    if (!gxsDocOk(e) || !path) return 0;
+    return gxsWriteFileW(path, e->src, strlen(e->src));
+}
+
+/* Release the held copy. Safe on a zeroed struct and on NULL. */
+static GX_UNUSED void freesvg(SVGIMG* e)
+{
+    if (!e) return;
+    if (e->magic != SVGIMG_MAGIC) {
+        /* Never used before.  Zero it and mark it usable rather than
+         * freeing a pointer that is still stack garbage. */
+        memset(e, 0, sizeof(*e));
+        e->magic = SVGIMG_MAGIC;
+        return;
+    }
+    if (e->src) { free(e->src); e->src = NULL; }
+    e->width = 0;
+    e->height = 0;
+    e->vbW = 0;
+    e->vbH = 0;
+    /* magic stays: this is now a valid, empty document */
+}
+
+/* ---- put ------------------------------------------------------------ */
+
+/* Draw a loaded document into a rectangle: fit the viewBox, keep the
+ * aspect ratio, centre it.  Nothing happens on an empty document. */
+static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{
+    if (!gxsDocOk(e)) return;
+    gxsRenderCore(img, x, y, w, h, e->src);
+}
+
+static GX_UNUSED void gxsPut5(double x, double y, double w, double h, const SVGIMG* e)
+{
+    gxsPut6(NULL, x, y, w, h, e);
+}
+
+static GX_UNUSED void gxsPut4(IMAGE* img, double x, double y, const SVGIMG* e)
+{
+    if (!gxsDocOk(e)) return;
+    gxsPut6(img, x, y, (double)e->width, (double)e->height, e);
+}
+
+static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e)
+{
+    gxsPut4(NULL, x, y, e);
+}
+
+/* ---- C dispatch targets ------------------------------------------- *
+ * In C the macro can only count arguments, so it hands the call to one
+ * of these and the real signature is checked by the compiler.  C++ never
+ * reaches them: the overloads at the bottom of the file are picked by
+ * type instead. */
+#ifndef __cplusplus
+static GX_UNUSED void gxs_put_1(const SVGIMG* e)
+{ gxsPut3(0, 0, e); }
+static GX_UNUSED void gxs_put_2(IMAGE* img, const SVGIMG* e)
+{ gxsPut4(img, 0, 0, e); }
+static GX_UNUSED int gxs_load_2(SVGIMG* e, const char* svg)
+{ return gxsLoadSrc(e, svg); }
+static GX_UNUSED int gxs_load_4(SVGIMG* e, int w, int h, const char* svg)
+{ return gxsLoadSrc2(e, w, h, svg); }
+static GX_UNUSED void gxs_put_3(double x, double y, const SVGIMG* e)
+{ gxsPut3(x, y, e); }
+static GX_UNUSED void gxs_put_4(IMAGE* img, double x, double y, const SVGIMG* e)
+{ gxsPut4(img, x, y, e); }
+static GX_UNUSED void gxs_put_5(double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut5(x, y, w, h, e); }
+static GX_UNUSED void gxs_put_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut6(img, x, y, w, h, e); }
+#endif
+
+/* ---- draw: load, put, free ----------------------------------------- */
+
+/* Text: the caller is responsible for setglcp() when the document holds
+ * text in a legacy code page; nothing global is touched here. */
+
+static GX_UNUSED void gxs_draw_1(const char* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxsLoadSrc(&e, svg)) { gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draw_2(IMAGE* img, const char* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxsLoadSrc(&e, svg)) { gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draw_3(double x, double y, const char* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxsLoadSrc(&e, svg)) { gxsPut3(x, y, &e); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draw_4(IMAGE* img, double x, double y, const char* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxsLoadSrc(&e, svg)) { gxsPut4(img, x, y, &e); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draw_5(double x, double y, double w, double h, const char* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxsLoadSrc(&e, svg)) { gxsPut5(x, y, w, h, &e); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draw_6(IMAGE* img, double x, double y, double w, double h, const char* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxsLoadSrc(&e, svg)) { gxsPut6(img, x, y, w, h, &e); freesvg(&e); }
+}
+
+/* Read from a file. Returns 1 on success. */
+static GX_UNUSED int gxsFile(int n, IMAGE* img, double x, double y, double w, double h, const char* path)
+{
+    SVGIMG e;
+    memset(&e, 0, sizeof(e));
+    if (!gxsLoadFileA(&e, path)) return 0;
+    if (n == 6)      gxsPut6(img, x, y, w, h, &e);
+    else if (n == 5) gxsPut5(x, y, w, h, &e);
+    else if (n == 4) gxsPut4(img, x, y, &e);
+    else if (n == 3) gxsPut3(x, y, &e);
+    else if (n == 2) gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e);
+    else             gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e);
+    freesvg(&e);
+    return 1;
+}
+
+static GX_UNUSED int gxs_dfile_1(const char* path) { return gxsFile(1, NULL, 0, 0, 0, 0, path); }
+static GX_UNUSED int gxs_dfile_2(IMAGE* img, const char* path) { return gxsFile(2, img, 0, 0, 0, 0, path); }
+static GX_UNUSED int gxs_dfile_3(double x, double y, const char* path) { return gxsFile(3, NULL, x, y, 0, 0, path); }
+static GX_UNUSED int gxs_dfile_4(IMAGE* img, double x, double y, const char* path) { return gxsFile(4, img, x, y, 0, 0, path); }
+static GX_UNUSED int gxs_dfile_5(double x, double y, double w, double h, const char* path) { return gxsFile(5, NULL, x, y, w, h, path); }
+static GX_UNUSED int gxs_dfile_6(IMAGE* img, double x, double y, double w, double h, const char* path) { return gxsFile(6, img, x, y, w, h, path); }
+
+/* Silence the unused warnings for declarations nobody referenced */
+static bool gxsTagNum2(const GXSTag* t, const char* n, double* out)
+{
+    const char* v = gxsAttr(t, n);
+    const char* p = v;
+    if (!v) return false;
+    return gxsNum(&p, out) ? true : false;
+}
+
+
 
 
 /* GL enums that a stock GL 1.1 gl.h does not define.  easygl only needs a
@@ -12215,6 +15281,7 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
 

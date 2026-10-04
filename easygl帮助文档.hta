@@ -3,9 +3,9 @@
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=gb18030">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<title>easygl.h 帮助文档</title>
+<title>easygl.h 帮助文档 - 20261004</title>
 <HTA:APPLICATION
-  APPLICATIONNAME="easygl.h 帮助文档"
+  APPLICATIONNAME="easygl.h 帮助文档 - 20261004"
   ID="easyglHelp"
   VERSION="1.0"
   SINGLEINSTANCE="yes"
@@ -125,8 +125,7 @@ table.t tr.head td{background:#f4f8fd;}
 <div id="cpbtn" style="display:none">复制</div>
 
 <script language="javascript">
-var DATA = [
- {
+var DATA = [ {
   "name": "LICENSE",
   "cat": "基本说明",
   "sig": [],
@@ -1028,6 +1027,155 @@ var DATA = [
   "ret": "无",
   "remarks": [
    "<table class=\"t\" style=\"width:80%\" align=\"center\"><thead><tr><th>值</th><th>含义</th></tr></thead><tbody><tr class=\"head\"><td>RENDER_AUTO</td><td>自动显示（默认，与 EasyX 一致）。</td></tr><tr><td>RENDER_MANUAL</td><td>手动模式，需自行 <a href='FlushBatchDraw.htm'>FlushBatchDraw</a>。</td></tr></tbody></table>"
+  ]
+ },
+ {
+  "name": "setviewport",
+  "cat": "绘图设备相关函数",
+  "sig": [
+   "void setviewport(int left, int top, int right, int bottom, int clip = 1);"
+  ],
+  "brief": "设置视口。",
+  "params": [
+   [
+    "left",
+    "视口左部 x 坐标。"
+   ],
+   [
+    "top",
+    "视口顶部 y 坐标。"
+   ],
+   [
+    "right",
+    "视口右部 x 坐标。"
+   ],
+   [
+    "bottom",
+    "视口底部 y 坐标。"
+   ],
+   [
+    "clip",
+    "是否裁剪。非 0 裁剪（默认）。"
+   ]
+  ],
+  "ret": "无",
+  "remarks": [
+   "等价于把原点移到 (left, top)，并可选同时设置裁剪区。",
+   "坐标为逻辑坐标。"
+  ]
+ },
+ {
+  "name": "setvsync",
+  "cat": "绘图设备相关函数",
+  "sig": [
+   "bool setvsync(bool on);"
+  ],
+  "brief": "设置是否启用垂直同步。",
+  "params": [
+   [
+    "on",
+    "true 启用。"
+   ]
+  ],
+  "ret": "返回设置是否成功。",
+  "remarks": [
+   "开启可避免画面撕裂，并将帧率限制在显示器刷新率。"
+  ]
+ },
+ {
+  "name": "setwinsize",
+  "cat": "绘图设备相关函数",
+  "sig": [
+   "void setwinsize(int width, int height);"
+  ],
+  "brief": "设置绘图窗口的尺寸。",
+  "params": [
+   [
+    "width",
+    "新的宽度，单位为逻辑单位。"
+   ],
+   [
+    "height",
+    "新的高度，单位为逻辑单位。"
+   ]
+  ],
+  "ret": "无",
+  "remarks": [
+   "窗口的<b>物理</b>尺寸为「逻辑尺寸 × 高 DPI 系数」，即 setwinsize(1024, 768) 在 150% 缩放下会创建 1536×1152 物理像素的窗口。",
+   "本函数<b>不改变缩放因子</b>，因此改变窗口尺寸会同时改变逻辑范围：例如在 <a href='setaspectratio.htm'>setaspectratio</a>(2, 2) 生效时，800×600 的窗口对应 400×300 的逻辑空间。",
+   "与 <a href='getwinsize.htm'>getwinsize</a> <b>互为逆运算</b>：setwinsize(1024, 768) 之后 getwinsize 在任何 DPI 下都返回 1024×768。需要物理像素尺寸请用 <a href='getwindevsize.htm'>getwindevsize</a>。",
+   "随窗口一起重建的还有：画布纹理、MSAA 缓冲、投影矩阵、视口。已绘制的内容需要重新绘制。"
+  ]
+ },
+ {
+  "name": "unfixhighdpi",
+  "cat": "绘图设备相关函数",
+  "sig": [
+   "void unfixhighdpi();"
+  ],
+  "brief": "关闭高 DPI 支持。",
+  "params": [],
+  "ret": "无",
+  "remarks": [
+   "等价于 <a href='fixhighdpi.htm'>fixhighdpi</a>(false)。"
+  ]
+ },
+ {
+  "name": "variablewinsize",
+  "cat": "绘图设备相关函数",
+  "sig": [
+   "void variablewinsize(bool enable);"
+  ],
+  "brief": "启用或关闭窗口的可变大小（可拖动边框 + 最大化按钮）。实验性功能。",
+  "params": [
+   [
+    "enable",
+    "true 给窗口加上可拖动边框与最大化按钮；false 去掉。"
+   ]
+  ],
+  "ret": "无",
+  "remarks": [
+   "<b>实验性。</b>功能可用，但它把窗口大小变成了程序无法再单方面决定的事情，而本库内部一律假定 <a href='initgraph.htm'>initgraph</a>() 之后尺寸就固定了。用之前请先读完下面几条。",
+   "可以在 initgraph <b>之前或之后</b>调用：之前调用只是记下标志，建窗时直接带上边框（无闪烁）；之后调用则用 SetWindowLong + SWP_FRAMECHANGED 改活窗口的边框，客户区尺寸不变，因此这一次调用本身不会触发 resize。",
+   "<h2>程序要做什么</h2>",
+   "画布会跟着窗口重建，所以 <a href='getwinsize.htm'>getwinsize</a> / <a href='getwindevsize.htm'>getwindevsize</a>、<a href='getwidth.htm'>getwidth</a> / <a href='getheight.htm'>getheight</a> 都会跟着变。典型写法是每帧读一次当前尺寸再排版：",
+   "<pre class=\"code\">int w, h;\ngetwinsize(&amp;w, &amp;h);        /* 当前逻辑尺寸 */\n/* 用 w、h 计算布局，不要用 initgraph 时那个数 */</pre>",
+   "<b>画面不会被拉伸</b>——绘图区只是变大或变小，所以布局必须由当前尺寸算出。把 initgraph 的尺寸缓存下来、之后一直用的程序，在 resize 之后会画到错误的位置。",
+   "<h2>关于“多出来的区域”</h2>",
+   "这是必要的，而且清的是<b>整块画布</b>，不只是新增的那一条。原因是画布纹理靠 glTexImage2D 重新分配，重分配之后<b>全部</b>内容都是未定义的，只填新增区域会把旧区域留在驱动给的随机内容上。所以一次 resize 会丢弃画面，主循环之外画的东西需要重画。在默认的 RENDER_AUTO 下，每帧重绘的循环不需要额外代码。",
+   "<h2>事件</h2>",
+   "每次尺寸变化都会向消息队列推一条 WM_SIZE，因此除了轮询也可以等事件。",
+   "专门的取法见 <a href='peekvariablemsg.htm'>peekvariablemsg</a>()（不阻塞，渲染循环用这个）和 <a href='waitvariablemsg.htm'>waitvariablemsg</a>()（阻塞，无返回值）。两个都不带回尺寸——新的逻辑尺寸直接问 <a href='getwidth.htm'>getwidth</a>() / <a href='getheight.htm'>getheight</a>()，它们与画布是同一份数据，不存在对不上的可能。",
+   "用通用队列也行：<a href='peekmessage.htm'>peekmessage</a>(&amp;m, EX_WINDOW) 取，再判断 m.message == WM_SIZE——但 EX_WINDOW 还覆盖 WM_MOVE、WM_SETFOCUS、WM_KILLFOCUS、WM_CLOSE，别漏掉那个比较。",
+   "<h2>调用顺序</h2>",
+   "<b>建议放在 initgraph() 之前</b>：这样窗口一建出来就带着可变边框，不需要任何二次测量，也就没有下文那条边的问题。",
+   "放在 initgraph() 之后同样可用——此时边框会朝<b>外侧</b>长，客户区（也就是坐标系）保持不变；只有在窗口无法变大时（已最大化、或已经顶到屏幕边），画布才会跟着客户区重建。",
+   "<h2>重建后会恢复</h2>",
+   "这个设置是<b>按窗口</b>记的，和 vsync、MSAA、DPI 修正同类：它挂在 gxApplyWindowState() 上，所以窗口重建（再次 initgraph、<a href='Resize.htm'>Resize</a> 等）之后边框会自动恢复到上一次设置的值，程序不需要再调一次。样式本来就一致时是空操作，不会多出一次 SetWindowPos。",
+   "<h2>已知限制</h2>",
+   "早期版本在 initgraph() 之后调用时，窗口往里吃掉了几个像素的客户区却没有同步画布，右上角会露出一条黑边（窗口类背景是黑色画刷，GL 视口锚定在左下角，所以没被覆盖的正是上边和右边），直到真正缩放一次窗口才消失。现在会自动重新测量并同步，不会再出现。",
+   "拖动边框时 DefWindowProc 会进入模态循环、把程序挂起，拖动过程中不会 present；画面由 WM_PAINT 处理重绘，松手后恢复。",
+   "尺寸没有下限保护：窗口拖得很小时画布也随之变小，这本身合法，但内容会挤到看不清。",
+   "即使 initgraph 传了 EX_NOMINIMIZE，本函数打开最大化按钮时仍以本函数为准——这个调用是更具体的请求。"
+  ]
+ },
+ {
+  "name": "waitvariablemsg",
+  "cat": "绘图设备相关函数",
+  "sig": [
+   "void waitvariablemsg();"
+  ],
+  "brief": "阻塞等待窗口尺寸变化消息（WM_SIZE），取到才返回。会阻塞，且没有返回值。",
+  "params": [],
+  "ret": "无",
+  "remarks": [
+   "<b>这个函数会一直等到窗口尺寸改变为止。</b>如果 <a href='variablewinsize.htm'>variablewinsize</a>() 没开、也没有任何地方调用 <a href='setwinsize.htm'>setwinsize</a> / <a href='fixhighdpi.htm'>fixhighdpi</a>，那就永远等不到——这和 <a href='getmessage.htm'>getmessage</a>() 的约定一致，但它是更容易把程序挂死的一种用法。",
+   "它<b>不返回任何东西</b>，这是有意的：一次阻塞调用没什么好交回的——要么等到了，要么窗口没了。调用者真正想要的东西是新的尺寸，而那个用 <a href='getwidth.htm'>getwidth</a>() / <a href='getheight.htm'>getheight</a>() 读即可：",
+   "<pre class=\"code\">waitvariablemsg();   /* 等一次尺寸变化 */\nprintf(\"new size %d x %d\\n\", getwidth(), getheight());</pre>",
+   "不想卡住整个循环的话，请用不阻塞的 <a href='peekvariablemsg.htm'>peekvariablemsg</a>()；渲染循环一律用它，本函数只在“画面只在尺寸变化时才需要重排”的场合才合适。",
+   "匹配到的消息会被消费掉，排在它前面的也一起丢——与 <a href='peekvariablemsg.htm'>peekvariablemsg</a>() 的删除语义一致。",
+   "窗口尚未创建（g_hwnd 为空）时立即返回，不会阻塞。",
+   "没有参数，因此 C 和 C++ 下写法完全一致。"
   ]
  },
  {
@@ -3907,6 +4055,72 @@ var DATA = [
   ]
  },
  {
+  "name": "SVG 支持",
+  "cat": "图像处理相关函数",
+  "sig": [],
+  "brief": "easygl 自带的 SVG 渲染：把 SVG 文档装进 SVGIMG，再贴到画布上。",
+  "params": [],
+  "ret": "",
+  "remarks": [
+   "SVG 支持是 easygl <b>自带的一部分</b>，不是外加的库：不需要第二个头文件，也不需要额外的 dll，<code>#include \"easygl.h\"</code> 之后就能用。",
+   "SVG 文档先装进 <a href='SVGIMG.htm'>SVGIMG</a>，再贴到画布上，正如图片先装进 <a href='IMAGE.htm'>IMAGE</a> 再由 <a href='putimage.htm'>putimage</a> 贴出来：",
+   "<pre class=\"code\">SVGIMG icon;\nloadsvgfromfile(&amp;icon, \"icon.svg\");   /* 读文件；失败时 icon 保持原样 */\nputsvg(40, 30, &amp;icon);                /* 按自身尺寸画 */\nputsvg(40, 30, 200, 200, &amp;icon);      /* 缩放进一个矩形 */\nputsvg(&amp;img, 0, 0, &amp;icon);            /* 画进一个 IMAGE */\nfreesvg(&amp;icon);                       /* 释放持有的源码副本 */</pre>",
+   "所有 load 函数成功返回 1、失败返回 0。<a href='SVGIMG.htm'>SVGIMG</a> 持有源码的一份私有副本，用完要 <a href='freesvg.htm'>freesvg</a>；<b>失败的 load 不会动它原有的内容</b>，只有成功才替换，这与 <a href='loadimage.htm'>loadimage</a> 对待 <a href='IMAGE.htm'>IMAGE</a> 的方式一致。",
+   "C 与 C++ 下的写法和库里其它函数一样：C 用宏按<b>参数个数</b>分派，C++ 是真正的重载；带文件名的函数都有 A / W 两版，由实参的指针类型决定（<code>const char*</code> 走 A 版，<code>const WCHAR*</code> 走 W 版），也可以直接写 <code>loadsvgfromfileA</code> / <code>loadsvgfromfileW</code> 这样的显式名字。",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">支持什么</h3>元素：<code>svg g defs symbol use</code>；<code>rect</code>（含 rx / ry）、<code>circle ellipse line</code>；<code>polyline polygon path text tspan</code>；<code>linearGradient radialGradient stop</code>；<code>clipPath</code>（rect / path，path 用其包围盒近似）。属性：<code>fill fill-rule fill-opacity stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset opacity transform style viewBox gradientUnits gradientTransform href id offset stop-color</code>。路径命令：<code>M m L l H h V v C c S s Q q T t A a Z z</code>。颜色：<code>#rgb #rrggbb #rrggbbaa</code>、<code>rgb(r,g,b)</code>、<code>rgb(r%,g%,b%)</code>、CSS 颜色名、<code>none</code>、<code>url(#id)</code>。变换：<code>translate scale rotate matrix skewX skewY</code>，可链式书写也可嵌套。",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">不支持什么，以及为什么</h3><div class=\"warn\"><code>filter</code> / <code>feGaussianBlur</code>：库里没有逐像素的滤镜管线，<a href='blurimage.htm'>blurimage</a> 作用于整张 <a href='IMAGE.htm'>IMAGE</a>，没法只作用到某一个元素上。<code>pattern</code> / <code>marker</code>：marker 需要沿路径查询切线方向，pattern 需要任意平铺单元，而库里只有六种固定的填充图案。富文本（tspan 换行、字距、竖排）：只认起点与 <code>text-anchor</code>，每个 <code>&lt;text&gt;</code> 画一行。<code>&lt;style&gt;</code> 块与 CSS 选择器：只读取行内的 <code>style=\"\"</code> 属性。SMIL 动画：只做静态渲染。</div>",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">值得知道的一件事：形状里的渐变</h3><a href='gradlinear.htm'>gradlinear</a> / <a href='gradradial.htm'>gradradial</a> 铺的是<b>矩形</b>上的渐变，不是形状上的。要拿渐变填一个路径，就用库里已有的东西分三步做出一张离屏遮罩：先建一张包围盒大小的图并填黑；再把形状填成白色（白＝在内部，黑＝在外部）；然后用 <code>GX_BLEND_MUL</code> 把渐变乘进去（白处留下渐变，黑处仍是黑），最后用 <code>GX_BLEND_ADD</code> 贴回原处——加黑色等于什么都没加，于是只有形状内部显现出来。抗锯齿的边缘顺带变成部分覆盖，无需额外处理。包围盒太大（超过 <code>GX_SVG_MAX_MASK</code>，默认 2048）时退回平涂，颜色取各色标的平均值。",
+   "这些接口随 <code>EASYGL_H</code> 一同发布，版本与 <a href='GetEasyGLVer.htm'>GetEasyGLVer</a>() 一致，当前为 20261004。"
+  ]
+ },
+ {
+  "name": "SVGIMG",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "typedef struct SVGIMG {",
+   "    char*        src;      /* 源码副本，NUL 结尾；NULL 表示空文档 */",
+   "    int          width;    /* 固有宽度，px */",
+   "    int          height;   /* 固有高度，px */",
+   "    double       vbW, vbH; /* viewBox 尺寸，留作参考 */",
+   "    unsigned int magic;    /* 初始化后为 SVGIMG_MAGIC */",
+   "} SVGIMG;"
+  ],
+  "brief": "一份已加载的 SVG 文档，SVG 版的 IMAGE。",
+  "params": [
+   [
+    "src",
+    "文档源码的私有副本，由 SVGIMG 持有。"
+   ],
+   [
+    "width",
+    "固有宽度，px。"
+   ],
+   [
+    "height",
+    "固有高度，px。"
+   ],
+   [
+    "vbW",
+    "viewBox 的宽，留作参考。"
+   ],
+   [
+    "vbH",
+    "viewBox 的高，留作参考。"
+   ],
+   [
+    "magic",
+    "内部字段，初始化后为 SVGIMG_MAGIC，用来识别未初始化的结构体。"
+   ]
+  ],
+  "ret": "",
+  "remarks": [
+   "<code>src</code> 是文档源码的<b>私有副本</b>，load 成功后由 SVGIMG 持有，用完必须 <a href='freesvg.htm'>freesvg</a>。绘制时是<b>每次都重新解析这份文本</b>再画，所以 SVGIMG 里并不存像素：改源码就等于改图，缩放到任意尺寸也不会变模糊。",
+   "<code>width</code> / <code>height</code> 是文档<b>自己声明的固有尺寸</b>（px）：有 <code>width=</code> / <code>height=</code> 就用它们，否则用 viewBox 的尺寸；写成百分比视为没声明。这正是 <a href='putsvg.htm'>putsvg</a>(x, y, &amp;e) 不指定绘制尺寸时用的尺寸——和 <a href='IMAGE.htm'>IMAGE</a> 的 width / height 一个用法。",
+   "<code>vbW</code> / <code>vbH</code> 是 viewBox 的宽高，只作参考：文档没有 viewBox 时等于文档尺寸，连文档尺寸也没有时是 100×100。",
+   "<b>栈上写一句 <code>SVGIMG e;</code> 拿到的是未初始化的垃圾，但不会出事。</b><code>magic</code> 让第一次 load 或 <a href='freesvg.htm'>freesvg</a> 认出它还没用过，先把结构清零再标成可用，而不是去 free 一个栈上的随机指针——这正是 <a href='IMAGE.htm'>IMAGE</a> 用 magic 防的同一件事。清零过的结构体本身就是合法的空文档。"
+  ]
+ },
+ {
   "name": "SetWorkingImage",
   "cat": "图像处理相关函数",
   "sig": [
@@ -3923,6 +4137,96 @@ var DATA = [
   "ret": "无",
   "remarks": [
    "设置后所有绘图函数都绘制在该设备上。"
+  ]
+ },
+ {
+  "name": "drawsvg",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "void drawsvg(const char* svg);",
+   "void drawsvg(IMAGE* img, const char* svg);",
+   "void drawsvg(double x, double y, const char* svg);",
+   "void drawsvg(IMAGE* img, double x, double y, const char* svg);",
+   "void drawsvg(double x, double y, double w, double h, const char* svg);",
+   "void drawsvg(IMAGE* img, double x, double y, double w, double h, const char* svg);"
+  ],
+  "brief": "加载一段 SVG 文本、画出来、然后释放，一步完成。",
+  "params": [
+   [
+    "img",
+    "要画进去的 <a href='IMAGE.htm'>IMAGE</a>；不带它时画在当前绘图目标上。"
+   ],
+   [
+    "x",
+    "绘制位置 x。"
+   ],
+   [
+    "y",
+    "绘制位置 y。"
+   ],
+   [
+    "w",
+    "绘制宽度。0 或负表示按文档自身尺寸。"
+   ],
+   [
+    "h",
+    "绘制高度。0 或负表示按文档自身尺寸。"
+   ],
+   [
+    "svg",
+    "SVG 文档源码，NUL 结尾的字符串。"
+   ]
+  ],
+  "ret": "无",
+  "remarks": [
+   "等价于 <a href='loadsvg.htm'>loadsvg</a> + <a href='putsvg.htm'>putsvg</a> + <a href='freesvg.htm'>freesvg</a>：<b>画一次就扔</b>用这一族最省事；同一份文档要画很多遍，请用 <a href='loadsvg.htm'>loadsvg</a> 装好再反复 <a href='putsvg.htm'>putsvg</a>，免得每次都重新解析一遍文本。",
+   "文本里没有根 <code>&lt;svg&gt;</code> 元素时（比如塞进来一段 HTML，或一张 PNG 的字节）什么都不画，也不会报错。",
+   "不指定 w / h 时按文档自身尺寸画，也就是 3 / 4 参形式的尺寸来源。",
+   "文档里的文字走本库的 <a href='outtextxy.htm'>outtextxy</a>，编码规则与它一致；<code>font-family</code> 只取第一个名字，引号会被剥掉。"
+  ]
+ },
+ {
+  "name": "drawsvgfile",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "int drawsvgfile(const char* path);",
+   "int drawsvgfile(IMAGE* img, const char* path);",
+   "int drawsvgfile(double x, double y, const char* path);",
+   "int drawsvgfile(IMAGE* img, double x, double y, const char* path);",
+   "int drawsvgfile(double x, double y, double w, double h, const char* path);",
+   "int drawsvgfile(IMAGE* img, double x, double y, double w, double h, const char* path);"
+  ],
+  "brief": "读一个 SVG 文件、画出来、然后释放，一步完成。",
+  "params": [
+   [
+    "img",
+    "要画进去的 <a href='IMAGE.htm'>IMAGE</a>；不带它时画在当前绘图目标上。"
+   ],
+   [
+    "x",
+    "绘制位置 x。"
+   ],
+   [
+    "y",
+    "绘制位置 y。"
+   ],
+   [
+    "w",
+    "绘制宽度。0 或负表示按文档自身尺寸。"
+   ],
+   [
+    "h",
+    "绘制高度。0 或负表示按文档自身尺寸。"
+   ],
+   [
+    "path",
+    "文件路径，<code>const char*</code> 走 A 版，<code>const WCHAR*</code> 走 W 版。"
+   ]
+  ],
+  "ret": "成功返回 1，失败返回 0。",
+  "remarks": [
+   "内部就是 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a> + <a href='putsvg.htm'>putsvg</a> + <a href='freesvg.htm'>freesvg</a>：文件不存在、是空的、或者名字叫 .svg 其实是别的格式，都返回 0 且什么都不画。",
+   "没有指定尺寸的形式——想读成某个尺寸，用 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a>(&amp;e, path, w, h) 再 <a href='putsvg.htm'>putsvg</a>。"
   ]
  },
  {
@@ -3944,6 +4248,26 @@ var DATA = [
   ],
   "ret": "无",
   "remarks": []
+ },
+ {
+  "name": "freesvg",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "void freesvg(SVGIMG* e);"
+  ],
+  "brief": "释放 SVGIMG 持有的源码副本。",
+  "params": [
+   [
+    "e",
+    "要释放的 <a href='SVGIMG.htm'>SVGIMG</a>。"
+   ]
+  ],
+  "ret": "无",
+  "remarks": [
+   "对 <code>NULL</code>、对没用过的（栈上那句 <code>SVGIMG e;</code>）、对已经释放过的都安全，随便调。",
+   "释放之后它仍是<b>合法的空文档</b>：可以再 load，<a href='putsvg.htm'>putsvg</a> 也不会出事，只是什么都不画。",
+   "不释放不会崩，只是那份源码副本一直占着内存——和 <a href='IMAGE.htm'>IMAGE</a> 用完要释放是同一件事。"
+  ]
  },
  {
   "name": "getfiltermode",
@@ -4087,6 +4411,114 @@ var DATA = [
    "文件名需要带扩展名，扩展名决定了用哪个解码器。",
    "<div class=\"warn\"><b>20261002 起行为修正。</b>此前指定尺寸缩放时，纹理被改成 nWidth × nHeight，<b>逻辑尺寸却仍停留在文件的原始尺寸</b>，而省略绘制尺寸时 <a href='putimage.htm'>putimage</a> 读的正是逻辑尺寸 —— 于是把一张 400×300 的图加载成 800×600 后，<code>putimage(0, 0, &amp;img)</code> 实际只画了 400×300。<b>只有真的发生缩放时才会遇到</b>，按文件原尺寸加载走的是另一条分支，所以一直没被发现。现在缩放后逻辑尺寸同步为 nWidth × nHeight。另：<b>对当前正在作为工作图像的 IMAGE 调用本函数</b>，此后绘制目标会同步刷新；此前目标仍指向已被替换掉的纹理与帧缓冲，之后的绘制不会显示。</div>",
    "<b>显式 A / W 名字</b>：上面两组 xxxA / xxxW 从 20261003 起都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个字串版本<b>行为完全一致</b>（A 版先按 <a href='setglcp.htm'>setglcp</a> 设定的代码页转成宽字符串），显式写死的好处是：字符串字面量加上或去掉 L 前缀时，调用不会悄悄换实现。"
+  ]
+ },
+ {
+  "name": "loadsvg",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "/* 不带 w, h：固有尺寸取文档自己声明的 */",
+   "int loadsvg(SVGIMG* e, const char* svg);",
+   "/* 带 w, h：把文档当成 w × h */",
+   "int loadsvg(SVGIMG* e, int w, int h, const char* svg);"
+  ],
+  "brief": "从一段文本加载 SVG 文档。",
+  "params": [
+   [
+    "e",
+    "目标 <a href='SVGIMG.htm'>SVGIMG</a>。"
+   ],
+   [
+    "svg",
+    "SVG 文档源码，NUL 结尾的字符串。"
+   ],
+   [
+    "w",
+    "指定的固有宽度。两个都为正才生效。"
+   ],
+   [
+    "h",
+    "指定的固有高度。两个都为正才生效。"
+   ]
+  ],
+  "ret": "成功返回 1，失败返回 0。",
+  "remarks": [
+   "复制一份源码，由 <a href='SVGIMG.htm'>SVGIMG</a> 持有，用完 <a href='freesvg.htm'>freesvg</a>。",
+   "第一个 <code>&lt;</code> 之前的内容会被跳过，所以带 UTF-8 BOM、开头有空行或空格都不影响。",
+   "<b>必须有根 <code>&lt;svg&gt;</code> 元素</b>才认：一段 HTML、一张 PNG 都会被拒（返回 0），而不是被当成一份“什么都不画”的文档。",
+   "<div class=\"warn\"><b>失败时保留原有内容。</b>新文档先在临时结构里装好，全部成功后才搬进来，所以一段坏字符串不会把已经装好的好文档一起带走。</div>",
+   "w / h 覆盖的是<b>文档声称的自身尺寸</b>，也就是 <a href='putsvg.htm'>putsvg</a>(x, y, &amp;e) 用的那个尺寸；这和 putsvg 的 5 / 6 参形式里给绘制矩形指定尺寸是两回事。",
+   "要从一个文件读，用 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a>（或 EasyX 拼写的 <a href='loadsvgfile.htm'>loadsvgfile</a>）。"
+  ]
+ },
+ {
+  "name": "loadsvgfile",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "/* 不带后缀：按实参类型自动分派到下面两者之一 */",
+   "int loadsvgfile(SVGIMG* e, const char* path);",
+   "int loadsvgfile(SVGIMG* e, const WCHAR* path);"
+  ],
+  "brief": "从文件加载 SVG 文档，EasyX 风格的拼写。",
+  "params": [
+   [
+    "e",
+    "目标 <a href='SVGIMG.htm'>SVGIMG</a>。"
+   ],
+   [
+    "path",
+    "文件路径，<code>const char*</code> 走 A 版，<code>const WCHAR*</code> 走 W 版。"
+   ]
+  ],
+  "ret": "成功返回 1，失败返回 0。",
+  "remarks": [
+   "就是 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a> 的 EasyX 命名，走的是同一条稳健路径：<b>失败时 SVGIMG 保持原样</b>，不会退回一份空文档。",
+   "没有指定尺寸的形式，读进来就是文档自己声明的固有尺寸。要读成别的尺寸，用 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a>(&amp;e, path, w, h)。"
+  ]
+ },
+ {
+  "name": "loadsvgfromfile",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "/* 不带后缀：按实参类型自动分派到下面两者之一 */",
+   "int loadsvgfromfile(SVGIMG* e, const char* path);",
+   "int loadsvgfromfile(SVGIMG* e, const WCHAR* path);",
+   "int loadsvgfromfile(SVGIMG* e, const char* path, int w, int h);",
+   "int loadsvgfromfile(SVGIMG* e, const WCHAR* path, int w, int h);",
+   "/* 显式 A 版：const char* 窄字符，按当前代码页解释 */",
+   "int loadsvgfromfileA(SVGIMG* e, const char* path);",
+   "int loadsvgfromfileA(SVGIMG* e, const char* path, int w, int h);",
+   "/* 显式 W 版：const WCHAR* 宽字符，UTF-16，不经代码页 */",
+   "int loadsvgfromfileW(SVGIMG* e, const WCHAR* path);",
+   "int loadsvgfromfileW(SVGIMG* e, const WCHAR* path, int w, int h);"
+  ],
+  "brief": "从文件加载 SVG 文档，SVG 版的 loadimage。",
+  "params": [
+   [
+    "e",
+    "目标 <a href='SVGIMG.htm'>SVGIMG</a>。"
+   ],
+   [
+    "path",
+    "文件路径。"
+   ],
+   [
+    "w",
+    "指定的固有宽度。与 h 都为正才生效。"
+   ],
+   [
+    "h",
+    "指定的固有高度。与 w 都为正才生效。"
+   ]
+  ],
+  "ret": "成功返回 1，失败返回 0。",
+  "remarks": [
+   "这是<b>读文件时的首选</b>：它照着 <a href='loadimage.htm'>loadimage</a> 的规矩来——先把文件读进来、确认里面真有一个根 <code>&lt;svg&gt;</code>、全部成功之后才把结果搬进 SVGIMG。",
+   "<div class=\"warn\"><b>失败不会留下半个文档。</b>文件不存在、文件是空的、一个改名成 .svg 的 PNG、一份超过 <code>GX_SVG_MAX_SRC</code>（默认 16 MB）的文件，都返回 0，<b>而 SVGIMG 里还是原来那一份</b>。这一点让“原地重新加载”变得安全：图标热更新时不会出现一帧空白。</div>",
+   "<pre class=\"code\">SVGIMG icon;\nif (!loadsvgfromfile(&amp;icon, \"icon.svg\")) {\n    /* 读不到：icon 还保持着上一次的内容 */\n}\nputsvg(10, 10, &amp;icon);</pre>",
+   "宽路径用 <code>_wfopen()</code> 打开，所以活动代码页表达不了的文件名（比如带生僻字的路径）照样能读；这也正是显式写 <code>loadsvgfromfileW</code> 的用处。",
+   "w / h 两个都为正时覆盖文档声称的固有尺寸，也就是 <a href='putsvg.htm'>putsvg</a>(x, y, &amp;e) 会用的尺寸；给 0 或省略就用文档自己的。",
+   "只想按 EasyX 的拼写写，用 <a href='loadsvgfile.htm'>loadsvgfile</a>（它没有带尺寸的形式）。"
   ]
  },
  {
@@ -4243,6 +4675,53 @@ var DATA = [
   ]
  },
  {
+  "name": "putsvg",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "void putsvg(const SVGIMG* e);",
+   "void putsvg(IMAGE* img, const SVGIMG* e);",
+   "void putsvg(double x, double y, const SVGIMG* e);",
+   "void putsvg(IMAGE* img, double x, double y, const SVGIMG* e);",
+   "void putsvg(double x, double y, double w, double h, const SVGIMG* e);",
+   "void putsvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);"
+  ],
+  "brief": "把一个已加载的 SVG 文档画出来。",
+  "params": [
+   [
+    "img",
+    "要画进去的 <a href='IMAGE.htm'>IMAGE</a>；不带它时画在当前绘图目标上。"
+   ],
+   [
+    "x",
+    "绘制位置 x。"
+   ],
+   [
+    "y",
+    "绘制位置 y。"
+   ],
+   [
+    "w",
+    "绘制宽度。0 或负表示按文档自身尺寸。"
+   ],
+   [
+    "h",
+    "绘制高度。0 或负表示按文档自身尺寸。"
+   ],
+   [
+    "e",
+    "已加载的 <a href='SVGIMG.htm'>SVGIMG</a>。"
+   ]
+  ],
+  "ret": "无",
+  "remarks": [
+   "1 / 2 参形式画在 (0, 0)；3 / 4 参形式按文档的<b>固有尺寸</b>画；5 / 6 参形式把 viewBox 缩放进给定矩形，并且按 SVG 默认的 <code>preserveAspectRatio</code>（meet，居中）保持比例——<b>给一个长宽比不同的矩形不会把图拉变形</b>，两侧留白。",
+   "传 img 时渲染进该 IMAGE，结束后<b>恢复原来的工作图像</b>：选中一张 IMAGE 再往另一张里画 SVG 之后，后面的绘制仍然落在原来那张上。",
+   "每一次调用都是<b>重新解析源码再画</b>，不是位图拷贝，所以放大依然锐利；同一份文档要画很多次（比如一堆图标），先画进一个 <a href='IMAGE.htm'>IMAGE</a> 再用 <a href='putimage.htm'>putimage</a> 贴会快得多。",
+   "空文档（没 load 成功、或者已经 <a href='freesvg.htm'>freesvg</a>）什么都不画，也不报错。",
+   "绘制服从当前设备的状态——<a href='setcliprect.htm'>setcliprect</a> 的裁剪框、<a href='setorigin.htm'>setorigin</a> 的原点、<a href='setaspectratio.htm'>setaspectratio</a> 的缩放、<a href='setalpha.htm'>setalpha</a> 的透明度——与库里其余绘制完全一致。"
+  ]
+ },
+ {
   "name": "rotateimage",
   "cat": "图像处理相关函数",
   "sig": [
@@ -4325,6 +4804,34 @@ var DATA = [
    "保存的是<b>当前内容</b>。在 <a href='BeginBatchDraw.htm'>BeginBatchDraw</a>() 期间请先 <a href='FlushBatchDraw.htm'>FlushBatchDraw</a>()，否则拿到的是上一帧。",
    "单参形式等价于传 NULL 的 pImg，保存<b>绘图窗口</b>；这一点和 EasyX 一致，早期版本会直接返回 false。",
    "<b>显式 A / W 名字</b>：上面两组 xxxA / xxxW 从 20261003 起都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个字串版本<b>行为完全一致</b>（A 版先按 <a href='setglcp.htm'>setglcp</a> 设定的代码页转成宽字符串），显式写死的好处是：字符串字面量加上或去掉 L 前缀时，调用不会悄悄换实现。"
+  ]
+ },
+ {
+  "name": "savesvgfile",
+  "cat": "图像处理相关函数",
+  "sig": [
+   "/* 不带后缀：两个参数谁先谁后都行，按实参类型自动分派 */",
+   "int savesvgfile(const SVGIMG* e, const char* path);",
+   "int savesvgfile(const SVGIMG* e, const WCHAR* path);",
+   "int savesvgfile(const char* path, const SVGIMG* e);",
+   "int savesvgfile(const WCHAR* path, const SVGIMG* e);"
+  ],
+  "brief": "把 SVGIMG 持有的源码写回文件。",
+  "params": [
+   [
+    "e",
+    "要写出的 <a href='SVGIMG.htm'>SVGIMG</a>。"
+   ],
+   [
+    "path",
+    "目标文件路径。"
+   ]
+  ],
+  "ret": "成功返回 1，失败返回 0。",
+  "remarks": [
+   "写的是<b>加载时的那份源码文本</b>，不是渲染出来的图：读进来什么就写出去什么，连注释和空白都在。",
+   "要存成位图，请用 <a href='putsvg.htm'>putsvg</a>(&amp;img, 0, 0, &amp;e) 渲染进一个 <a href='IMAGE.htm'>IMAGE</a>，再 <a href='saveimage.htm'>saveimage</a>。",
+   "空文档（没 load 成功、或已 <a href='freesvg.htm'>freesvg</a>）返回 0。"
   ]
  },
  {
@@ -6522,8 +7029,8 @@ var DATA = [
   "params": [],
   "ret": "返回版本字符串。",
   "remarks": [
-   "返回的版本字符串形如 <code>\"20261004\"</code>，即 <code>EASYGL_VERSION</code> 宏的内容。注意它是<b>字符串</b>而不是数字，格式是年、月、日各两位直接拼接。",
-   "头文件里同时提供 <code>EASYGL_VER</code>（整数 20261004）与 <code>EASYGL_VERSION</code>（字符串 \"20261004\"）两个宏，编译期就能取到版本，不必调用函数。包含保护宏 <code>EASYGL_H</code> 本身也携带版本号。",
+   "返回的版本字符串形如 <code>\"20261002\"</code>，即 <code>EASYGL_VERSION</code> 宏的内容。注意它是<b>字符串</b>而不是数字，格式是年、月、日各两位直接拼接。",
+   "头文件里同时提供 <code>EASYGL_VER</code>（整数 20261002）与 <code>EASYGL_VERSION</code>（字符串 \"20261002\"）两个宏，编译期就能取到版本，不必调用函数。包含保护宏 <code>EASYGL_H</code> 本身也携带版本号。",
    "不需要先调用 <a href='initgraph.htm'>initgraph</a>，任何时候都可以取。",
    "<b>兼容写法：</b>本库用宏把 <code><a href='GetEasyXVer.htm'>GetEasyXVer</a></code> 定义成 <code>GetEasyGLVer</code>，所以从 EasyX 迁过来的代码里写 <code>GetEasyXVer()</code> 同样有效，两个名字返回完全相同的值。反过来，纯 easygl 工程建议直接用 <a href='GetEasyGLVer.htm'>GetEasyGLVer</a>。"
   ]
@@ -7012,30 +7519,6 @@ var DATA = [
   ]
  },
  {
-  "name": "A / W 版本总览",
-  "cat": "A / W 版本",
-  "sig": [
-   "/* 同一函数的两种写法：带后缀 = 显式指定，不带后缀 = 按实参类型自动分派 */",
-   "int textwidthA(const char* str);      /* A 版：窄字符，按代码页解码   */",
-   "int textwidthW(const WCHAR* str);     /* W 版：宽字符，UTF-16        */",
-   "int textwidth(const char* str);       /* 自动选中上面第一个          */",
-   "int textwidth(const WCHAR* str);      /* 自动选中上面第二个          */"
-  ],
-  "brief": "凡接受字符串的函数都有一对实现：A 版收窄字符 <code>char*</code>，W 版收宽字符 <code>WCHAR*</code>。两者都能直接调用，不写后缀时由编译器按实参类型自动选一个。",
-  "params": [],
-  "ret": [],
-  "remarks": [
-   "<b>两者的唯一区别在字符串怎么解码</b>：A 版拿到 <code>char*</code> 后按 <a href=\"setglcp.htm\">setglcp</a>() 设的代码页转成宽字符再交给 GDI+（默认 CP_ACP，中文 Windows 上是 936 即 GBK）；W 版拿到 <code>WCHAR*</code> 直接就是 UTF-16，<b>不经任何转换</b>。所以源文件存成什么编码，只影响 A 版 —— W 版无论怎么存都不会错。",
-   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">全部 A / W 对</h3><table class=\"t\"><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class=\"head\"><td><a href=\"outtext.htm\">outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href=\"outtextxy.htm\">outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href=\"textwidth.htm\">textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href=\"textheight.htm\">textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href=\"drawtext.htm\">drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href=\"settextstyle.htm\">settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href=\"loadimage.htm\">loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href=\"saveimage.htm\">saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href=\"inputbox.htm\">inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href=\"InputBox.htm\">InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href=\"messagebox.htm\">messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href=\"setwindowtext.htm\">setwindowtext</a></td><td><code>setwindowtextA / setwindowtextW</code></td><td>改窗口标题</td></tr></tbody></table>",
-   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">什么时候必须写后缀</h3>不写后缀时，编译器按实参类型选版本，绝大多数情况够用。但下面三种情形<b>必须</b>显式写：<ul style=\"margin:6px 0 6px 18px;\"><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b> —— 不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>把函数<b>当函数指针传递</b>，或存进表里，不带后缀的宏形式没有单一地址可取。</li></ul>",
-   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">只有 A 版的函数</h3>下面这些<b>没有 W 版也不该有</b> —— 它们的字符串不是文本，而是给驱动或 GL 看的 ASCII 标识符：<table class=\"t\"><thead><tr><th>函数</th><th>字符串内容</th><th>为什么没有 W 版</th></tr></thead><tbody><tr class=\"head\"><td><a href=\"setpostshader.htm\">setpostshader</a></td><td>着色器源码</td><td>GLSL 源码必须是 ASCII，驱动不认宽字符</td></tr><tr><td><a href=\"getpostloc.htm\">getpostloc</a></td><td>uniform 名字</td><td>GL 的 ASCII 标识符</td></tr><tr><td><a href=\"glgetproc.htm\">glgetproc</a></td><td>扩展函数名</td><td>同上</td></tr><tr><td><a href=\"GetEasyGLVer.htm\">GetEasyGLVer</a> / <a href=\"GetEasyXVer.htm\">GetEasyXVer</a></td><td>版本串</td><td>返回 ASCII，不是 TCHAR 接口</td></tr><tr><td><a href=\"getadapterinfo.htm\">getadapterinfo</a> / <a href=\"getdisplaymode.htm\">getdisplaymode</a><br><a href=\"getglslver.htm\">getglslver</a> / <a href=\"getglver.htm\">getglver</a><br><a href=\"getrendererinfo.htm\">getrendererinfo</a> / <a href=\"getvendorinfo.htm\">getvendorinfo</a></td><td>诊断信息串</td><td>驱动返回的就是 ASCII</td></tr></tbody></table>",
-   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">字体结构体：两版都有</h3><code>setfont</code> / <code>getfont</code> / <code>gettextstyle</code> 以及 <code>settextstyle</code> 的单参形式，既可以传 <code>LOGFONTA*</code> 也可以传 <code>LOGFONTW*</code>：<table class=\"t\"><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>说明</th></tr></thead><tbody><tr class=\"head\"><td><a href=\"setfont.htm\">setfont</a></td><td><code>setfontA / setfontW</code></td><td>按指针类型分派；C++ 下是重载，C11 下是宏</td></tr><tr><td><a href=\"getfont.htm\">getfont</a></td><td><code>getfontA / getfontW</code></td><td>取出当前字体，装进你给的那个结构体</td></tr><tr><td><a href=\"gettextstyle.htm\">gettextstyle</a></td><td><code>gettextstyleA / gettextstyleW</code></td><td>与 getfont 同义</td></tr><tr><td><code>settextstyle(结构体)</code></td><td><code>settextstyleA / settextstyleW</code></td><td>单参形式是 LOGFONT 形式，同样两版都收</td></tr></tbody></table><b>为什么要传 LOGFONTW*</b>：库内部把当前字体保存为 <code>LOGFONTW</code>，字体也用 <code>CreateFontIndirectW</code> 创建。传 <code>LOGFONTA*</code> 时，面上的字体名会按 <a href=\"setglcp.htm\">setglcp</a> 的代码页转成宽字符；如果那个代码页表示不了这个名字（比如 GBK 存不下某些字体名），转换就已经有损了。所以<b>能拿到宽名字就用 W 版</b> —— A 版能表示的 W 版都能表示，反过来不成立。",
-   "<b>C++ 与 C11 的差别</b>：C++ 下 A / W 是真正的重载，<code>textwidth(\"a\")</code> 和 <code>textwidth(L\"a\")</code> 直接选出不同函数；C11 没有重载，不带后缀的名字是宏，用 <code>_Generic</code> 按实参类型分派，<b>显式 A / W 名字在两种语言下都存在且可直接调用</b>。这就是本页建议的做法 —— 换来的是\"用哪个版本由我说了算\"。",
-   "<b>常见坑</b>：A 版中文乱码，十有八九是 <code>setglcp</code> 和源文件保存编码不一致（GBK 用 936，UTF-8 用 <code>CP_UTF8</code>）；W 版不存在这个问题。反过来，若 A 版正常而 W 版异常，查宽字符串字面量有没有写 <code>L</code> 前缀。",
-   "<b>看实际效果</b>：<a href='A / W 版本对比.htm'>A / W 版本对比</a> 示例左半屏全用 A 版、右半屏全用 W 版画同样内容，按 1/2 试输入框、3/4 试消息框，可以直接看到源码里的中文字符串在两种版本下的差别。"
-  ]
- },
- {
   "name": "示例程序（总览）",
   "cat": "示例程序",
   "sig": [],
@@ -7048,7 +7531,7 @@ var DATA = [
    "若希望用 UTF-8 保存源码，有两种办法：一是把示例里的 setglcp(936) 改成 setglcp(CP_UTF8)；二是把字符串写成宽字符串 L\"...\"，完全不经过字节转码，无论源码什么编码都不会出错（推荐）。",
    "含中文的示例已经在 initgraph 之后调用了 setglcp(936)；纯英文的示例没有中文字符串，因此不需要这一句。每一页末尾都会写明该页属于哪种情况。",
    "帧节奏与等待按键：动画类示例用 <a href='setvsync.htm'>setvsync</a>(true) 把节奏交给显示器刷新率；非动画的示例需要暂停时统一用 <a href='gx_getch.htm'>gx_getch</a>() 而不是 getch() —— <a href='initgraph.htm'>initgraph</a> 默认隐藏控制台，被隐藏的控制台拿不到键盘焦点，标准 getch() 会永久阻塞。",
-   "列表按加入顺序排列，最新的是 <b>裁剪演示</b>，展示 20261005 新增的矩形裁剪：<a href='setcliprect.htm'>setcliprect</a> 设一个矩形区，之后所有绘制都被限制在框内，用来做滚动区域、局部刷新、取景框。",
+   "列表按加入顺序排列，最新的是 <b>裁剪演示</b>，展示 20261004 新增的矩形裁剪：<a href='setcliprect.htm'>setcliprect</a> 设一个矩形区，之后所有绘制都被限制在框内，用来做滚动区域、局部刷新、取景框。",
    "每个示例页的末尾都有三段统一说明，分别讲源码编码、高 DPI 与帧节奏，内容按该示例的实际情况取用，因此各页措辞一致。"
   ]
  },
@@ -10518,155 +11001,6 @@ var DATA = [
   "kind": "example"
  },
  {
-  "name": "setviewport",
-  "cat": "绘图设备相关函数",
-  "sig": [
-   "void setviewport(int left, int top, int right, int bottom, int clip = 1);"
-  ],
-  "brief": "设置视口。",
-  "params": [
-   [
-    "left",
-    "视口左部 x 坐标。"
-   ],
-   [
-    "top",
-    "视口顶部 y 坐标。"
-   ],
-   [
-    "right",
-    "视口右部 x 坐标。"
-   ],
-   [
-    "bottom",
-    "视口底部 y 坐标。"
-   ],
-   [
-    "clip",
-    "是否裁剪。非 0 裁剪（默认）。"
-   ]
-  ],
-  "ret": "无",
-  "remarks": [
-   "等价于把原点移到 (left, top)，并可选同时设置裁剪区。",
-   "坐标为逻辑坐标。"
-  ]
- },
- {
-  "name": "setvsync",
-  "cat": "绘图设备相关函数",
-  "sig": [
-   "bool setvsync(bool on);"
-  ],
-  "brief": "设置是否启用垂直同步。",
-  "params": [
-   [
-    "on",
-    "true 启用。"
-   ]
-  ],
-  "ret": "返回设置是否成功。",
-  "remarks": [
-   "开启可避免画面撕裂，并将帧率限制在显示器刷新率。"
-  ]
- },
- {
-  "name": "setwinsize",
-  "cat": "绘图设备相关函数",
-  "sig": [
-   "void setwinsize(int width, int height);"
-  ],
-  "brief": "设置绘图窗口的尺寸。",
-  "params": [
-   [
-    "width",
-    "新的宽度，单位为逻辑单位。"
-   ],
-   [
-    "height",
-    "新的高度，单位为逻辑单位。"
-   ]
-  ],
-  "ret": "无",
-  "remarks": [
-   "窗口的<b>物理</b>尺寸为「逻辑尺寸 × 高 DPI 系数」，即 setwinsize(1024, 768) 在 150% 缩放下会创建 1536×1152 物理像素的窗口。",
-   "本函数<b>不改变缩放因子</b>，因此改变窗口尺寸会同时改变逻辑范围：例如在 <a href='setaspectratio.htm'>setaspectratio</a>(2, 2) 生效时，800×600 的窗口对应 400×300 的逻辑空间。",
-   "与 <a href='getwinsize.htm'>getwinsize</a> <b>互为逆运算</b>：setwinsize(1024, 768) 之后 getwinsize 在任何 DPI 下都返回 1024×768。需要物理像素尺寸请用 <a href='getwindevsize.htm'>getwindevsize</a>。",
-   "随窗口一起重建的还有：画布纹理、MSAA 缓冲、投影矩阵、视口。已绘制的内容需要重新绘制。"
-  ]
- },
- {
-  "name": "unfixhighdpi",
-  "cat": "绘图设备相关函数",
-  "sig": [
-   "void unfixhighdpi();"
-  ],
-  "brief": "关闭高 DPI 支持。",
-  "params": [],
-  "ret": "无",
-  "remarks": [
-   "等价于 <a href='fixhighdpi.htm'>fixhighdpi</a>(false)。"
-  ]
- },
- {
-  "name": "variablewinsize",
-  "cat": "绘图设备相关函数",
-  "sig": [
-   "void variablewinsize(bool enable);"
-  ],
-  "brief": "启用或关闭窗口的可变大小（可拖动边框 + 最大化按钮）。实验性功能。",
-  "params": [
-   [
-    "enable",
-    "true 给窗口加上可拖动边框与最大化按钮；false 去掉。"
-   ]
-  ],
-  "ret": "无",
-  "remarks": [
-   "<b>实验性。</b>功能可用，但它把窗口大小变成了程序无法再单方面决定的事情，而本库内部一律假定 <a href='initgraph.htm'>initgraph</a>() 之后尺寸就固定了。用之前请先读完下面几条。",
-   "可以在 initgraph <b>之前或之后</b>调用：之前调用只是记下标志，建窗时直接带上边框（无闪烁）；之后调用则用 SetWindowLong + SWP_FRAMECHANGED 改活窗口的边框，客户区尺寸不变，因此这一次调用本身不会触发 resize。",
-   "<h2>程序要做什么</h2>",
-   "画布会跟着窗口重建，所以 <a href='getwinsize.htm'>getwinsize</a> / <a href='getwindevsize.htm'>getwindevsize</a>、<a href='getwidth.htm'>getwidth</a> / <a href='getheight.htm'>getheight</a> 都会跟着变。典型写法是每帧读一次当前尺寸再排版：",
-   "<pre class=\"code\">int w, h;\ngetwinsize(&amp;w, &amp;h);        /* 当前逻辑尺寸 */\n/* 用 w、h 计算布局，不要用 initgraph 时那个数 */</pre>",
-   "<b>画面不会被拉伸</b>——绘图区只是变大或变小，所以布局必须由当前尺寸算出。把 initgraph 的尺寸缓存下来、之后一直用的程序，在 resize 之后会画到错误的位置。",
-   "<h2>关于“多出来的区域”</h2>",
-   "这是必要的，而且清的是<b>整块画布</b>，不只是新增的那一条。原因是画布纹理靠 glTexImage2D 重新分配，重分配之后<b>全部</b>内容都是未定义的，只填新增区域会把旧区域留在驱动给的随机内容上。所以一次 resize 会丢弃画面，主循环之外画的东西需要重画。在默认的 RENDER_AUTO 下，每帧重绘的循环不需要额外代码。",
-   "<h2>事件</h2>",
-   "每次尺寸变化都会向消息队列推一条 WM_SIZE，因此除了轮询也可以等事件。",
-   "专门的取法见 <a href='peekvariablemsg.htm'>peekvariablemsg</a>()（不阻塞，渲染循环用这个）和 <a href='waitvariablemsg.htm'>waitvariablemsg</a>()（阻塞，无返回值）。两个都不带回尺寸——新的逻辑尺寸直接问 <a href='getwidth.htm'>getwidth</a>() / <a href='getheight.htm'>getheight</a>()，它们与画布是同一份数据，不存在对不上的可能。",
-   "用通用队列也行：<a href='peekmessage.htm'>peekmessage</a>(&amp;m, EX_WINDOW) 取，再判断 m.message == WM_SIZE——但 EX_WINDOW 还覆盖 WM_MOVE、WM_SETFOCUS、WM_KILLFOCUS、WM_CLOSE，别漏掉那个比较。",
-   "<h2>调用顺序</h2>",
-   "<b>建议放在 initgraph() 之前</b>：这样窗口一建出来就带着可变边框，不需要任何二次测量，也就没有下文那条边的问题。",
-   "放在 initgraph() 之后同样可用——此时边框会朝<b>外侧</b>长，客户区（也就是坐标系）保持不变；只有在窗口无法变大时（已最大化、或已经顶到屏幕边），画布才会跟着客户区重建。",
-   "<h2>重建后会恢复</h2>",
-   "这个设置是<b>按窗口</b>记的，和 vsync、MSAA、DPI 修正同类：它挂在 gxApplyWindowState() 上，所以窗口重建（再次 initgraph、<a href='Resize.htm'>Resize</a> 等）之后边框会自动恢复到上一次设置的值，程序不需要再调一次。样式本来就一致时是空操作，不会多出一次 SetWindowPos。",
-   "<h2>已知限制</h2>",
-   "早期版本在 initgraph() 之后调用时，窗口往里吃掉了几个像素的客户区却没有同步画布，右上角会露出一条黑边（窗口类背景是黑色画刷，GL 视口锚定在左下角，所以没被覆盖的正是上边和右边），直到真正缩放一次窗口才消失。现在会自动重新测量并同步，不会再出现。",
-   "拖动边框时 DefWindowProc 会进入模态循环、把程序挂起，拖动过程中不会 present；画面由 WM_PAINT 处理重绘，松手后恢复。",
-   "尺寸没有下限保护：窗口拖得很小时画布也随之变小，这本身合法，但内容会挤到看不清。",
-   "即使 initgraph 传了 EX_NOMINIMIZE，本函数打开最大化按钮时仍以本函数为准——这个调用是更具体的请求。"
-  ]
- },
- {
-  "name": "waitvariablemsg",
-  "cat": "绘图设备相关函数",
-  "sig": [
-   "void waitvariablemsg();"
-  ],
-  "brief": "阻塞等待窗口尺寸变化消息（WM_SIZE），取到才返回。会阻塞，且没有返回值。",
-  "params": [],
-  "ret": "无",
-  "remarks": [
-   "<b>这个函数会一直等到窗口尺寸改变为止。</b>如果 <a href='variablewinsize.htm'>variablewinsize</a>() 没开、也没有任何地方调用 <a href='setwinsize.htm'>setwinsize</a> / <a href='fixhighdpi.htm'>fixhighdpi</a>，那就永远等不到——这和 <a href='getmessage.htm'>getmessage</a>() 的约定一致，但它是更容易把程序挂死的一种用法。",
-   "它<b>不返回任何东西</b>，这是有意的：一次阻塞调用没什么好交回的——要么等到了，要么窗口没了。调用者真正想要的东西是新的尺寸，而那个用 <a href='getwidth.htm'>getwidth</a>() / <a href='getheight.htm'>getheight</a>() 读即可：",
-   "<pre class=\"code\">waitvariablemsg();   /* 等一次尺寸变化 */\nprintf(\"new size %d x %d\\n\", getwidth(), getheight());</pre>",
-   "不想卡住整个循环的话，请用不阻塞的 <a href='peekvariablemsg.htm'>peekvariablemsg</a>()；渲染循环一律用它，本函数只在“画面只在尺寸变化时才需要重排”的场合才合适。",
-   "匹配到的消息会被消费掉，排在它前面的也一起丢——与 <a href='peekvariablemsg.htm'>peekvariablemsg</a>() 的删除语义一致。",
-   "窗口尚未创建（g_hwnd 为空）时立即返回，不会阻塞。",
-   "没有参数，因此 C 和 C++ 下写法完全一致。"
-  ]
- },
- {
   "name": "鼠标操作",
   "cat": "示例程序",
   "sig": [
@@ -10748,8 +11082,31 @@ var DATA = [
    "帧节奏与等待按键：动画类示例一律用 <a href='setvsync.htm'>setvsync</a>(true) 把节奏交给显示器刷新率，画面不撕裂，也不像 Sleep(16) 那样靠猜毫秒数来凑帧率 —— 后者在 144Hz、60Hz 显示器上表现完全不同，还常常睡过头导致实际只有 50 FPS。万一驱动不支持垂直同步，退回 <a href='settargetfps.htm'>settargetfps</a>(60)，免得空转烧满一个核心。非动画的示例画完就等着，需要暂停时统一用 <a href='gx_getch.htm'>gx_getch</a>() 而不是 getch()：<a href='initgraph.htm'>initgraph</a> 默认隐藏控制台，被隐藏的控制台拿不到键盘焦点，标准 getch() 会永久阻塞。"
   ],
   "kind": "example"
- }
-]
+ },
+ {
+  "name": "A / W 版本总览",
+  "cat": "A / W 版本",
+  "sig": [
+   "/* 同一函数的两种写法：带后缀 = 显式指定，不带后缀 = 按实参类型自动分派 */",
+   "int textwidthA(const char* str);      /* A 版：窄字符，按代码页解码   */",
+   "int textwidthW(const WCHAR* str);     /* W 版：宽字符，UTF-16        */",
+   "int textwidth(const char* str);       /* 自动选中上面第一个          */",
+   "int textwidth(const WCHAR* str);      /* 自动选中上面第二个          */"
+  ],
+  "brief": "凡接受字符串的函数都有一对实现：A 版收窄字符 <code>char*</code>，W 版收宽字符 <code>WCHAR*</code>。两者都能直接调用，不写后缀时由编译器按实参类型自动选一个。",
+  "params": [],
+  "ret": [],
+  "remarks": [
+   "<b>两者的唯一区别在字符串怎么解码</b>：A 版拿到 <code>char*</code> 后按 <a href=\"setglcp.htm\">setglcp</a>() 设的代码页转成宽字符再交给 GDI+（默认 CP_ACP，中文 Windows 上是 936 即 GBK）；W 版拿到 <code>WCHAR*</code> 直接就是 UTF-16，<b>不经任何转换</b>。所以源文件存成什么编码，只影响 A 版 —— W 版无论怎么存都不会错。",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">全部 A / W 对</h3><table class=\"t\"><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class=\"head\"><td><a href=\"outtext.htm\">outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href=\"outtextxy.htm\">outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href=\"textwidth.htm\">textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href=\"textheight.htm\">textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href=\"drawtext.htm\">drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href=\"settextstyle.htm\">settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href=\"loadimage.htm\">loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href=\"saveimage.htm\">saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href=\"inputbox.htm\">inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href=\"InputBox.htm\">InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href=\"messagebox.htm\">messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href=\"setwindowtext.htm\">setwindowtext</a></td><td><code>setwindowtextA / setwindowtextW</code></td><td>改窗口标题</td></tr></tbody></table>",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">什么时候必须写后缀</h3>不写后缀时，编译器按实参类型选版本，绝大多数情况够用。但下面三种情形<b>必须</b>显式写：<ul style=\"margin:6px 0 6px 18px;\"><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b> —— 不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>把函数<b>当函数指针传递</b>，或存进表里，不带后缀的宏形式没有单一地址可取。</li></ul>",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">只有 A 版的函数</h3>下面这些<b>没有 W 版也不该有</b> —— 它们的字符串不是文本，而是给驱动或 GL 看的 ASCII 标识符：<table class=\"t\"><thead><tr><th>函数</th><th>字符串内容</th><th>为什么没有 W 版</th></tr></thead><tbody><tr class=\"head\"><td><a href=\"setpostshader.htm\">setpostshader</a></td><td>着色器源码</td><td>GLSL 源码必须是 ASCII，驱动不认宽字符</td></tr><tr><td><a href=\"getpostloc.htm\">getpostloc</a></td><td>uniform 名字</td><td>GL 的 ASCII 标识符</td></tr><tr><td><a href=\"glgetproc.htm\">glgetproc</a></td><td>扩展函数名</td><td>同上</td></tr><tr><td><a href=\"GetEasyGLVer.htm\">GetEasyGLVer</a> / <a href=\"GetEasyXVer.htm\">GetEasyXVer</a></td><td>版本串</td><td>返回 ASCII，不是 TCHAR 接口</td></tr><tr><td><a href=\"getadapterinfo.htm\">getadapterinfo</a> / <a href=\"getdisplaymode.htm\">getdisplaymode</a><br><a href=\"getglslver.htm\">getglslver</a> / <a href=\"getglver.htm\">getglver</a><br><a href=\"getrendererinfo.htm\">getrendererinfo</a> / <a href=\"getvendorinfo.htm\">getvendorinfo</a></td><td>诊断信息串</td><td>驱动返回的就是 ASCII</td></tr></tbody></table>",
+   "<h3 style=\"margin:14px 0 6px;color:#10307a;\">字体结构体：两版都有</h3><code>setfont</code> / <code>getfont</code> / <code>gettextstyle</code> 以及 <code>settextstyle</code> 的单参形式，既可以传 <code>LOGFONTA*</code> 也可以传 <code>LOGFONTW*</code>：<table class=\"t\"><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>说明</th></tr></thead><tbody><tr class=\"head\"><td><a href=\"setfont.htm\">setfont</a></td><td><code>setfontA / setfontW</code></td><td>按指针类型分派；C++ 下是重载，C11 下是宏</td></tr><tr><td><a href=\"getfont.htm\">getfont</a></td><td><code>getfontA / getfontW</code></td><td>取出当前字体，装进你给的那个结构体</td></tr><tr><td><a href=\"gettextstyle.htm\">gettextstyle</a></td><td><code>gettextstyleA / gettextstyleW</code></td><td>与 getfont 同义</td></tr><tr><td><code>settextstyle(结构体)</code></td><td><code>settextstyleA / settextstyleW</code></td><td>单参形式是 LOGFONT 形式，同样两版都收</td></tr></tbody></table><b>为什么要传 LOGFONTW*</b>：库内部把当前字体保存为 <code>LOGFONTW</code>，字体也用 <code>CreateFontIndirectW</code> 创建。传 <code>LOGFONTA*</code> 时，面上的字体名会按 <a href=\"setglcp.htm\">setglcp</a> 的代码页转成宽字符；如果那个代码页表示不了这个名字（比如 GBK 存不下某些字体名），转换就已经有损了。所以<b>能拿到宽名字就用 W 版</b> —— A 版能表示的 W 版都能表示，反过来不成立。",
+   "<b>C++ 与 C11 的差别</b>：C++ 下 A / W 是真正的重载，<code>textwidth(\"a\")</code> 和 <code>textwidth(L\"a\")</code> 直接选出不同函数；C11 没有重载，不带后缀的名字是宏，用 <code>_Generic</code> 按实参类型分派，<b>显式 A / W 名字在两种语言下都存在且可直接调用</b>。这就是本页建议的做法 —— 换来的是\"用哪个版本由我说了算\"。",
+   "<b>常见坑</b>：A 版中文乱码，十有八九是 <code>setglcp</code> 和源文件保存编码不一致（GBK 用 936，UTF-8 用 <code>CP_UTF8</code>）；W 版不存在这个问题。反过来，若 A 版正常而 W 版异常，查宽字符串字面量有没有写 <code>L</code> 前缀。",
+   "<b>看实际效果</b>：<a href='A / W 版本对比.htm'>A / W 版本对比</a> 示例左半屏全用 A 版、右半屏全用 W 版画同样内容，按 1/2 试输入框、3/4 试消息框，可以直接看到源码里的中文字符串在两种版本下的差别。"
+  ]
+ }]
 var CATS = ["基本说明", "系统支持与安装", "使用教程", "基本概念", "绘图设备相关函数", "颜色模型", "图形颜色及样式设置相关函数", "图形绘制相关函数", "文字输出相关函数", "图像处理相关函数", "消息处理相关函数", "描边相关函数", "渐变与模糊", "后处理着色器相关函数", "批量绘制", "3D 网格相关函数", "原生 OpenGL 访问", "窗口与系统", "性能与帧率", "信息与诊断", "关于 OpenGL", "兼容性", "示例程序"];
 var IC = {"bookc": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgP///8DAwICAgAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANBCLpQxauEGQaljjR7+4PNVAiD4ICOB0lVpyrsNGTl/DHODUaszrsiXAsYDMmIgVNsmCwQBJoI5lk7rZIE627LSAAAO2VQIBQsr9HA6YSWRlRrJhfUfirer1gSAQA7", "booko": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgPj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANUCFra7iaMacgcooxgQJxEoU2Z0TWfIVoX50mhIzKoRLGY5kZ2dRUWF8RELJ6AtMfjM6CJJsnXxSeAbjrMAdW6s2kt1eZVwfs2gRMhOcBuu0/KOCABADuf4UjntAnHxLKNwG63ayWAfE7n2CsRADs=", "cfg": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAAgAD4+ACAgPj4AP////j4+MDAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARhEEiAqrUzn5LESMUWJsABcsJJFKyZIcXanYkrBcjJrhsydQKPijV6xQyJQTBlkySe0AqUNCHGiAdfFQVasaalXAIhQIiuzXHnQ+RRJTDUJ1ecxLPlp/lNOfhNKS18GYQTEQA7", "tut": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AICAAP///8DAwICAgAAAACH5BAEAAAAALAAAAAAQABAAQANcCApFQSUas1QxAotTBPnFsWCEsHUfJI7CcKRpWDXe5zWUYkBCt9WqiqHzKsVWioNyyVQqAoyU4AHJzS4k0FLnMZl2RhmAdPnagpbhSYpOK4E3JMNw2EXu4openwAAO0Av3IkVACoVdXsAFDP4uSHN7/NPgCcRADs=", "page": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANJCArV7iuWMYK1lBg5xA3UoHFCF3bjMgllKQ5FxHQfKG5qWWe4YvzA4I9zQsVkk+IgSFQKUopCSwmdmU7PnhXLkxC+4LBWRgYkAAA7STExh1SeC5WkRI+nbiFALpupsbRaxBZFAAA7", "ext": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAA+AAAgACAgACAAPj4AP///8DAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARfEMhJ60QnhIGKMZ5xJJfIIWhKToegIeDnjdSBZsOgHRQmBrDQwYCSZAivWIxWGSWe0KfFluJNYUMkASmwAmxZmIxqRQwyts8OKkEgkwZNQLQCuOByek0gwBz+gHUWgxEAOw=="};
 var CATIC = {"基本说明": "page", "系统支持与安装": "cfg", "使用教程": "tut", "基本概念": "page", "绘图设备相关函数": "page", "颜色模型": "page", "图形颜色及样式设置相关函数": "page", "图形绘制相关函数": "page", "文字输出相关函数": "page", "图像处理相关函数": "page", "消息处理相关函数": "page", "3D 网格相关函数": "page", "其它函数": "page", "easygl 扩展函数": "page", "原生 OpenGL 访问": "page", "关于 OpenGL": "ext", "兼容性": "ext", "示例程序": "tut"};
