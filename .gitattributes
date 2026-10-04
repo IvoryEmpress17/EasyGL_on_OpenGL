@@ -1,3 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 *.h linguist-language=C
+
+# I had to lie to the detecter that it is just a C file
+*.hta linguist-language=C
