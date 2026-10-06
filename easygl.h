@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261004
+#define EASYGL_H 20261006
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -26,12 +26,180 @@
  *            nonsense glyphs per Han character.
  *
  * SVG      : built in, no second header. The SVGIMG half of the library -
- *            loadsvg / loadsvgfromfile / putsvg / drawsvg / drawsvgfile /
- *            savesvgfile / freesvg - is part of this file and of this
- *            version; see "SVG support" further down.
+ *            loadsvg / loadsvgfromfile / putsvg / rotatesvg / drawsvg /
+ *            drawsvgfile / savesvgfile / freesvg - is part of this file
+ *            and of this version; see "SVG support" further down.
  *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
+ *
+ * Revision 20261006 (two code pages, two crashes, two layout bugs)
+ *
+ *   - putsvg() is putsvgA() / putsvgW() when you want to say which of
+ *     outtextxyA() / outtextxyW() the <text> in a document goes to,
+ *     and the plain name picks per character: one that survives a
+ *     round trip through gettextcp() is drawn narrow, one that would
+ *     not - an emoji, a rare Han - goes wide instead of coming out
+ *     as '?'.  A function here must never call outtextxy() bare: in
+ *     C that is a _Generic macro and in C++ a set of overloads, so
+ *     it would dispatch a second time and undo the choice.  Same
+ *     six argument shapes as before; the empty document check stays
+ *     in all three.
+ *
+ *   - setglcp() / getglcp() are setpathcp() / getpathcp(), and setsvgcp()
+ *     / getsvgcp() are settextcp() / gettextcp().  The split is not just a
+ *     rename: it is now what the two knobs MEAN.
+ *
+ *       setpathcp()  every file name the library opens - loadimage,
+ *                    saveimage, loadsvgfile and the rest, <image href>.
+ *       settextcp()  everything drawn - outtext, outtextxy, drawtext,
+ *                    font face names, an InputBox prompt, and the text
+ *                    inside an SVG document.
+ *
+ *     One setting used to have to serve both, so a program could not have
+ *     a UTF-8 source (text) and GBK file names (path) at the same time,
+ *     and an SVG document was decoded with a third page of its own.  Text
+ *     now covers SVG text too, which is what that third page was for.
+ *     GX_DEFAULT_CODEPAGE becomes GX_DEFAULT_TEXT_CODEPAGE, and
+ *     GX_DEFAULT_PATH_CODEPAGE joins it.
+ *
+ *
+ *
+ *   - loadsvgfile() is loadsvgfileA() / loadsvgfileW(), and the path and
+ *     the content are two separate knobs.  The A / W says what encoding
+ *     the PATH is in - bytes decoded with getpathcp(), or UTF-16 - and
+ *     settextcp() / gettextcp() say what encoding the CONTENT is in.
+ *     Neither knob drags the other, which is what the ordinary Chinese
+ *     Windows case needs - a GBK name around a UTF-8 document - and so
+ *     does its mirror.  65001 is CP_UTF8, and asking for it as the
+ *     content page is a no-op: the strict UTF-8 pass has just tried
+ *     exactly that, so it falls through to the system ANSI page instead
+ *     of failing the load.  Without the suffix the two are picked from
+ *     the argument type, as before.
+ *
+ *   - transform= was ignored.  The keyword match skipped spaces and
+ *     commas, which is what separates NUMBERS, but not the '(' that
+ *     opens the function - so gxsNum() met '(' , failed, and the
+ *     whole attribute was abandoned: translate, scale, rotate,
+ *     matrix, skewX and skewY all quietly did nothing and every
+ *     element drew unscaled at the origin.  A real editor writes a
+ *     text element as translate(x,y) scale(0.27641) with the size
+ *     left at 40, so the labels came out at 40 instead of 11 and
+ *     lost their place - huge, and floating up towards the corner.
+ *     The parser opens the bracket now.  Verified numerically on
+ *     the offending document: 40 x 0.27641 = 11.06 px at (111.82,
+ *     65.13), where it used to give 40 px at (0, 0).
+ *   - A document holding <text> killed the program the first time it was
+ *     drawn, with 0xC0000005.  gxsFontMetrics() asked for the font id in
+ *     the SUBSCRIPT that used it:
+ *         g_gx_fonts.data[gxGetFontId(&g_gx_font)].hfont
+ *     gxGetFontId() is not a lookup - the first time it meets a font it
+ *     appends one, and the push reallocs the array, so on that first call
+ *     .data goes from NULL to a real pointer.  C does not order "read
+ *     .data" against "call the function", and gcc -O2 hoisted the load:
+ *     it took the old .data, let the call replace it, then indexed NULL.
+ *     Later calls were fine because the font was cached and nothing
+ *     reallocs then, which is what made it look like a drawing problem.
+ *     The id is taken first now, and bounds checked.
+ *
+ *   - gxsB64Decode() shifted an int left past its sign bit.  It kept every
+ *     bit it had ever been given instead of dropping the ones it had
+ *     already emitted, so four characters in, acc carried 24 stale bits
+ *     and two characters later `acc << 6` overflowed - undefined
+ *     behaviour, and at -O2 the compiler may assume it cannot happen.
+ *     The bytes it produced were right, which is why it went unnoticed.
+ *
+ *   - loadsvgfile() / loadsvgfromfile() take a file in any of the
+ *     encodings it is likely to arrive in and STORE it as UTF-8, so a
+ *     document holding Chinese - or any script the active code page
+ *     cannot express - draws as it was written.  A BOM settles the
+ *     question (EF BB BF is UTF-8, FF FE is UTF-16 little endian, FE FF
+ *     is big endian); without one a STRICT UTF-8 conversion decides, and
+ *     a file that fails it is ANSI and is decoded with the code page
+ *     settextcp() names, which is why a GBK document needs nothing set
+ *     at all.  The two barely overlap, so guessing is safe:
+ *     ASCII decodes the same either way, and GBK / Big5 almost always
+ *     fail the strict test because a lead byte there is followed by a
+ *     continuation UTF-8 does not allow.
+ *
+ *   - The renderer decodes document text the same way, UTF-8 first and
+ *     the code page only as a fallback, which is what makes the stored
+ *     text come out.  A font-family in particular used to go through
+ *     gxSetTextStyle9A() and be read as ANSI, so a Chinese family name
+ *     matched no font and silently fell back to the default one; it is
+ *     handed to the wide setter now.  outtextxy() and the rest of the
+ *     text API are untouched - they promise the active code page and
+ *     programs rely on it.
+ *
+ *   - x / y / dx / dy on <text> / <tspan> only move the characters they
+ *     name.  A list shorter than the run had its LAST value clamped onto
+ *     every remaining character, so x='0' froze the pen at zero and
+ *     dy='46.15' added another 46.15 for every character: every glyph
+ *     sat at one x and marched downwards.  A document written as one
+ *     <tspan> per line - the usual shape, each carrying x='0' and a dy -
+ *     came out as a single column of characters down the left edge,
+ *     which is also why a plain <text x='8'> ran its letters on top of
+ *     one another.  Past the end of a list a character now continues
+ *     from where the one before it ended, as an absent x / dx always
+ *     meant.
+ *
+ *   - A <tspan> inherits from the <text> around it, not from the group
+ *     above it.  The children of <text> were rendered by the caller's
+ *     loop, which handed them the enclosing group's style, so a tspan
+ *     carrying nothing but x / dy lost the font-size and font-family
+ *     written on its <text> and drew at the default 16 in the default
+ *     face.
+ *
+ *   - font-size is the EM, as SVG means it and as a browser draws it.
+ *     It was handed to settextstyle() as a positive height, which in
+ *     easygl is the CELL - ascent + descent + internal leading - and
+ *     internal leading differs from face to face, so one font-size came
+ *     out a little small by a DIFFERENT amount in every family: two
+ *     families at the same font-size drew at two different sizes, and a
+ *     document that mixes them looks as if the sizes had been scrambled.
+ *
+ *   - The font cache keyed on the absolute height, so it could not tell
+ *     an em size from a cell size of the same number and handed one back
+ *     when the other was asked for.  The sign is part of the key now.
+ *
+ *
+ *   - putsvg() puts the font back when it is done.  The font is one
+ *     global LOGFONTW that outtextxy() reads for every later call
+ *     whatever called it, so a document carrying text used to reach
+ *     out past putsvg() and resize everything the program printed
+ *     afterwards - a HUD, a label, a score - to the document's own
+ *     size in the document's own face.  Saved on entry to the
+ *     renderer and restored on the way out.
+ * Revision 20261005 (SVG image element, SVG text, rotatesvg)
+ *
+ *   - <image> is supported.  href / xlink:href may hold a data: URL with
+ *     base64 payload, an http / https address, or a path on disk; a data
+ *     URL is decoded into a temporary file, an address is downloaded into
+ *     one (urlmon is loaded on demand, so nothing new is linked), and
+ *     both are then read with loadimage() and drawn with putimage().
+ *     preserveAspectRatio honours the "meet" / "slice" split and the
+ *     x/y alignment pair, so the usual "fit and centre" reading is what
+ *     you get when the attribute is left out.  The image inherits the
+ *     current clip, opacity and transform.
+ *
+ *   - <text> and <tspan> finally draw text: an absolute x / y restarts the
+ *     cursor, a missing one continues it, and dx / dy lists and
+ *     letter-spacing move it along.  The font is taken from font-family,
+ *     font-size, font-weight, font-style and text-decoration, and y is a
+ *     BASELINE like in SVG - dominant-baseline picks which one, default
+ *     alphabetic - not the top of the box that outtextxy() wants, so the
+ *     glyphs sit on the line the document asked for instead of hanging
+ *     below it.
+ *
+ *   - rotatesvg(x, y, w, h, &e, rad) draws a document turned by rad
+ *     radians, clockwise, about its viewBox centre, and
+ *     rotatesvg(x, y, w, h, &e, rad, cx, cy) turns it about any point,
+ *     cx/cy being viewBox units.  The img prefix form targets an IMAGE
+ *     instead of the working one.  The angle convention is
+ *     rotateimage()'s: positive is clockwise, because y grows downwards.
+ *     The rectangle is read exactly the way putsvg() reads it, so it
+ *     still names the box the UNROTATED document would fill - the art
+ *     turns inside it and does not resize as it turns.
  *
  * Revision 20261004 (rectangle clip, A / W entry points, wide font)
  *
@@ -601,8 +769,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261004
-#define EASYGL_VERSION  "20261004"
+#define EASYGL_VER      20261006
+#define EASYGL_VERSION  "20261006"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -3106,49 +3274,69 @@ static void gxInitFontDefault(void) {
 }
 
 /*--------------------------- codepage helpers --------------------------*/
-/* The code page used to turn the caller's char* strings (text passed to
- * outtextxyA() and friends, font face names, file paths) into the UTF-16
- * that Windows wants, and back again.
+/* Two code pages, because a byte string means one of two different things
+ * and a single setting used to have to serve both:
  *
- * It defaults to CP_ACP, the system ANSI code page - which is what an
- * ordinary EasyX program gets, and is the right thing for a Chinese
- * Windows where that is GBK.  setglcp() changes it, which is the only way
- * to draw text that is in some other encoding.
+ *   gettextcp() / settextcp()   TEXT - everything that is drawn: outtext(),
+ *                               outtextxy(), drawtext(), font face names,
+ *                               an InputBox prompt, and the text inside an
+ *                               SVG document.
+ *   getpathcp() / setpathcp()   PATH - every file name the library opens:
+ *                               loadimage / saveimage, loadsvgfile and the
+ *                               rest, an <image href>.
  *
- * Byte strings (char*) are decoded with this code page and nothing else -
- * there is no guessing.  A GBK string can be valid UTF-8 by accident: the
- * bytes CB AB D4 B2 D7 B6 are perfectly ordinary GBK text, yet they decode
+ * Both default to CP_ACP, the system ANSI code page - what an ordinary
+ * EasyX program gets, and the right thing on a Chinese Windows where that
+ * is GBK.  They are independent on purpose: a UTF-8 source around GBK file
+ * names is settextcp(CP_UTF8) with the path page left alone, and a GBK
+ * source that only needs UTF-8 paths is the other way round.
+ *
+ * Byte strings are decoded with the page and nothing else - there is no
+ * guessing.  A GBK string can be valid UTF-8 by accident: the bytes
+ * CB AB D4 B2 D7 B6 are perfectly ordinary GBK text, yet they decode
  * cleanly as three UTF-8 two-byte sequences, so the old try-UTF-8-first
  * rule silently produced U+02CB U+0532 U+05D6 instead.  Text that happened
  * to form a legal UTF-8 stream was mangled while its neighbours were fine,
  * which is impossible to diagnose from the outside.
  *
- * So setglcp(936) makes GBK text work, and setglcp(CP_UTF8) makes UTF-8
- * text work.  Wide strings (wchar_t*) never reach this code at all - they
- * go straight to the W flavours - so L"..." is always unambiguous.
+ * Wide strings (wchar_t*) never reach this code at all - they go straight
+ * to the W flavours - so L"..." is always unambiguous.
+ *
+ * SVG DOCUMENTS read from a file are the one place that guesses, and only
+ * because the file says which: a BOM settles it, otherwise strict UTF-8 is
+ * tried and what fails it is decoded with the TEXT page.  CP_UTF8 there
+ * would mean "the strict pass has just tried exactly that and refused", so
+ * it falls through to the system ANSI page instead of failing the load.
  *
  * Define GX_GUESS_UTF8 to put the old try-UTF-8-first behaviour back.
- * Define GX_DEFAULT_CODEPAGE to change the starting value. */
-#ifndef GX_DEFAULT_CODEPAGE
-#define GX_DEFAULT_CODEPAGE CP_ACP
+ * Define GX_DEFAULT_TEXT_CODEPAGE / GX_DEFAULT_PATH_CODEPAGE to change the
+ * starting values. */
+#ifndef GX_DEFAULT_TEXT_CODEPAGE
+#define GX_DEFAULT_TEXT_CODEPAGE CP_ACP
 #endif
-static UINT g_gx_codePage = GX_DEFAULT_CODEPAGE;
+#ifndef GX_DEFAULT_PATH_CODEPAGE
+#define GX_DEFAULT_PATH_CODEPAGE CP_ACP
+#endif
+static UINT g_gx_textCodePage = GX_DEFAULT_TEXT_CODEPAGE;
+static UINT g_gx_pathCodePage = GX_DEFAULT_PATH_CODEPAGE;
 
-GX_INLINE void setglcp(UINT cp) { g_gx_codePage = cp ? cp : CP_ACP; }
-GX_INLINE UINT getglcp(void)    { return g_gx_codePage; }
+GX_INLINE void settextcp(UINT cp) { g_gx_textCodePage = cp ? cp : CP_ACP; }
+GX_INLINE UINT gettextcp(void)    { return g_gx_textCodePage; }
+GX_INLINE void setpathcp(UINT cp) { g_gx_pathCodePage = cp ? cp : CP_ACP; }
+GX_INLINE UINT getpathcp(void)    { return g_gx_pathCodePage; }
 
-static WCHAR* gxDupWideFromBytes(const char* s) {
+static WCHAR* gxDupWideFromBytesCp(const char* s, UINT cp) {
     int n;
     WCHAR* out;
     if (!s) return NULL;
     /* Decode with the code page the program selected, which defaults to
      * the active ANSI code page (GBK, Big5, ...).  No UTF-8 attempt:
-     * see the note at g_gx_codePage. */
+     * see the note at g_gx_textCodePage. */
 #ifdef GX_GUESS_UTF8
     n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
     if (n <= 0)
 #endif
-        n = MultiByteToWideChar(g_gx_codePage, 0, s, -1, NULL, 0);
+        n = MultiByteToWideChar(cp, 0, s, -1, NULL, 0);
     if (n <= 0) { out = (WCHAR*)malloc(sizeof(WCHAR)); if (out) out[0] = 0; return out; }
     out = (WCHAR*)malloc((size_t)n * sizeof(WCHAR));
     if (!out) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); exit(1); }
@@ -3156,22 +3344,26 @@ static WCHAR* gxDupWideFromBytes(const char* s) {
     if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, n) <= 0)
 #endif
     {
-        if (MultiByteToWideChar(g_gx_codePage, 0, s, -1, out, n) <= 0) out[0] = 0;
+        if (MultiByteToWideChar(cp, 0, s, -1, out, n) <= 0) out[0] = 0;
     }
     return out;
 }
+static WCHAR* gxDupWideFromBytes(const char* s)     { return gxDupWideFromBytesCp(s, g_gx_textCodePage); }
+static WCHAR* gxDupWideFromBytesPath(const char* s) { return gxDupWideFromBytesCp(s, g_gx_pathCodePage); }
 
-static char* gxDupBytesFromWide(const WCHAR* w) {
+static char* gxDupBytesFromWideCp(const WCHAR* w, UINT cp) {
     int n;
     char* out;
     if (!w) return NULL;
-    n = WideCharToMultiByte(g_gx_codePage, 0, w, -1, NULL, 0, NULL, NULL);
+    n = WideCharToMultiByte(cp, 0, w, -1, NULL, 0, NULL, NULL);
     if (n <= 0) { out = (char*)malloc(1); if (out) out[0] = 0; return out; }
     out = (char*)malloc((size_t)n);
     if (!out) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); exit(1); }
-    if (WideCharToMultiByte(g_gx_codePage, 0, w, -1, out, n, NULL, NULL) <= 0) out[0] = 0;
+    if (WideCharToMultiByte(cp, 0, w, -1, out, n, NULL, NULL) <= 0) out[0] = 0;
     return out;
 }
+static char* gxDupBytesFromWide(const WCHAR* w)     { return gxDupBytesFromWideCp(w, g_gx_textCodePage); }
+static char* gxDupBytesFromWidePath(const WCHAR* w) { return gxDupBytesFromWideCp(w, g_gx_pathCodePage); }
 
 /*---------------------- LOGFONT A <-> W conversion ---------------------*/
 /* The current font is kept as LOGFONTW, so a face name the active code
@@ -3354,9 +3546,16 @@ static int gxGetFontId(const LOGFONTW* lf) {
         sprintf(key + nb, "%04x", (unsigned)(WCHAR)lf->lfFaceName[nb / 4]);
         nb += 4;
     }
-    sprintf(key + nb, "|%d|%d|%d|%d|%d|%d|%d", px,
+    /* The sign of lfHeight has to be in the key too.  Windows reads a
+     * positive height as the CELL (ascent + descent + internal leading)
+     * and a negative one as the EM, so +40 and -40 are two different
+     * fonts; px above is an absolute value and lost the sign, and the
+     * cache happily handed back a cell sized font to a caller that asked
+     * for an em sized one. */
+    sprintf(key + nb, "|%d|%d|%d|%d|%d|%d|%d|%d", px,
             (int)lf->lfWeight, lf->lfItalic ? 1 : 0, (int)lf->lfCharSet,
-            lf->lfUnderline ? 1 : 0, lf->lfStrikeOut ? 1 : 0, g_gx_fontMode);
+            lf->lfUnderline ? 1 : 0, lf->lfStrikeOut ? 1 : 0, g_gx_fontMode,
+            (lf->lfHeight < 0) ? 1 : 0);
     if (gxStrMapGet(&g_gx_fontIds, key, &id)) return id;
 
     memset(&rec, 0, sizeof(rec));
@@ -9480,7 +9679,13 @@ GX_INLINE double gettargetfps(void) { return g_gx_targetFps; }
 /*======================================================================
  * 17b. Helpers used by the EasyX compatible dispatch macros
  *====================================================================*/
-static const WCHAR* gxWiden(const char* s) {
+/* bytes -> UTF-16 in a rotating static buffer, so a call can hand the
+ * result straight to a W flavour without the caller freeing anything.
+ * gxWidenText() is for TEXT and gxWidenPath() for a FILE NAME - same
+ * conversion, different code page, and mixing them up is what makes a
+ * Chinese file name open as a row of '?' while the labels draw fine.
+ * Four slots, so a call that needs two at once still has them both. */
+static const WCHAR* gxWidenCp(const char* s, UINT cp) {
     static WCHAR buf[4][1024];
     static int idx = 0;
     int n;
@@ -9492,10 +9697,12 @@ static const WCHAR* gxWiden(const char* s) {
     n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, 1024);
     if (n <= 0)
 #endif
-        n = MultiByteToWideChar(g_gx_codePage, 0, s, -1, out, 1024);
+        n = MultiByteToWideChar(cp, 0, s, -1, out, 1024);
     if (n <= 0) out[0] = 0;
     return out;
 }
+static const WCHAR* gxWidenText(const char* s) { return gxWidenCp(s, g_gx_textCodePage); }
+static const WCHAR* gxWidenPath(const char* s) { return gxWidenCp(s, g_gx_pathCodePage); }
 
 static int gx_drawtext_wrapW(double x, double y, const WCHAR* str) {
     RECT r;
@@ -9503,13 +9710,13 @@ static int gx_drawtext_wrapW(double x, double y, const WCHAR* str) {
     return gx_drawtext(str, -1, &r, DT_LEFT | DT_TOP, x, y, true);
 }
 static int gx_drawtext_wrapA(double x, double y, const char* str) {
-    return gx_drawtext_wrapW(x, y, gxWiden(str));
+    return gx_drawtext_wrapW(x, y, gxWidenText(str));
 }
 static int gx_drawtext_rectW(const WCHAR* str, const RECT* pr, UINT fmt) {
     return gx_drawtext(str, -1, pr, fmt, 0, 0, false);
 }
 static int gx_drawtext_rectA(const char* str, const RECT* pr, UINT fmt) {
-    return gx_drawtext_rectW(gxWiden(str), pr, fmt);
+    return gx_drawtext_rectW(gxWidenText(str), pr, fmt);
 }
 
 static ExMessage gxGetMsgFrom(ExMessage* m) {
@@ -9572,9 +9779,9 @@ static bool gx_ibA(char* out, int n, const char* prompt, const char* title,
     buf = (WCHAR*)malloc(sizeof(WCHAR) * (size_t)(n + 2));
     if (!buf) return false;
     buf[0] = 0;
-    ok = gxInputBoxExW(prompt ? gxWiden(prompt) : L"",
-                       title  ? gxWiden(title)  : L"InputBox",
-                       def    ? gxWiden(def)    : L"",
+    ok = gxInputBoxExW(prompt ? gxWidenText(prompt) : L"",
+                       title  ? gxWidenText(title)  : L"InputBox",
+                       def    ? gxWidenText(def)    : L"",
                        buf, n + 1, width, height, bHideCancelBtn);
     if (ok) {
         /* n is BYTES but the user typed CHARACTERS: in GBK one Han
@@ -9583,14 +9790,14 @@ static bool gx_ibA(char* out, int n, const char* prompt, const char* title,
          * half written character, which is why the old code dropped the
          * whole answer.  Give back a character less until it fits, so the
          * tail is cut on a character boundary. */
-        int len = WideCharToMultiByte(g_gx_codePage, 0, buf, -1, out, n, NULL, NULL);
+        int len = WideCharToMultiByte(g_gx_textCodePage, 0, buf, -1, out, n, NULL, NULL);
         if (len <= 0) {
             int k = 0;
             while (buf[k]) k++;
             len = 0;
             while (k > 0 && len <= 0) {
                 k--;
-                len = WideCharToMultiByte(g_gx_codePage, 0, buf, k, out, n, NULL, NULL);
+                len = WideCharToMultiByte(g_gx_textCodePage, 0, buf, k, out, n, NULL, NULL);
             }
             if (len <= 0)      out[0] = 0;
             else if (len >= n) out[n - 1] = 0;
@@ -10404,6 +10611,45 @@ static GX_UNUSED bool gxsDocOk(const SVGIMG* e)
 #define GXS_CAT(a, b) GXS_CAT_(a, b)
 #define GXS_CAT_(a, b) a##b
 
+/* Stands for "no centre given": rotatesvg() then turns about the middle of
+ * the viewBox.  A coordinate this far out cannot occur in a document.
+ * Defined up here because the C++ overloads below expand it, long before
+ * the renderer that reads it. */
+#ifndef GXS_ROT_NONE
+#define GXS_ROT_NONE (-1e300)
+#endif
+
+/* Which outtextxy flavour the SVG renderer draws its <text> with.  The
+ * document is UTF-8 either way; this only says which entry point puts it
+ * on the screen.
+ *
+ *   GXS_TX_A     outtextxyA()  - bytes, read with gettextcp().  What the
+ *                code page cannot hold comes out as the substitute
+ *                character, which is what "you asked for A" means.
+ *   GXS_TX_W     outtextxyW()  - UTF-16 straight through, never lossy.
+ *   GXS_TX_AUTO  per character: A when it survives gettextcp() unchanged,
+ *                W when it would not.  This is putsvg() without a suffix.
+ *
+ * Named entry points only, never the bare outtextxy(): in C that is a
+ * _Generic macro and in C++ an overload, so calling it here would pick the
+ * flavour a second time - the caller has just told us which one it wants. */
+#ifndef GXS_TX_A
+#define GXS_TX_A    0
+#define GXS_TX_W    1
+#define GXS_TX_AUTO 2
+#endif
+
+/* A rotation applied to a whole document, for rotatesvg().  The centre is
+ * in viewBox units, so it is named where the art is named.
+ * Also up here, not with the rest of the renderer: the forward declaration
+ * of gxsRenderCore() a few lines down takes a const GXSRot*, and a typedef
+ * name has to exist before it is used. */
+typedef struct GXSRot {
+    int    on;
+    double rad;
+    double cx, cy;
+} GXSRot;
+
 /* C++ resolves by overload; those static inlines sit at the bottom of
  * this file, next to the functions they forward to.  C has to go through
  * a macro, and the two-argument file helpers ask _Generic about the
@@ -10416,8 +10662,9 @@ static GX_UNUSED bool gxsDocOk(const SVGIMG* e)
 #if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
 static GX_UNUSED char* gxsStrDup(const char* s);
 static GX_UNUSED char* gxsUnescape(const char* s);
-static GX_UNUSED char* gxsReadFile(const char* path);
-static GX_UNUSED char* gxsReadFileW(const WCHAR* path);
+static GX_UNUSED char* gxsReadFile(const char* path, size_t* outN);
+static GX_UNUSED char* gxsReadFileW(const WCHAR* path, size_t* outN);
+static GX_UNUSED char* gxsReadFileUtf8W(const WCHAR* path);
 static GX_UNUSED int  gxsWriteFile(const char* path, const char* text, size_t n);
 static GX_UNUSED int  gxsWriteFileW(const WCHAR* path, const char* text, size_t n);
 static GX_UNUSED int  gxsHasRootSvg(const char* s);
@@ -10426,6 +10673,8 @@ static GX_UNUSED int  gxsLoadSrc(SVGIMG* e, const char* svg);
 static GX_UNUSED int  gxsLoadSrc2(SVGIMG* e, int w, int h, const char* svg);
 static GX_UNUSED int  gxsLoadFileA(SVGIMG* e, const char* path);
 static GX_UNUSED int  gxsLoadFileW(SVGIMG* e, const WCHAR* path);
+static GX_UNUSED int  loadsvgfileA(SVGIMG* e, const char* path);
+static GX_UNUSED int  loadsvgfileW(SVGIMG* e, const WCHAR* path);
 static GX_UNUSED int  gxsLoadFromFile(SVGIMG* e, char* (*read)(const void*),
                                        const void* path, int w, int h);
 static GX_UNUSED char* gxsReadFileA(const void* path);
@@ -10435,10 +10684,15 @@ static GX_UNUSED int  gxsLoadFromFileW(SVGIMG* e, const WCHAR* path, int w, int 
 static GX_UNUSED int  gxsSaveA(const SVGIMG* e, const char* path);
 static GX_UNUSED int  gxsSaveW(const SVGIMG* e, const WCHAR* path);
 static GX_UNUSED void freesvg(SVGIMG* e);
-static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e);
-static GX_UNUSED void gxsPut4(IMAGE* img, double x, double y, const SVGIMG* e);
-static GX_UNUSED void gxsPut5(double x, double y, double w, double h, const SVGIMG* e);
-static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e, int flav);
+static GX_UNUSED void gxsPut4(IMAGE* img, double x, double y, const SVGIMG* e, int flav);
+static GX_UNUSED void gxsPut5(double x, double y, double w, double h, const SVGIMG* e, int flav);
+static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h,
+                              const SVGIMG* e, int flav);
+/* Both languages reach this one: C through the counting macro, C++ straight
+ * from the overloads. */
+static GX_UNUSED void gxsRotCore(IMAGE* img, double x, double y, double w, double h,
+                                 const SVGIMG* e, double rad, double cx, double cy);
 #ifndef __cplusplus
 static GX_UNUSED void gxs_put_1(const SVGIMG* e);
 static GX_UNUSED void gxs_put_2(IMAGE* img, const SVGIMG* e);
@@ -10448,6 +10702,24 @@ static GX_UNUSED void gxs_put_3(double x, double y, const SVGIMG* e);
 static GX_UNUSED void gxs_put_4(IMAGE* img, double x, double y, const SVGIMG* e);
 static GX_UNUSED void gxs_put_5(double x, double y, double w, double h, const SVGIMG* e);
 static GX_UNUSED void gxs_put_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxs_putA_1(const SVGIMG* e);
+static GX_UNUSED void gxs_putA_2(IMAGE* img, const SVGIMG* e);
+static GX_UNUSED void gxs_putA_3(double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxs_putA_4(IMAGE* img, double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxs_putA_5(double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxs_putA_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxs_putW_1(const SVGIMG* e);
+static GX_UNUSED void gxs_putW_2(IMAGE* img, const SVGIMG* e);
+static GX_UNUSED void gxs_putW_3(double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxs_putW_4(IMAGE* img, double x, double y, const SVGIMG* e);
+static GX_UNUSED void gxs_putW_5(double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxs_putW_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED void gxs_rot_6(double x, double y, double w, double h, const SVGIMG* e, double rad);
+static GX_UNUSED void gxs_rot_7(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e, double rad);
+static GX_UNUSED void gxs_rot_8(double x, double y, double w, double h, const SVGIMG* e,
+                                double rad, double cx, double cy);
+static GX_UNUSED void gxs_rot_9(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e,
+                                double rad, double cx, double cy);
 #endif
 static GX_UNUSED void gxs_draw_1(const char* svg);
 static GX_UNUSED void gxs_draw_2(IMAGE* img, const char* svg);
@@ -10462,7 +10734,8 @@ static GX_UNUSED int  gxs_dfile_4(IMAGE* img, double x, double y, const char* pa
 static GX_UNUSED int  gxs_dfile_5(double x, double y, double w, double h, const char* path);
 static GX_UNUSED int  gxs_dfile_6(IMAGE* img, double x, double y, double w, double h, const char* path);
 static GX_UNUSED int  gxsFile(int n, IMAGE* img, double x, double y, double w, double h, const char* path);
-static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h, const char* svg);
+static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h,
+                                    const char* svg, const GXSRot* rot, int flav);
 #endif
 
 
@@ -10570,37 +10843,37 @@ static inline void setwindowtext(const WCHAR* s) { setwindowtextW(s); }
 
 /*------------------------------ images --------------------------------*/
 static inline bool loadimage(IMAGE* img, const char* f) {
-    return gx_loadimg2(img, gxWiden(f));
+    return gx_loadimg2(img, gxWidenPath(f));
 }
 static inline bool loadimage(IMAGE* img, const WCHAR* f) {
     return gx_loadimg2(img, f);
 }
 static inline bool loadimage(IMAGE* img, const char* f, int w) {
-    return gx_loadimg3(img, gxWiden(f), w);
+    return gx_loadimg3(img, gxWidenPath(f), w);
 }
 static inline bool loadimage(IMAGE* img, const WCHAR* f, int w) {
     return gx_loadimg3(img, f, w);
 }
 static inline bool loadimage(IMAGE* img, const char* f, int w, int h) {
-    return gx_loadimg4(img, gxWiden(f), w, h);
+    return gx_loadimg4(img, gxWidenPath(f), w, h);
 }
 static inline bool loadimage(IMAGE* img, const WCHAR* f, int w, int h) {
     return gx_loadimg4(img, f, w, h);
 }
 static inline bool loadimage(IMAGE* img, const char* f, int w, int h, bool resize) {
-    return gx_loadimg5(img, gxWiden(f), w, h, resize);
+    return gx_loadimg5(img, gxWidenPath(f), w, h, resize);
 }
 static inline bool loadimage(IMAGE* img, const WCHAR* f, int w, int h, bool resize) {
     return gx_loadimg5(img, f, w, h, resize);
 }
 
-static inline bool saveimage(const char* f)  { return gx_saveimg1(gxWiden(f)); }
+static inline bool saveimage(const char* f)  { return gx_saveimg1(gxWidenPath(f)); }
 static inline bool saveimage(const WCHAR* f) { return gx_saveimg1(f); }
-static inline bool saveimage(const char* f, const IMAGE* img)  { return gx_saveimg2(gxWiden(f), img); }
+static inline bool saveimage(const char* f, const IMAGE* img)  { return gx_saveimg2(gxWidenPath(f), img); }
 static inline bool saveimage(const WCHAR* f, const IMAGE* img) { return gx_saveimg2(f, img); }
 /* The reversed order - see the note above gx_si2r().  EasyX does not offer
  * it; it is accepted here for the same reason the C macro does. */
-static inline bool saveimage(const IMAGE* img, const char* f)  { return gx_saveimg2(gxWiden(f), img); }
+static inline bool saveimage(const IMAGE* img, const char* f)  { return gx_saveimg2(gxWidenPath(f), img); }
 static inline bool saveimage(const IMAGE* img, const WCHAR* f) { return gx_saveimg2(f, img); }
 
 static inline void putimage(int x, int y, const IMAGE* img) {
@@ -10835,7 +11108,7 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
  * The un-suffixed names above pick an implementation from the argument
  * type (overloading here, _Generic in C11).  These names always pick
  * one: the A flavour takes char* and decodes it through the code page
- * set by setglcp(), the W flavour takes WCHAR*, which is UTF-16 and
+ * set by settextcp(), the W flavour takes WCHAR*, which is UTF-16 and
  * needs no conversion at all.  Use them to say which one you want
  * instead of leaving it to the argument type - and to keep a call from
  * silently changing flavour when a literal gains or loses an L prefix.
@@ -10894,6 +11167,7 @@ static inline void settextstyleA(int h, int w, const char* face, int esc,
     gxSetTextStyleA(h, w, face, esc, ori, we, it, un, sk, cs, op, cp, q, pf);
 }
 static inline void settextstyleA(const LOGFONTA* f) { gxSetTextStylePtr(f); }
+static inline void settextstyleW(const LOGFONTW* f) { gxSetTextStylePtrW(f); }
 static inline void settextstyleW(int h, int w, const WCHAR* face) {
     gxSetTextStyle3W(h, w, face);
 }
@@ -10908,16 +11182,16 @@ static inline void settextstyleW(int h, int w, const WCHAR* face, int esc,
 }
 
 static inline bool loadimageA(IMAGE* img, const char* f) {
-    return gx_loadimg2(img, gxWiden(f));
+    return gx_loadimg2(img, gxWidenPath(f));
 }
 static inline bool loadimageA(IMAGE* img, const char* f, int w) {
-    return gx_loadimg3(img, gxWiden(f), w);
+    return gx_loadimg3(img, gxWidenPath(f), w);
 }
 static inline bool loadimageA(IMAGE* img, const char* f, int w, int h) {
-    return gx_loadimg4(img, gxWiden(f), w, h);
+    return gx_loadimg4(img, gxWidenPath(f), w, h);
 }
 static inline bool loadimageA(IMAGE* img, const char* f, int w, int h, bool r) {
-    return gx_loadimg5(img, gxWiden(f), w, h, r);
+    return gx_loadimg5(img, gxWidenPath(f), w, h, r);
 }
 static inline bool loadimageW(IMAGE* img, const WCHAR* f) {
     return gx_loadimg2(img, f);
@@ -10933,13 +11207,13 @@ static inline bool loadimageW(IMAGE* img, const WCHAR* f, int w, int h, bool r) 
 }
 
 static inline bool saveimageA(const char* f) {
-    return gx_saveimg1(gxWiden(f));
+    return gx_saveimg1(gxWidenPath(f));
 }
 static inline bool saveimageA(const char* f, const IMAGE* img) {
-    return gx_saveimg2(gxWiden(f), img);
+    return gx_saveimg2(gxWidenPath(f), img);
 }
 static inline bool saveimageA(const IMAGE* img, const char* f) {
-    return gx_saveimg2(gxWiden(f), img);
+    return gx_saveimg2(gxWidenPath(f), img);
 }
 static inline bool saveimageW(const WCHAR* f) {
     return gx_saveimg1(f);
@@ -10979,9 +11253,9 @@ static GX_UNUSED int  loadsvg(SVGIMG* e, const char* svg)
 static GX_UNUSED int  loadsvg(SVGIMG* e, int w, int h, const char* svg)
 { return gxsLoadSrc2(e, w, h, svg); }
 static GX_UNUSED int  loadsvgfile(SVGIMG* e, const char* path)
-{ return gxsLoadFileA(e, path); }
+{ return loadsvgfileA(e, path); }
 static GX_UNUSED int  loadsvgfile(SVGIMG* e, const WCHAR* path)
-{ return gxsLoadFileW(e, path); }
+{ return loadsvgfileW(e, path); }
 static GX_UNUSED int  loadsvgfromfile(SVGIMG* e, const char* path)
 { return gxsLoadFromFileA(e, path, 0, 0); }
 static GX_UNUSED int  loadsvgfromfile(SVGIMG* e, const WCHAR* path)
@@ -11007,17 +11281,56 @@ static GX_UNUSED int  savesvgfile(const char* path, const SVGIMG* e)
 static GX_UNUSED int  savesvgfile(const WCHAR* path, const SVGIMG* e)
 { return gxsSaveW(e, path); }
 static GX_UNUSED void putsvg(const SVGIMG* e)
-{ gxsPut3(0, 0, e); }
+{ gxsPut3(0, 0, e, GXS_TX_AUTO); }
 static GX_UNUSED void putsvg(IMAGE* img, const SVGIMG* e)
-{ gxsPut4(img, 0, 0, e); }
+{ gxsPut4(img, 0, 0, e, GXS_TX_AUTO); }
 static GX_UNUSED void putsvg(double x, double y, const SVGIMG* e)
-{ gxsPut3(x, y, e); }
+{ gxsPut3(x, y, e, GXS_TX_AUTO); }
 static GX_UNUSED void putsvg(IMAGE* img, double x, double y, const SVGIMG* e)
-{ gxsPut4(img, x, y, e); }
+{ gxsPut4(img, x, y, e, GXS_TX_AUTO); }
 static GX_UNUSED void putsvg(double x, double y, double w, double h, const SVGIMG* e)
-{ gxsPut5(x, y, w, h, e); }
+{ gxsPut5(x, y, w, h, e, GXS_TX_AUTO); }
 static GX_UNUSED void putsvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
-{ gxsPut6(img, x, y, w, h, e); }
+{ gxsPut6(img, x, y, w, h, e, GXS_TX_AUTO); }
+/* putsvgA / putsvgW: which text flavour <text> is drawn with, spelled out.
+ * A goes through outtextxyA(), W through outtextxyW(), and neither asks
+ * anything - use them when you already know.  putsvg() decides per glyph. */
+static GX_UNUSED void putsvgA(const SVGIMG* e)
+{ gxsPut3(0, 0, e, GXS_TX_A); }
+static GX_UNUSED void putsvgA(IMAGE* img, const SVGIMG* e)
+{ gxsPut4(img, 0, 0, e, GXS_TX_A); }
+static GX_UNUSED void putsvgA(double x, double y, const SVGIMG* e)
+{ gxsPut3(x, y, e, GXS_TX_A); }
+static GX_UNUSED void putsvgA(IMAGE* img, double x, double y, const SVGIMG* e)
+{ gxsPut4(img, x, y, e, GXS_TX_A); }
+static GX_UNUSED void putsvgA(double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut5(x, y, w, h, e, GXS_TX_A); }
+static GX_UNUSED void putsvgA(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut6(img, x, y, w, h, e, GXS_TX_A); }
+static GX_UNUSED void putsvgW(const SVGIMG* e)
+{ gxsPut3(0, 0, e, GXS_TX_W); }
+static GX_UNUSED void putsvgW(IMAGE* img, const SVGIMG* e)
+{ gxsPut4(img, 0, 0, e, GXS_TX_W); }
+static GX_UNUSED void putsvgW(double x, double y, const SVGIMG* e)
+{ gxsPut3(x, y, e, GXS_TX_W); }
+static GX_UNUSED void putsvgW(IMAGE* img, double x, double y, const SVGIMG* e)
+{ gxsPut4(img, x, y, e, GXS_TX_W); }
+static GX_UNUSED void putsvgW(double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut5(x, y, w, h, e, GXS_TX_W); }
+static GX_UNUSED void putsvgW(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut6(img, x, y, w, h, e, GXS_TX_W); }
+static GX_UNUSED void rotatesvg(double x, double y, double w, double h,
+                                const SVGIMG* e, double rad)
+{ gxsRotCore(NULL, x, y, w, h, e, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+static GX_UNUSED void rotatesvg(IMAGE* img, double x, double y, double w, double h,
+                                const SVGIMG* e, double rad)
+{ gxsRotCore(img, x, y, w, h, e, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+static GX_UNUSED void rotatesvg(double x, double y, double w, double h,
+                                const SVGIMG* e, double rad, double cx, double cy)
+{ gxsRotCore(NULL, x, y, w, h, e, rad, cx, cy); }
+static GX_UNUSED void rotatesvg(IMAGE* img, double x, double y, double w, double h,
+                                const SVGIMG* e, double rad, double cx, double cy)
+{ gxsRotCore(img, x, y, w, h, e, rad, cx, cy); }
 static GX_UNUSED void drawsvg(const char* svg)
 { gxs_draw_1(svg); }
 static GX_UNUSED void drawsvg(IMAGE* img, const char* svg)
@@ -11167,34 +11480,34 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
 /*------------------------------ images --------------------------------*/
 #define gx_li2(img, f)                                                        \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_loadimg2((img), gxWiden((const char*)(f))),           \
-        const char*:  gx_loadimg2((img), gxWiden((const char*)(f))),           \
+        char*:        gx_loadimg2((img), gxWidenPath((const char*)(f))),           \
+        const char*:  gx_loadimg2((img), gxWidenPath((const char*)(f))),           \
         WCHAR*:       gx_loadimg2((img), (const WCHAR*)(f)),                   \
         const WCHAR*: gx_loadimg2((img), (const WCHAR*)(f)))
 #define gx_li3(img, f, w)                                                     \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_loadimg3((img), gxWiden((const char*)(f)), (w)),      \
-        const char*:  gx_loadimg3((img), gxWiden((const char*)(f)), (w)),      \
+        char*:        gx_loadimg3((img), gxWidenPath((const char*)(f)), (w)),      \
+        const char*:  gx_loadimg3((img), gxWidenPath((const char*)(f)), (w)),      \
         WCHAR*:       gx_loadimg3((img), (const WCHAR*)(f), (w)),              \
         const WCHAR*: gx_loadimg3((img), (const WCHAR*)(f), (w)))
 #define gx_li4(img, f, w, h)                                                  \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_loadimg4((img), gxWiden((const char*)(f)), (w), (h)),  \
-        const char*:  gx_loadimg4((img), gxWiden((const char*)(f)), (w), (h)),  \
+        char*:        gx_loadimg4((img), gxWidenPath((const char*)(f)), (w), (h)),  \
+        const char*:  gx_loadimg4((img), gxWidenPath((const char*)(f)), (w), (h)),  \
         WCHAR*:       gx_loadimg4((img), (const WCHAR*)(f), (w), (h)),         \
         const WCHAR*: gx_loadimg4((img), (const WCHAR*)(f), (w), (h)))
 #define gx_li5(img, f, w, h, r)                                               \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_loadimg5((img), gxWiden((const char*)(f)), (w), (h), (r)), \
-        const char*:  gx_loadimg5((img), gxWiden((const char*)(f)), (w), (h), (r)), \
+        char*:        gx_loadimg5((img), gxWidenPath((const char*)(f)), (w), (h), (r)), \
+        const char*:  gx_loadimg5((img), gxWidenPath((const char*)(f)), (w), (h), (r)), \
         WCHAR*:       gx_loadimg5((img), (const WCHAR*)(f), (w), (h), (r)),    \
         const WCHAR*: gx_loadimg5((img), (const WCHAR*)(f), (w), (h), (r)))
 #define loadimage(...) GX_DISPATCH(gx_li, __VA_ARGS__)
 
 #define gx_si1(f)                                                             \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_saveimg1(gxWiden((const char*)(f))),                  \
-        const char*:  gx_saveimg1(gxWiden((const char*)(f))),                  \
+        char*:        gx_saveimg1(gxWidenPath((const char*)(f))),                  \
+        const char*:  gx_saveimg1(gxWidenPath((const char*)(f))),                  \
         WCHAR*:       gx_saveimg1((const WCHAR*)(f)),                          \
         const WCHAR*: gx_saveimg1((const WCHAR*)(f)))
 /* saveimage(img, file) - the reversed order.
@@ -11211,15 +11524,15 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
  */
 #define gx_si2r(img, f)                                                       \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_saveimg2(gxWiden((const char*)(f)), (img)),           \
-        const char*:  gx_saveimg2(gxWiden((const char*)(f)), (img)),           \
+        char*:        gx_saveimg2(gxWidenPath((const char*)(f)), (img)),           \
+        const char*:  gx_saveimg2(gxWidenPath((const char*)(f)), (img)),           \
         WCHAR*:       gx_saveimg2((const WCHAR*)(f), (img)),                   \
         const WCHAR*: gx_saveimg2((const WCHAR*)(f), (img)),                   \
         default:      0)
 #define gx_si2(f, img)                                                        \
     _Generic(((f) + 0),                                                        \
-        char*:        gx_saveimg2(gxWiden((const char*)(f)), (const IMAGE*)(img)), \
-        const char*:  gx_saveimg2(gxWiden((const char*)(f)), (const IMAGE*)(img)), \
+        char*:        gx_saveimg2(gxWidenPath((const char*)(f)), (const IMAGE*)(img)), \
+        const char*:  gx_saveimg2(gxWidenPath((const char*)(f)), (const IMAGE*)(img)), \
         WCHAR*:       gx_saveimg2((const WCHAR*)(f), (const IMAGE*)(img)),     \
         const WCHAR*: gx_saveimg2((const WCHAR*)(f), (const IMAGE*)(img)),     \
         IMAGE*:       gx_si2r((const IMAGE*)(f), (img)),                       \
@@ -11470,7 +11783,7 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
  *
  * The un-suffixed macros above pick an implementation with _Generic.
  * These always pick one: A takes char* and decodes it through the code
- * page set by setglcp(), W takes WCHAR*, which is UTF-16 and needs no
+ * page set by settextcp(), W takes WCHAR*, which is UTF-16 and needs no
  * conversion at all.  Use them to say which one you want instead of
  * leaving it to the argument type - and to keep a call from silently
  * changing flavour when a literal gains or loses an L prefix.
@@ -11558,12 +11871,12 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
                     (sk), (BYTE)(cs), (BYTE)(op), (BYTE)(cp), (BYTE)(q), (BYTE)(pf))
 #define settextstyleW(...) GX_DISPATCH(gx_tsW_, __VA_ARGS__)
 
-/* loadimageA / loadimageW.  gxWiden() turns the narrow name into the
- * wide one the loader wants, using the code page set by setglcp(). */
-#define gx_liA2(img, f)           gx_loadimg2((img), gxWiden((const char*)(f)))
-#define gx_liA3(img, f, w)        gx_loadimg3((img), gxWiden((const char*)(f)), (w))
-#define gx_liA4(img, f, w, h)     gx_loadimg4((img), gxWiden((const char*)(f)), (w), (h))
-#define gx_liA5(img, f, w, h, r)  gx_loadimg5((img), gxWiden((const char*)(f)), (w), (h), (r))
+/* loadimageA / loadimageW.  gxWidenPath() turns the narrow name into the
+ * wide one the loader wants, using the code page set by setpathcp(). */
+#define gx_liA2(img, f)           gx_loadimg2((img), gxWidenPath((const char*)(f)))
+#define gx_liA3(img, f, w)        gx_loadimg3((img), gxWidenPath((const char*)(f)), (w))
+#define gx_liA4(img, f, w, h)     gx_loadimg4((img), gxWidenPath((const char*)(f)), (w), (h))
+#define gx_liA5(img, f, w, h, r)  gx_loadimg5((img), gxWidenPath((const char*)(f)), (w), (h), (r))
 #define loadimageA(...) GX_DISPATCH(gx_liA, __VA_ARGS__)
 #define gx_liW2(img, f)           gx_loadimg2((img), (const WCHAR*)(f))
 #define gx_liW3(img, f, w)        gx_loadimg3((img), (const WCHAR*)(f), (w))
@@ -11574,14 +11887,14 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
 /* saveimageA / saveimageW.  Both argument orders are accepted, and
  * which one it is follows from the type of the first argument: a file
  * name is never an IMAGE and an IMAGE is never a file name. */
-#define gx_siA1(f) gx_saveimg1(gxWiden((const char*)(f)))
+#define gx_siA1(f) gx_saveimg1(gxWidenPath((const char*)(f)))
 #define gx_siA2(a, b)                                                         \
     _Generic(((a) + 0),                                                        \
-        char*:        gx_saveimg2(gxWiden((const char*)(a)),                   \
+        char*:        gx_saveimg2(gxWidenPath((const char*)(a)),                   \
                           (const IMAGE*)(size_t)(b)),                          \
-        const char*:  gx_saveimg2(gxWiden((const char*)(a)),                   \
+        const char*:  gx_saveimg2(gxWidenPath((const char*)(a)),                   \
                           (const IMAGE*)(size_t)(b)),                          \
-        default:      gx_saveimg2(gxWiden((const char*)(size_t)(b)),           \
+        default:      gx_saveimg2(gxWidenPath((const char*)(size_t)(b)),           \
                           (const IMAGE*)(size_t)(a)))
 #define saveimageA(...) GX_DISPATCH(gx_siA, __VA_ARGS__)
 #define gx_siW1(f) gx_saveimg1((const WCHAR*)(f))
@@ -11619,6 +11932,9 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
         const LOGFONTW*: gxGetFontW((LOGFONTW*)(p)))
 #define loadsvg(...)     GXS_CAT(gxs_load_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define putsvg(...)      GXS_CAT(gxs_put_,   GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define putsvgA(...)     GXS_CAT(gxs_putA_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define putsvgW(...)     GXS_CAT(gxs_putW_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define rotatesvg(...)   GXS_CAT(gxs_rot_,   GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define drawsvg(...)     GXS_CAT(gxs_draw_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define drawsvgfile(...) GXS_CAT(gxs_dfile_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
@@ -11628,8 +11944,8 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
 #define GXS_ISIMG(f) _Generic((f),                                      \
         const SVGIMG* : 1, SVGIMG* : 1, default : 0)
 #define loadsvgfile(e, f)                                              \
-    (GXS_ISWIDE(f) ? gxsLoadFileW((e), (const WCHAR*)(f))            \
-                    : gxsLoadFileA((e), (const char*)(f)))
+    (GXS_ISWIDE(f) ? loadsvgfileW((e), (const WCHAR*)(f))            \
+                    : loadsvgfileA((e), (const char*)(f)))
 /* loadsvgfromfile(&e, path) and loadsvgfromfile(&e, path, w, h): the
  * argument count picks the shape, _Generic picks the character type, the
  * same two steps loadsvgfile() takes. */
@@ -11655,7 +11971,7 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
         : (GXS_ISWIDE(a) ? gxsSaveW((const SVGIMG*)(b), (const WCHAR*)(a)) \
                           : gxsSaveA((const SVGIMG*)(b), (const char*)(a))))
 #else
-#define loadsvgfile(e, f) gxsLoadFileA((e), (const char*)(f))
+#define loadsvgfile(e, f) loadsvgfileA((e), (const char*)(f))
 #define savesvgfile(a, b) gxsSaveA((const SVGIMG*)(a), (const char*)(b))
 #define loadsvgfromfile(...) GXS_CAT(gxs_lff_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define gxs_lff_2(e, f)       gxsLoadFromFileA((e), (const char*)(f), 0, 0)
@@ -11720,6 +12036,10 @@ typedef struct GXSStyle {
     double   fontSize;
     int      anchor;          /* 0 start  1 middle  2 end */
     char     face[64];
+    int      bold, italic, underline, strike;   /* font-weight, font-style, text-decoration */
+    double   letterSpacing;
+    int      baseline;        /* dominant-baseline: 0 alphabetic  1 middle/central
+                                 2 before-edge/hanging/top  3 after-edge/bottom */
 
     int      clipId;          /* >=0: index of the clip-path region              */
 } GXSStyle;
@@ -11753,6 +12073,8 @@ typedef struct GXSCtx {
     char*     src0;           /* second, untouched copy: <use> looks ids up here */
     IMAGE*    target;
     int       depth;
+    int       txFlav;         /* GXS_TX_A / GXS_TX_W / GXS_TX_AUTO              */
+    double    penX, penY;     /* text cursor: a tspan without x/y continues here  */
 } GXSCtx;
 
 /* How deep <use> may nest.  A symbol that references itself, directly or
@@ -11984,7 +12306,6 @@ typedef struct GXSSize {
     double docW, docH;
 } GXSSize;
 
-
 static GXSMat gxsMatId(void) { GXSMat m = { 1, 0, 0, 1, 0, 0 }; return m; }
 
 static GXSMat gxsMatMul(const GXSMat* A, const GXSMat* B)
@@ -12013,6 +12334,20 @@ static double gxsMatScale(const GXSMat* m)
     double s1 = sqrt(m->a * m->a + m->b * m->b);
     double s2 = sqrt(m->c * m->c + m->d * m->d);
     return (s1 + s2) * 0.5;
+}
+
+/* Rotate rad radians clockwise about (cx, cy).  Positive is clockwise
+ * because y grows downwards - the convention rotateimage() and the SVG
+ * rotate() transform share, and the opposite of the textbook one. */
+static GXSMat gxsMatRot(double rad, double cx, double cy)
+{
+    GXSMat m, t1, t2;
+    double c = cos(rad), s = sin(rad);
+    m.a = c; m.b = s; m.c = -s; m.d = c; m.e = 0; m.f = 0;
+    t1 = gxsMatId(); t1.e =  cx; t1.f =  cy;
+    t2 = gxsMatId(); t2.e = -cx; t2.f = -cy;
+    m = gxsMatMul(&t1, &m);
+    return gxsMatMul(&m, &t2);
 }
 
 /* ==================================================================
@@ -12313,6 +12648,24 @@ static void gxsSkipSep(const char** p)
     while (**p && (gxsIsSpace(**p) || **p == ',')) (*p)++;
 }
 
+/* Open a transform function: any space, then the '(' SVG writes after
+ * the name, then whatever stands between that and the first number.
+ *
+ * gxsSkipSep() skips spaces and commas but NOT the parenthesis, and that
+ * one character broke every transform in every document: gxsNum() met
+ * '(' , failed, and gxsTransform() bailed out and returned the identity,
+ * so translate / scale / rotate / matrix / skewX / skewY were all
+ * silently ignored.  A text element carries its own scale in that
+ * attribute - this document asks for 40 x scale(0.27641) - so the text
+ * came out at the raw 40 instead of 11 and lost its position as well,
+ * which is what "huge, and floating up" looks like. */
+static void gxsSkipFn(const char** p)
+{
+    gxsSkipWs(p);
+    if (**p == '(') (*p)++;
+    gxsSkipSep(p);
+}
+
 static GXSMat gxsTransform(const char* s)
 {
     GXSMat m = gxsMatId();
@@ -12323,18 +12676,18 @@ static GXSMat gxsTransform(const char* s)
         gxsSkipWs(&p);
         if (!*p) break;
         if (strncmp(p, "translate", 9) == 0) {
-            double x = 0, y = 0; p += 9; gxsSkipSep(&p);
+            double x = 0, y = 0; p += 9; gxsSkipFn(&p);
             if (!gxsNum(&p, &x)) break;
             gxsSkipSep(&p); gxsNum(&p, &y);
             t.e = x; t.f = y;
         } else if (strncmp(p, "scale", 5) == 0) {
-            double x = 1, y = 1; p += 5; gxsSkipSep(&p);
+            double x = 1, y = 1; p += 5; gxsSkipFn(&p);
             if (!gxsNum(&p, &x)) break;
             gxsSkipSep(&p);
             if (!gxsNum(&p, &y)) y = x;
             t.a = x; t.d = y;
         } else if (strncmp(p, "rotate", 6) == 0) {
-            double a = 0, cx = 0, cy = 0; p += 6; gxsSkipSep(&p);
+            double a = 0, cx = 0, cy = 0; p += 6; gxsSkipFn(&p);
             if (!gxsNum(&p, &a)) break;
             a = a * GX_SVG_PI / 180.0;
             gxsSkipSep(&p);
@@ -12348,16 +12701,16 @@ static GXSMat gxsTransform(const char* s)
                 t = gxsMatMul(&o, &tmp);
             }
         } else if (strncmp(p, "matrix", 6) == 0) {
-            double v[6]; int i, ok = 1; p += 6; gxsSkipSep(&p);
+            double v[6]; int i, ok = 1; p += 6; gxsSkipFn(&p);
             for (i = 0; i < 6; i++) { gxsSkipSep(&p); if (!gxsNum(&p, &v[i])) { ok = 0; break; } }
             if (!ok) break;
             t.a = v[0]; t.b = v[1]; t.c = v[2]; t.d = v[3]; t.e = v[4]; t.f = v[5];
         } else if (strncmp(p, "skewX", 5) == 0) {
-            double a; p += 5; gxsSkipSep(&p);
+            double a; p += 5; gxsSkipFn(&p);
             if (!gxsNum(&p, &a)) break;
             t.c = tan(a * GX_SVG_PI / 180.0);
         } else if (strncmp(p, "skewY", 5) == 0) {
-            double a; p += 5; gxsSkipSep(&p);
+            double a; p += 5; gxsSkipFn(&p);
             if (!gxsNum(&p, &a)) break;
             t.b = tan(a * GX_SVG_PI / 180.0);
         } else {
@@ -12863,6 +13216,9 @@ static void gxsStyleDefault(GXSStyle* s)
     s->dashOff = 0;
     s->fontSize = 16;
     s->anchor = 0;
+    s->bold = s->italic = s->underline = s->strike = 0;
+    s->letterSpacing = 0;
+    s->baseline = 0;
     strcpy(s->face, "SimSun");  /* ASCII face name: independent of the source encoding */
     s->clipId = -1;
 }
@@ -12920,6 +13276,28 @@ static void gxsApplyProp(GXSStyle* s, const char* name, const char* v, GXSCtx* c
         if (gxsNum(&p, &d)) s->fontSize = d > 0 ? d : 1;
     } else if (strcmp(name, "font-family") == 0) {
         gxsCopyFace(s->face, sizeof(s->face), v);
+    } else if (strcmp(name, "font-weight") == 0) {
+        const char* p = v; double d;
+        /* The CSS keywords plus the numeric scale: 600 and up is bold. */
+        if (strncmp(v, "bold", 4) == 0 || strncmp(v, "bolder", 6) == 0) s->bold = 1;
+        else if (gxsNum(&p, &d)) s->bold = (d >= 600) ? 1 : 0;
+        else s->bold = 0;
+    } else if (strcmp(name, "font-style") == 0) {
+        s->italic = (strcmp(v, "italic") == 0 || strcmp(v, "oblique") == 0) ? 1 : 0;
+    } else if (strcmp(name, "text-decoration") == 0) {
+        /* A list: "underline line-through" sets both. */
+        s->underline = (strstr(v, "underline") != NULL) ? 1 : 0;
+        s->strike = (strstr(v, "line-through") != NULL) ? 1 : 0;
+    } else if (strcmp(name, "letter-spacing") == 0) {
+        const char* p = v; double d;
+        if (gxsNum(&p, &d)) s->letterSpacing = d;
+    } else if (strcmp(name, "dominant-baseline") == 0) {
+        if (strncmp(v, "middle", 6) == 0 || strncmp(v, "central", 7) == 0) s->baseline = 1;
+        else if (strncmp(v, "hanging", 7) == 0 || strncmp(v, "before-edge", 11) == 0 ||
+                 strncmp(v, "text-before-edge", 16) == 0 || strcmp(v, "top") == 0) s->baseline = 2;
+        else if (strncmp(v, "after-edge", 10) == 0 || strncmp(v, "text-after-edge", 15) == 0 ||
+                 strcmp(v, "bottom") == 0 || strcmp(v, "ideographic") == 0) s->baseline = 3;
+        else s->baseline = 0;
     } else if (strcmp(name, "text-anchor") == 0) {
         if (strcmp(v, "middle") == 0) s->anchor = 1;
         else if (strcmp(v, "end") == 0) s->anchor = 2;
@@ -12971,7 +13349,8 @@ static void gxsStyleFromTag(GXSStyle* base, const GXSTag* t, GXSCtx* cx, GXSStyl
         const char* n = t->a[i].name;
         if (strncmp(n, "fill", 4) == 0 || strncmp(n, "stroke", 6) == 0 ||
             strncmp(n, "opacity", 7) == 0 || strncmp(n, "font-", 5) == 0 ||
-            strncmp(n, "text-anchor", 11) == 0 || strncmp(n, "clip-path", 9) == 0)
+            strncmp(n, "text-", 5) == 0 || strncmp(n, "letter-spacing", 14) == 0 ||
+            strncmp(n, "clip-path", 9) == 0)
             gxsApplyProp(out, n, t->a[i].val, cx);
     }
     gxsApplyStyleStr(out, gxsAttr(t, "style"), cx);
@@ -13451,6 +13830,639 @@ static void gxsPathApply(GXSPath* pa, const GXSMat* m)
         }
 }
 
+/* ==================================================================
+ * Clipping
+ * ================================================================== */
+
+/* Clipping is global state, so it has to be put back the way it was found:
+ * clearing it outright released a clip the CALLER had set, and everything
+ * the program drew afterwards fell outside its own box. */
+typedef struct GXSClipSave {
+    int did;
+    int had;
+    int l, t, r, b;
+} GXSClipSave;
+
+static void gxsClipBegin(GXSCtx* cx, const GXSStyle* st, GXSClipSave* sv)
+{
+    GXSClip* c;
+    int l, t, r, bb;
+
+    sv->did = 0;
+    sv->had = 0;
+    if (st->clipId < 0 || st->clipId >= cx->clipN) return;
+
+    c = &cx->clip[st->clipId];
+    /* All FOUR corners, not two.  The clip rectangle is a user space box
+     * that reaches the screen through cx->xf, and that matrix may turn it
+     * (rotatesvg(), transform='rotate(...)', skewX / skewY).  Taking the
+     * transform of (l, t) and (r, b) alone only happens to bound the box
+     * while the matrix keeps the axes; once it turns, those two are just
+     * two opposite corners of a diamond and the box between them is the
+     * wrong one - at 45 degrees it is WIDTH ZERO, so everything the
+     * clipped group drew vanished.  min / max over all four corners is
+     * the axis aligned bound whatever the matrix does. */
+    {
+        GXSPt q[4];
+        double x0, y0, x1, y1;
+        int i;
+        q[0] = gxsXf(&cx->xf, c->l, c->t);
+        q[1] = gxsXf(&cx->xf, c->r, c->t);
+        q[2] = gxsXf(&cx->xf, c->r, c->b);
+        q[3] = gxsXf(&cx->xf, c->l, c->b);
+        x0 = x1 = q[0].x; y0 = y1 = q[0].y;
+        for (i = 1; i < 4; i++) {
+            if (q[i].x < x0) x0 = q[i].x;
+            if (q[i].x > x1) x1 = q[i].x;
+            if (q[i].y < y0) y0 = q[i].y;
+            if (q[i].y > y1) y1 = q[i].y;
+        }
+        l = (int)floor(x0 + 0.5); t  = (int)floor(y0 + 0.5);
+        r = (int)floor(x1 + 0.5); bb = (int)floor(y1 + 0.5);
+    }
+
+    sv->had = iscliprect() ? 1 : 0;
+    if (sv->had) getcliprect(&sv->l, &sv->t, &sv->r, &sv->b);
+    setcliprect(l, t, r, bb);
+    sv->did = 1;
+}
+
+static void gxsClipEnd(GXSClipSave* sv)
+{
+    if (!sv->did) return;
+    if (sv->had) setcliprect(sv->l, sv->t, sv->r, sv->b);
+    else         setcliprect(NULL);
+}
+
+/* ==================================================================
+ * Text
+ * ================================================================== */
+
+/* Per-character lists (x / y / dx / dy) are capped here.  SVG says a list
+ * shorter than the text repeats its last entry - which clamping the index
+ * to n-1 gives for free - so a longer text simply holds the last value. */
+#ifndef GXS_TXT_MAX
+#define GXS_TXT_MAX 32
+#endif
+
+static void gxsNumList(const char* s, double* out, int* n)
+{
+    const char* p = s;
+    int k = 0;
+    *n = 0;
+    if (!p) return;
+    while (k < GXS_TXT_MAX) {
+        double v;
+        gxsSkipSep(&p);
+        if (!gxsNum(&p, &v)) break;
+        out[k++] = v;
+    }
+    *n = k;
+}
+
+/* Bytes -> UTF-16 the way the document they came from says.
+ *
+ * Every file entry point now hands the renderer UTF-8, so UTF-8 is tried
+ * first and STRICTLY: a run that survives it is UTF-8 and each character
+ * is the one the file meant.  What fails it is text still travelling in
+ * the program's own code page - a document passed to loadsvg() as a
+ * string literal, say - and that is read with the code page settextcp()
+ * names, so a GBK literal keeps working.
+ *
+ * This is gxDupWideFromBytes() with the order reversed, not a second
+ * opinion on the rest of the library: outtextxy() and friends promise the
+ * ACTIVE code page and programs rely on it, while a document is a file
+ * with an encoding of its own. */
+static WCHAR* gxsDupWide(const char* s)
+{
+    int n;
+    WCHAR* out;
+
+    if (!s) return NULL;
+    n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
+    if (n <= 0) n = MultiByteToWideChar(g_gx_textCodePage, 0, s, -1, NULL, 0);
+    if (n <= 0) {
+        out = (WCHAR*)malloc(sizeof(WCHAR));
+        if (out) out[0] = 0;
+        return out;
+    }
+    out = (WCHAR*)malloc((size_t)n * sizeof(WCHAR));
+    if (!out) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, n) <= 0) {
+        if (MultiByteToWideChar(g_gx_textCodePage, 0, s, -1, out, n) <= 0) out[0] = 0;
+    }
+    return out;
+}
+
+/* Ascent and descent of the current font, in logical pixels - the unit
+ * settextstyle() takes.  SVG's y is the BASELINE while easygl draws from
+ * the top left corner, so a glyph has to be lifted by the ascent first. */
+static void gxsFontMetrics(double* asc, double* desc)
+{
+    TEXTMETRICW tm;
+    HGDIOBJ old;
+    double inv;
+
+    int fid;
+
+    if (asc)  *asc  = 0;
+    if (desc) *desc = 0;
+    if (!g_gx_fontDC) g_gx_fontDC = CreateCompatibleDC(NULL);
+    if (!g_gx_fontDC) return;
+    /* The id has to be taken BEFORE the array is indexed, never inside the
+     * subscript.  gxGetFontId() is not a lookup: the first time it meets a
+     * font it appends one, and GxFontVec_pushv() reallocs - on the very
+     * first call that turns g_gx_fonts.data from NULL into a real pointer.
+     *
+     * C does not say which of "read .data" and "call gxGetFontId()" happens
+     * first, and gcc -O2 hoists the load: it took the old value of .data,
+     * let the call replace it, then indexed the stale one - NULL - and the
+     * program died with 0xC0000005 the first time any SVG held a <text>.
+     * Later calls were fine because the font was cached and nothing
+     * reallocs then, which is why it looked like a drawing problem. */
+    fid = gxGetFontId(&g_gx_font);
+    if (fid < 0 || fid >= (int)g_gx_fonts.size) return;
+    old = SelectObject(g_gx_fontDC, g_gx_fonts.data[fid].hfont);
+    memset(&tm, 0, sizeof(tm));
+    GetTextMetricsW(g_gx_fontDC, &tm);
+    SelectObject(g_gx_fontDC, old);
+    inv = gxInvScaleY();
+    if (asc)  *asc  = (double)tm.tmAscent  * inv;
+    if (desc) *desc = (double)tm.tmDescent * inv;
+}
+
+/* <text> and <tspan>.  Every glyph is placed on its own, which is the only
+ * way x / y / dx / dy / letter-spacing - each of which can address a single
+ * character - can be honoured.  The pen lives in the context in VIEW BOX
+ * units, so a <tspan> without x / y continues where the last glyph ended:
+ * that is what makes a run of tspans one line.
+ *
+ * *p is moved past the character data for <text>, whose children (the
+ * tspans) are then rendered by the caller's loop, and left alone for
+ * <tspan>, whose character data IS the content. */
+
+/* Can this run of UTF-16 be written as bytes and read back unchanged?
+ *
+ * That is the whole question AUTO has to answer.  outtextxyA() takes
+ * bytes, and bytes only mean something together with a code page - the
+ * one gettextcp() names.  A glyph that page cannot express comes back as
+ * a '?', so the text has to go the W way instead, which never loses
+ * anything.  Rather than keep a table of what every page can hold, the
+ * text is converted and converted back and the two are compared: the
+ * round trip is exact or the answer is W.
+ *
+ * Never call the bare outtextxy() in here.  In C it is a _Generic macro
+ * and in C++ a set of overloads, so on this code path - inside a function
+ * that picks the flavour - it would dispatch a second time and pick
+ * whichever the ARGUMENT type happens to suggest, not the one decided
+ * above.  Both flavours are called by name. */
+static int gxsGlyphFitsA(const WCHAR* w)
+{
+    char* b;
+    WCHAR* back;
+    int ok;
+
+    if (!w) return 0;
+    b = gxDupBytesFromWide(w);
+    if (!b) return 0;
+    back = gxDupWideFromBytes(b);
+    free(b);
+    if (!back) return 0;
+    ok = (wcscmp(w, back) == 0);
+    free(back);
+    return ok;
+}
+
+/* Draw one run at (x, y) in the flavour this document was asked for.
+ * Called by name on purpose - see gxsGlyphFitsA(). */
+static void gxsDrawRun(int x, int y, const WCHAR* w, int flav)
+{
+    if (flav == GXS_TX_W) { outtextxyW(x, y, w); return; }
+    if (flav == GXS_TX_A) {
+        char* b = gxDupBytesFromWide(w);
+        if (b) { outtextxyA(x, y, b); free(b); }
+        return;
+    }
+    if (gxsGlyphFitsA(w)) {
+        char* b = gxDupBytesFromWide(w);
+        if (b) { outtextxyA(x, y, b); free(b); return; }
+    }
+    outtextxyW(x, y, w);
+}
+
+static void gxsDrawText(GXSCtx* cx, const GXSTag* t, GXSStyle* st, char** p)
+{
+    double xa[GXS_TXT_MAX], ya[GXS_TXT_MAX], dxa[GXS_TXT_MAX], dya[GXS_TXT_MAX];
+    int    xn = 0, yn = 0, dxn = 0, dyn = 0;
+    int    isText = (strcmp(t->name, "text") == 0);
+    GXSClipSave csv;
+    double scale, fs, asc, desc, lift, penX, penY, ox, total;
+    int    hEm;
+    char *end, *body, save;
+    WCHAR* w;
+    int i, ci, n, vis;
+
+    end = strchr(*p, '<');
+    if (!end) end = *p + strlen(*p);
+    save = *end;
+    *end = 0;
+    /* &amp; &lt; &gt; &quot; &apos; and &#nn; - an escape used to reach
+     * outtextxy() as the five characters it is written with. */
+    body = gxsUnescape(*p);
+    *end = save;
+    if (!body) { if (isText) *p = end; return; }
+    w = gxsDupWide(body);
+    free(body);
+    if (!w) { if (isText) *p = end; return; }
+    n = (int)wcslen(w);
+
+    gxsNumList(gxsAttr(t, "x"),  xa,  &xn);
+    gxsNumList(gxsAttr(t, "y"),  ya,  &yn);
+    gxsNumList(gxsAttr(t, "dx"), dxa, &dxn);
+    gxsNumList(gxsAttr(t, "dy"), dya, &dyn);
+
+    scale = gxsMatScale(&cx->xf);
+    if (!(scale > 1e-9)) scale = 1;
+    /* Asked for as an EM, which means handing settextstyle() a NEGATIVE
+     * height: a positive one is easygl's "cell height" - ascent + descent
+     * + internal leading - and internal leading is not the same from
+     * face to face, so one font-size came out smaller than the document
+     * asked for by a DIFFERENT amount in every family.  Two families at
+     * the same font-size drew at two different sizes, which is what
+     * "the sizes are all over the place" looks like.  Negative is
+     * Windows' character height, i.e. the em, i.e. what SVG means and
+     * what a browser draws.
+     *
+     * fs stays positive - the metrics below and the pen advance are all
+     * in those terms - and only the height handed to the setter is
+     * negated, rounded on the MAGNITUDE first: (int)(fs + 0.5) on a
+     * negative fs truncates towards zero and would turn 11.06 into 10. */
+    fs = st->fontSize * scale;
+    if (fs < 1) fs = 1;
+    hEm = -(int)(fs + 0.5);
+    /* The wide setter, not gxSetTextStyle9A(): a face name in the
+     * document is UTF-8 like the rest of it, and the A flavour would read
+     * it with the active code page and turn a Chinese family into
+     * nonsense, which then matches no font and falls back to the default
+     * one.  Converted here, the name is whatever the file said. */
+    {
+        WCHAR* wf = gxsDupWide(st->face);
+        gxSetTextStyle9W(hEm, 0, wf, 0, 0,
+                         st->bold ? 700 : 400, st->italic, st->underline,
+                         st->strike);
+        free(wf);
+    }
+    gxsFontMetrics(&asc, &desc);
+
+/* Where the top of the box sits, measured from the baseline. */
+    if      (st->baseline == 1) lift = -(asc + desc) * 0.5;  /* middle      */
+    else if (st->baseline == 2) lift = 0;                    /* before-edge */
+    else if (st->baseline == 3) lift = -(asc + desc);        /* after-edge  */
+    else                        lift = -asc;                 /* alphabetic  */
+
+    penX = cx->penX;
+    penY = cx->penY;
+    if (xn) penX = xa[0]; else if (isText) penX = 0;
+    if (yn) penY = ya[0]; else if (isText) penY = 0;
+
+    /* text-anchor needs the width of the run, so the advances come first. */
+    total = 0;
+    for (i = 0, ci = 0; i < n; ci++) {
+        int step = (w[i] >= 0xD800 && w[i] < 0xDC00 && i + 1 < n) ? 2 : 1;
+        WCHAR buf[3];
+        buf[0] = w[i];
+        buf[1] = (step == 2) ? w[i + 1] : 0;
+        buf[2] = 0;
+        total += (double)textwidthW(buf) / scale;
+        i += step;
+    }
+    total += st->letterSpacing * (ci > 1 ? ci - 1 : 0);
+    ox = (st->anchor == 1) ? -total * 0.5 : (st->anchor == 2) ? -total : 0;
+
+    vis = (!st->fillNone && st->fillOpacity > 0 && st->opacity > 0);
+    if (vis) {
+        gxsClipBegin(cx, st, &csv);
+        settextcolor(st->fillGrad >= 0 ? gxsGradAvg(cx, st->fillGrad) : st->fill);
+        setalpha(gxsToAlpha(st->fillOpacity * st->opacity));
+    }
+
+    for (i = 0, ci = 0; i < n; ci++) {
+        int step = (w[i] >= 0xD800 && w[i] < 0xDC00 && i + 1 < n) ? 2 : 1;
+        WCHAR buf[3];
+        buf[0] = w[i];
+        buf[1] = (step == 2) ? w[i + 1] : 0;
+        buf[2] = 0;
+        /* Only the characters a list actually names are moved.  A list
+         * shorter than the run used to have its LAST value clamped onto
+         * every remaining character, so x='0' froze the pen at 0 and
+         * dy='46.15' added another 46.15 for EVERY character: the glyphs
+         * all sat at one x and marched downwards, which is exactly what
+         * turns a document like this one - one <tspan> per line, each
+         * carrying x='0' and a dy - into a single column of characters
+         * down the left edge.  Past the end of a list a character simply
+         * continues from where the one before it ended, which is what an
+         * absent x / dx has always meant. */
+        if (xn  && ci < xn ) penX  = xa [ci];
+        if (dxn && ci < dxn) penX += dxa[ci];
+        if (yn  && ci < yn ) penY  = ya [ci];
+        if (dyn && ci < dyn) penY += dya[ci];
+        if (vis) {
+            GXSPt o = gxsXf(&cx->xf, penX + ox, penY);
+            gxsDrawRun((int)floor(o.x + 0.5), (int)floor(o.y + lift + 0.5),
+                       buf, cx->txFlav);
+        }
+        penX += (double)textwidthW(buf) / scale + st->letterSpacing;
+        i += step;
+    }
+    cx->penX = penX;
+    cx->penY = penY;
+
+    if (vis) {
+        setalpha(0);
+        gxsClipEnd(&csv);
+    }
+    free(w);
+    if (isText) *p = end;
+}
+
+/* ==================================================================
+ * Embedded images
+ * ================================================================== */
+
+/* <image href="...">.  Three kinds of source: a data: URI, an http(s)
+ * URL, and a plain file path.  The first two are materialised as a file
+ * and then loaded with loadimage(), and the result is CACHED by source:
+ * putsvg() re-parses the document on every call, so downloading or
+ * decoding on every frame is not an option.
+ *
+ * urlmon is loaded on demand rather than linked, so a program that never
+ * asks for a URL does not depend on it, and one on a machine without it
+ * fails the image instead of failing to link. */
+#ifndef GXS_IMG_MAX
+#define GXS_IMG_MAX 32
+#endif
+
+#define GXS_MIN2(a, b) ((a) < (b) ? (a) : (b))
+#define GXS_MAX2(a, b) ((a) > (b) ? (a) : (b))
+
+typedef long (WINAPI* GXSPfnUrlW)(void*, const WCHAR*, const WCHAR*,
+                                  unsigned long, void*);
+static GXSPfnUrlW gxsUrlDownload = NULL;
+static int        gxsUrlState    = 0;   /* 0 not tried, 1 ready, -1 missing */
+static int        gxsImgSeq      = 0;
+
+static int gxsNetReady(void)
+{
+    HMODULE h;
+    if (gxsUrlState) return gxsUrlState > 0;
+    gxsUrlState = -1;
+    h = LoadLibraryA("urlmon.dll");
+    if (h) {
+        FARPROC f = GetProcAddress(h, "URLDownloadToFileW");
+        if (f) {
+            gxsUrlDownload = (GXSPfnUrlW)f;
+            gxsUrlState = 1;
+        }
+    }
+    return gxsUrlState > 0;
+}
+
+static struct GXSImgEnt {
+    char*  key;
+    IMAGE  img;
+} g_gxsImg[GXS_IMG_MAX];
+static int g_gxsImgN = 0;
+
+/* The cached image for this source, or an empty slot to fill.  When the
+ * cache is full the oldest entry is dropped: there is no cheaper rule
+ * that is not wrong, and a document with more live <image> sources than
+ * this is rare. */
+static IMAGE* gxsImgSlot(const char* key, int* found)
+{
+    int i;
+    for (i = 0; i < g_gxsImgN; i++)
+        if (strcmp(g_gxsImg[i].key, key) == 0) { *found = 1; return &g_gxsImg[i].img; }
+    *found = 0;
+    if (g_gxsImgN < GXS_IMG_MAX) {
+        i = g_gxsImgN++;
+    } else {
+        free(g_gxsImg[0].key);
+        memmove(&g_gxsImg[0], &g_gxsImg[1],
+                (size_t)(GXS_IMG_MAX - 1) * sizeof(g_gxsImg[0]));
+        i = GXS_IMG_MAX - 1;
+    }
+    g_gxsImg[i].key = gxsStrDup(key);
+    if (!g_gxsImg[i].key) { g_gxsImgN--; return NULL; }
+    memset(&g_gxsImg[i].img, 0, sizeof(IMAGE));
+    return &g_gxsImg[i].img;
+}
+
+static void gxsImgDrop(IMAGE* im)
+{
+    int i;
+    for (i = 0; i < g_gxsImgN; i++) {
+        if (&g_gxsImg[i].img != im) continue;
+        free(g_gxsImg[i].key);
+        memmove(&g_gxsImg[i], &g_gxsImg[i + 1],
+                (size_t)(g_gxsImgN - i - 1) * sizeof(g_gxsImg[0]));
+        g_gxsImgN--;
+        return;
+    }
+}
+
+static int gxsB64Val(int c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+/* base64 -> bytes.  Anything that is not in the alphabet - newlines, the
+ * '=' padding, stray spaces - is skipped, so a wrapped data: URI decodes
+ * too.  Returns malloc'd memory, *outN = length. */
+static unsigned char* gxsB64Decode(const char* s, size_t* outN)
+{
+    unsigned char* out = (unsigned char*)malloc(strlen(s) / 4 * 3 + 4);
+    size_t n = 0;
+    unsigned int acc = 0;
+    int bits = 0;
+
+    if (!out) return NULL;
+    for (; *s; s++) {
+        int v = gxsB64Val((unsigned char)*s);
+        if (v < 0) continue;
+        acc = (acc << 6) | (unsigned int)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out[n++] = (unsigned char)((acc >> bits) & 0xFFu);
+        }
+        /* Throw away what was just emitted.  acc used to keep every bit it
+         * had ever been given, so after four characters it held 24 stale
+         * ones and two characters later the shift left ran out of an int -
+         * undefined behaviour, which is not "wrong on paper": at -O2 the
+         * compiler is entitled to assume the shift never overflows and
+         * emit whatever follows from that.  Only the low `bits` are still
+         * wanted, and bits is always 0..5, so acc now stays under 64. */
+        acc &= (1u << bits) - 1u;
+    }
+    *outN = n;
+    return out;
+}
+
+static void gxsTmpPath(WCHAR* out, const WCHAR* ext)
+{
+    WCHAR dir[MAX_PATH];
+    DWORD k = GetTempPathW(MAX_PATH, dir);
+    if (!k || k > MAX_PATH) wcscpy(dir, L".\\");
+    _snwprintf(out, MAX_PATH, L"%seasygl_%u_%u.%s", dir,
+               (unsigned)GetCurrentProcessId(), (unsigned)gxsImgSeq++, ext);
+    out[MAX_PATH - 1] = 0;
+}
+
+/* Which extension a data: URI is asking for.  loadimage() goes by the
+ * bytes anyway, so this only has to keep the name honest. */
+static void gxsMimeExt(const char* mime, WCHAR* ext)
+{
+    if (strstr(mime, "gif"))      wcscpy(ext, L"gif");
+    else if (strstr(mime, "jpeg") || strstr(mime, "jpg")) wcscpy(ext, L"jpg");
+    else if (strstr(mime, "bmp")) wcscpy(ext, L"bmp");
+    else                          wcscpy(ext, L"png");
+}
+
+/* Materialise the source as a file and load it.  *tmp receives the file
+ * that has to be deleted afterwards, or L"" when the source was a path. */
+static int gxsImgLoad(IMAGE* im, const char* href, WCHAR* tmp)
+{
+    unsigned char* raw;
+    size_t n;
+    WCHAR* wh;
+
+    tmp[0] = 0;
+    if (strncmp(href, "data:", 5) == 0) {
+        const char* b64 = strstr(href, ";base64,");
+        WCHAR ext[8];
+        if (b64) b64 += 8;
+        else {                                  /* an unencoded data: URI */
+            b64 = strchr(href, ',');
+            if (!b64) return 0;
+            b64++;
+        }
+        raw = gxsB64Decode(b64, &n);
+        if (!raw) return 0;
+        gxsMimeExt(href, ext);
+        gxsTmpPath(tmp, ext);
+        wh = NULL;
+        {
+            FILE* f = _wfopen(tmp, L"wb");
+            int ok = 0;
+            if (f) {
+                ok = (n == 0) || (fwrite(raw, 1, n, f) == n);
+                fclose(f);
+            }
+            free(raw);
+            if (!ok) return 0;
+        }
+    } else if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) {
+        if (!gxsNetReady()) return 0;
+        wh = gxDupWideFromBytesPath(href);
+        if (!wh) return 0;
+        gxsTmpPath(tmp, L"img");
+        /* BINDF_GETNEWESTVERSION is not asked for: the file is cached per
+         * document, not per frame, and 0 means "use the cache". */
+        if (gxsUrlDownload(NULL, wh, tmp, 0, NULL) != 0) { free(wh); return 0; }
+        free(wh);
+        wh = NULL;
+    } else {
+        wh = gxDupWideFromBytesPath(href);
+        if (!wh) return 0;
+    }
+
+    gx_loadimg2(im, wh ? wh : tmp);
+    free(wh);
+    return gxImageOk(im) ? 1 : 0;
+}
+
+/* preserveAspectRatio="<align> <meetOrSlice>": fits sw x sh (the element's
+ * own box) around an image of iw x ih.  align is "none", or xMin/xMid/xMax
+ * followed by yMin/yMid/yMax.  Drawing is axis aligned, so a rotated or
+ * sheared transform is not honoured - the box is taken as it stands. */
+static void gxsFitImage(const char* par, double iw, double ih, double sw, double sh,
+                        double* w, double* h, double* ox, double* oy)
+{
+    double sx = sw / (iw > 0 ? iw : 1);
+    double sy = sh / (ih > 0 ? ih : 1);
+    double ax = 0.5, ay = 0.5, sc;
+
+    if (!par || !*par) par = "xMidYMid meet";
+    if (strncmp(par, "none", 4) == 0) {
+        *w = sw; *h = sh; *ox = 0; *oy = 0;
+        return;
+    }
+    sc = strstr(par, "slice") ? (sx > sy ? sx : sy) : (sx < sy ? sx : sy);
+    if      (strncmp(par, "xMin", 4) == 0) ax = 0;
+    else if (strncmp(par, "xMax", 4) == 0) ax = 1;
+    if      (strstr(par, "YMin")) ay = 0;
+    else if (strstr(par, "YMax")) ay = 1;
+    *w = iw * sc;
+    *h = ih * sc;
+    *ox = (sw - *w) * ax;
+    *oy = (sh - *h) * ay;
+}
+
+static void gxsDrawImage(GXSCtx* cx, const GXSTag* t, GXSStyle* st)
+{
+    const char* href = gxsHref(t);
+    IMAGE* im;
+    int found;
+    WCHAR tmp[MAX_PATH];
+    GXSClipSave csv;
+    GXSPt a, b;
+    double ix, iy, iw, ih, w, h, ox, oy, l, tp, r, bt;
+
+    if (!href || st->opacity <= 0) return;
+    im = gxsImgSlot(href, &found);
+    if (!im) return;
+    if (!found) {
+        if (!gxsImgLoad(im, href, tmp)) {
+            gxsImgDrop(im);
+            if (tmp[0]) _wremove(tmp);
+            return;
+        }
+    }
+    if (!gxImageOk(im)) return;
+
+    ix = gxsD(t, "x", 0);
+    iy = gxsD(t, "y", 0);
+    iw = gxsD(t, "width",  (double)im->logW);
+    ih = gxsD(t, "height", (double)im->logH);
+    if (!(iw > 0) || !(ih > 0)) return;
+    gxsFitImage(gxsAttr(t, "preserveAspectRatio"), im->logW, im->logH, iw, ih,
+                &w, &h, &ox, &oy);
+
+    gxsClipBegin(cx, st, &csv);
+    /* The four corners, not two: a flipped matrix would otherwise swap
+     * them and putimage() draws the box the way round it is given. */
+    a = gxsXf(&cx->xf, ix + ox,       iy + oy);
+    b = gxsXf(&cx->xf, ix + ox + w,   iy + oy + h);
+    {
+        GXSPt c = gxsXf(&cx->xf, ix + ox,     iy + oy + h);
+        GXSPt d = gxsXf(&cx->xf, ix + ox + w, iy + oy);
+        l  = GXS_MIN2(GXS_MIN2(a.x, b.x), GXS_MIN2(c.x, d.x));
+        tp = GXS_MIN2(GXS_MIN2(a.y, b.y), GXS_MIN2(c.y, d.y));
+        r  = GXS_MAX2(GXS_MAX2(a.x, b.x), GXS_MAX2(c.x, d.x));
+        bt = GXS_MAX2(GXS_MAX2(a.y, b.y), GXS_MAX2(c.y, d.y));
+    }
+    if (r - l >= 0.5 && bt - tp >= 0.5)
+        gxPutImage7((int)floor(l + 0.5), (int)floor(tp + 0.5),
+                    (int)(r - l + 0.5), (int)(bt - tp + 0.5),
+                    im, 0, 0);
+    gxsClipEnd(&csv);
+}
+
 static void gxsRenderChildren(char** p, GXSCtx* cx, GXSStyle* base,
                                GXSMat xf, const char* until);
 
@@ -13611,59 +14623,20 @@ static void gxsRenderChildren(char** p, GXSCtx* cx, GXSStyle* base,
             gxsPathApply(&pa, &cx->xf);
             gxsDrawShape(cx, &pa, &st, gxsMatScale(&cx->xf));
             gxsPathFree(&pa);
-        } else if (strcmp(t.name, "text") == 0 || strcmp(t.name, "tspan") == 0) {
-            GXSPt o = gxsXf(&cx->xf, gxsD(&t, "x", 0), gxsD(&t, "y", 0));
-            char* txt = *p;
-            char* end = strchr(txt, '<');
-            int didClip = 0, hadClip = 0;
-            int cl = 0, ct = 0, cr = 0, cb = 0;
-            if (end == NULL) end = txt + strlen(txt);   /* text to the very end */
-            if (st.clipId >= 0 && st.clipId < cx->clipN) {
-                GXSClip* c = &cx->clip[st.clipId];
-                GXSPt a = gxsXf(&cx->xf, c->l, c->t);
-                GXSPt b = gxsXf(&cx->xf, c->r, c->b);
-                int l = (int)floor(a.x + 0.5), tp = (int)floor(a.y + 0.5);
-                int r = (int)floor(b.x + 0.5), bt = (int)floor(b.y + 0.5);
-                if (l > r) { int sw = l; l = r; r = sw; }
-                if (tp > bt) { int sw = tp; tp = bt; bt = sw; }
-                hadClip = iscliprect() ? 1 : 0;
-                if (hadClip) getcliprect(&cl, &ct, &cr, &cb);
-                setcliprect(l, tp, r, bt);
-                didClip = 1;
-            }
-            {
-                char save = *end;
-                char* body;
-                *end = 0;
-                /* &amp; &lt; &gt; &quot; &apos; and the numeric forms: an
-                 * escaped character used to reach outtextxy() as the five
-                 * characters it is written with, so "AT&amp;T" printed
-                 * "AT&amp;T". */
-                body = gxsUnescape(txt);
-                if (body) {
-                    if (!st.fillNone && st.fillOpacity > 0 && st.opacity > 0) {
-                        double fs = st.fontSize * gxsMatScale(&cx->xf);
-                        if (fs < 1) fs = 1;
-                        settextstyle((int)(fs + 0.5), 0, st.face);
-                        settextcolor(st.fillGrad >= 0 ? gxsGradAvg(cx, st.fillGrad) : st.fill);
-                        setalpha(gxsToAlpha(st.fillOpacity * st.opacity));
-                        if (st.anchor != 0) {
-                            int tw = textwidth(body);
-                            if (st.anchor == 1) o.x -= tw * 0.5;
-                            else o.x -= tw;
-                        }
-                        outtextxy((int)(o.x + 0.5), (int)(o.y + 0.5), body);
-                        setalpha(0);
-                    }
-                    free(body);
-                }
-                *end = save;
-                if (strcmp(t.name, "text") == 0) *p = end;
-            }
-            if (didClip) {
-                if (hadClip) setcliprect(cl, ct, cr, cb);
-                else setcliprect(NULL);
-            }
+        } else if (strcmp(t.name, "text") == 0) {
+            gxsDrawText(cx, &t, &st, p);
+            /* A <text> is a container: its children have to be rendered
+             * from ITS style, not from the enclosing group's.  Left to
+             * the caller's loop they inherited the group instead, so a
+             * <tspan> that carries nothing but x / dy - which is how a
+             * multi line label is written - lost the font-size and
+             * font-family written on the <text> around it and came out
+             * at the default 16 in the default face. */
+            if (!t.selfClose) gxsRenderChildren(p, cx, &st, cx->xf, "text");
+        } else if (strcmp(t.name, "tspan") == 0) {
+            gxsDrawText(cx, &t, &st, p);
+        } else if (strcmp(t.name, "image") == 0) {
+            gxsDrawImage(cx, &t, &st);
         } else if (strcmp(t.name, "use") == 0) {
             const char* h = gxsHref(&t);
             if (h && cx->src0) {
@@ -13780,17 +14753,21 @@ static GX_UNUSED void gxsIntrinsic(const GXSSize* s, int* w, int* h)
 
 /* Slurp a file into a NUL-terminated buffer.  NULL on any failure.
  *
+ * The byte flavour opens with fopen(), so the name is whatever the
+ * process' own code page makes of those bytes.
+ *
  * ftell() is checked: on a directory or on anything else that cannot be
  * seeked it returns -1, and casting that straight to size_t asked for
  * four gigabytes.  A short read is not an error either - the text simply
  * ends where the file does. */
-static GX_UNUSED char* gxsReadFile(const char* path)
+static GX_UNUSED char* gxsReadFile(const char* path, size_t* outN)
 {
     FILE* f;
     char* b;
     long len;
     size_t got;
 
+    if (outN) *outN = 0;
     if (!path || !*path) return NULL;
     f = fopen(path, "rb");
     if (!f) return NULL;
@@ -13802,6 +14779,7 @@ static GX_UNUSED char* gxsReadFile(const char* path)
     if (!b) { fclose(f); return NULL; }
     got = fread(b, 1, (size_t)len, f);
     b[got] = 0;
+    if (outN) *outN = got;
     fclose(f);
     return b;
 }
@@ -13814,7 +14792,7 @@ static GX_UNUSED char* gxsReadFile(const char* path)
  * it - came back as a string of '?' and open() failed, so loadsvgfile()
  * with a WCHAR path could not open files that the shell lists perfectly
  * well.  _wfopen() takes the name as it is. */
-static GX_UNUSED char* gxsReadFileW(const WCHAR* path)
+static GX_UNUSED char* gxsReadFileW(const WCHAR* path, size_t* outN)
 {
 #if defined(_WIN32)
     FILE* f;
@@ -13822,6 +14800,7 @@ static GX_UNUSED char* gxsReadFileW(const WCHAR* path)
     long len;
     size_t got;
 
+    if (outN) *outN = 0;
     if (!path || !*path) return NULL;
     f = _wfopen(path, L"rb");
     if (!f) return NULL;
@@ -13833,14 +14812,155 @@ static GX_UNUSED char* gxsReadFileW(const WCHAR* path)
     if (!b) { fclose(f); return NULL; }
     got = fread(b, 1, (size_t)len, f);
     b[got] = 0;
+    if (outN) *outN = got;
     fclose(f);
     return b;
 #else
-    char* a = gxDupBytesFromWide(path);
+    char* a = gxDupBytesFromWidePath(path);
     char* r;
     if (!a) return NULL;
-    r = gxsReadFile(a);
+    r = gxsReadFile(a, outN);
     free(a);
+    return r;
+#endif
+}
+
+/* ==================================================================
+ * What encoding the file was in
+ * ================================================================== */
+
+/* UTF-16 -> UTF-8.  n counts WCHARs. */
+static GX_UNUSED char* gxsUtf16ToUtf8(const WCHAR* w, int n)
+{
+    int m;
+    char* out;
+
+    m = WideCharToMultiByte(CP_UTF8, 0, w, n, NULL, 0, NULL, NULL);
+    if (m <= 0) return NULL;
+    out = (char*)malloc((size_t)m + 1);
+    if (!out) return NULL;
+    if (WideCharToMultiByte(CP_UTF8, 0, w, n, out, m, NULL, NULL) <= 0) {
+        free(out);
+        return NULL;
+    }
+    out[m] = 0;
+    return out;
+}
+
+/* The bytes of a file -> UTF-8, which is what an SVGIMG holds from here
+ * on, whatever the file was written in.  Returns malloc'd NUL terminated
+ * text, or NULL.
+ *
+ * A BOM settles it when there is one: EF BB BF is UTF-8, FF FE is UTF-16
+ * little endian, FE FF is big endian.  Windows is little endian itself,
+ * so the first of those two is already a WCHAR string and the second has
+ * to have its bytes swapped.
+ *
+ * Without a BOM the file is either UTF-8 - the usual case, and what the
+ * SVG spec asks for - or ANSI in the code page settextcp() names.  A STRICT
+ * UTF-8 conversion is what tells them apart: it refuses the whole string
+ * if any part of it is not really UTF-8, and GBK / Big5 almost always
+ * fail it, because a lead byte there is followed by a continuation that
+ * UTF-8 does not allow.  Failing it is the ANSI path: the bytes are read
+ * as ANSI and what they MEAN is converted.
+ *
+ * Guessing is safe because the two barely overlap: pure ASCII decodes the
+ * same either way, so a document with no accented letter in it cannot be
+ * misread however this falls out. */
+static GX_UNUSED char* gxsDecodeText(const char* b, size_t n)
+{
+    const unsigned char* u = (const unsigned char*)b;
+    char*  out;
+    WCHAR* w;
+    UINT   cp;
+    int    m;
+
+    if (!b) return NULL;
+    if (n >= 3 && u[0] == 0xEF && u[1] == 0xBB && u[2] == 0xBF) {
+        /* n - 3 bytes of text plus the terminator, so n - 2. */
+        out = (char*)malloc(n - 2);
+        if (!out) return NULL;
+        memcpy(out, b + 3, n - 3);
+        out[n - 3] = 0;
+        return out;
+    }
+    if (n >= 2 && u[0] == 0xFF && u[1] == 0xFE)
+        return gxsUtf16ToUtf8((const WCHAR*)(const void*)(b + 2),
+                              (int)((n - 2) / sizeof(WCHAR)));
+    if (n >= 2 && u[0] == 0xFE && u[1] == 0xFF) {
+        size_t cnt = (n - 2) / 2, i;
+        w = (WCHAR*)malloc((cnt + 1) * sizeof(WCHAR));
+        if (!w) return NULL;
+        for (i = 0; i < cnt; i++)
+            w[i] = (WCHAR)(((unsigned)u[2 + i * 2] << 8) | u[3 + i * 2]);
+        w[cnt] = 0;
+        out = gxsUtf16ToUtf8(w, (int)cnt);
+        free(w);
+        return out;
+    }
+    m = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, b, (int)n, NULL, 0);
+    if (m > 0) {                       /* already UTF-8: keep the bytes */
+        out = (char*)malloc(n + 1);
+        if (!out) return NULL;
+        memcpy(out, b, n);
+        out[n] = 0;
+        return out;
+    }
+    /* Not UTF-8, so it is ANSI and settextcp() says which.  Note the A / W
+     * on the function name is what names the encoding of the PATH; the
+     * code page names the encoding of the CONTENT.  The two are separate
+     * on purpose, because a GBK file name with a UTF-8 document inside it
+     * is the ordinary case on a Chinese Windows and neither knob should
+     * drag the other around.
+     *
+     * 65001 is CP_UTF8, i.e. "Unicode" as Windows counts it.  Asking for
+     * it HERE adds nothing - the strict pass above just tried exactly
+     * that and refused - so it falls through to the system ANSI page
+     * instead of failing the load.  A program that sets 65001 for its own
+     * literals still reads its GBK documents. */
+    cp = (g_gx_textCodePage == CP_UTF8) ? CP_ACP : g_gx_textCodePage;
+    m = MultiByteToWideChar(cp, 0, b, (int)n, NULL, 0);
+    if (m <= 0) return NULL;
+    w = (WCHAR*)malloc((size_t)m * sizeof(WCHAR));
+    if (!w) return NULL;
+    if (MultiByteToWideChar(cp, 0, b, (int)n, w, m) <= 0) {
+        free(w);
+        return NULL;
+    }
+    out = gxsUtf16ToUtf8(w, m);
+    free(w);
+    return out;
+}
+
+/* Read a file and hand back UTF-8, whichever of the above it turned out
+ * to be.  This is what every file entry point goes through, so no SVGIMG
+ * ever holds anything else. */
+static GX_UNUSED char* gxsReadFileUtf8W(const WCHAR* path)
+{
+    size_t n = 0;
+    char* b = gxsReadFileW(path, &n);
+    char* r;
+    if (!b) return NULL;
+    r = gxsDecodeText(b, n);
+    free(b);
+    return r;
+}
+
+static GX_UNUSED char* gxsReadFileUtf8(const char* path)
+{
+#if defined(_WIN32)
+    /* The name goes through gxWidenPath(), the same conversion loadimageA()
+     * uses, so it is decoded with the code page setpathcp() names - the
+     * PATH knob - and not with the one that decides the text.  Opened
+     * as UTF-16 after that, so a name survives whatever it holds. */
+    return gxsReadFileUtf8W(gxWidenPath(path));
+#else
+    size_t n = 0;
+    char* b = gxsReadFile(path, &n);
+    char* r;
+    if (!b) return NULL;
+    r = gxsDecodeText(b, n);
+    free(b);
     return r;
 #endif
 }
@@ -13870,7 +14990,7 @@ static GX_UNUSED int gxsWriteFileW(const WCHAR* path, const char* text, size_t n
     if (fclose(f) != 0) return 0;
     return 1;
 #else
-    char* a = gxDupBytesFromWide(path);
+    char* a = gxDupBytesFromWidePath(path);
     int r;
     if (!a) return 0;
     r = gxsWriteFile(a, text, n);
@@ -13880,7 +15000,7 @@ static GX_UNUSED int gxsWriteFileW(const WCHAR* path, const char* text, size_t n
 }
 
 static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h,
-                                    const char* svg)
+                                    const char* svg, const GXSRot* rot, int flav)
 {
     GXSCtx cx;
     GXSStyle base;
@@ -13888,11 +15008,14 @@ static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, do
     GXSMat root;
     GXSTag t;
     GXSSize sz;
-    IMAGE* savedImg = NULL;
+    int     txFlav = flav;
+    IMAGE*  savedImg  = NULL;
+    LOGFONTW savedFont;          /* put back after the document is drawn */
 
     if (!svg || !*svg) return;
 
     memset(&cx, 0, sizeof(cx));
+    cx.txFlav = txFlav;
     buf = (char*)malloc(strlen(svg) + 1);
     if (!buf) return;
     strcpy(buf, svg);
@@ -13934,6 +15057,18 @@ static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, do
         root.a = sc; root.d = sc; root.e = ox - cx.vbX * sc; root.f = oy - cx.vbY * sc;
     }
 
+    /* rotatesvg(): turn the document about a point of its own before it is
+     * fitted, so the centre the caller names is a viewBox coordinate and the
+     * destination rectangle keeps meaning the same thing unrotated or not. */
+    if (rot && rot->on) {
+        double rcx = rot->cx, rcy = rot->cy;
+        GXSMat rm;
+        if (rcx == GXS_ROT_NONE) rcx = cx.vbX + cx.vbW * 0.5;
+        if (rcy == GXS_ROT_NONE) rcy = cx.vbY + cx.vbH * 0.5;
+        rm = gxsMatRot(rot->rad, rcx, rcy);
+        root = gxsMatMul(&root, &rm);
+    }
+
     /* Bind the target - and remember the one that was bound before.  The
      * old code ended with SetWorkingImage(NULL), which threw away the
      * caller's IMAGE: render into an IMAGE while one is already selected
@@ -13943,6 +15078,18 @@ static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, do
         savedImg = GetWorkingImage();
         gxSetWorkingImage(img);
     }
+    /* <text> sets the font, and the font is GLOBAL: it is one LOGFONTW
+     * that outtextxy() reads for every later call, whatever called it.  A
+     * document carrying text therefore reached out past putsvg() and
+     * resized everything the program printed afterwards - a HUD, a label,
+     * a score - to the document's own size in the document's own face,
+     * which is what "the font sizes are all over the place" looks like
+     * from the outside.  Taken here and put back at the end, so a
+     * document draws in its own font and nothing else changes.
+     *
+     * Saved even when the document holds no text: that costs one struct
+     * copy and keeps the restore unconditional. */
+    savedFont = g_gx_font;
 
     gxsStyleDefault(&base);
     {
@@ -13963,6 +15110,7 @@ static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, do
     }
 
     if (img) gxSetWorkingImage(savedImg);
+    g_gx_font = savedFont;
 
     free(cx.grad);
     free(cx.clip);
@@ -14089,12 +15237,12 @@ static GX_UNUSED int gxsLoadFromFile(SVGIMG* e, char* (*read)(const void*),
 
 static GX_UNUSED char* gxsReadFileA(const void* path)
 {
-    return gxsReadFile((const char*)path);
+    return gxsReadFileUtf8((const char*)path);
 }
 
 static GX_UNUSED char* gxsReadFileWCb(const void* path)
 {
-    return gxsReadFileW((const WCHAR*)path);
+    return gxsReadFileUtf8W((const WCHAR*)path);
 }
 
 /* loadsvgfromfile(&e, path [, w, h]) - read a file into an SVGIMG, the
@@ -14117,6 +15265,31 @@ static GX_UNUSED int gxsLoadFileA(SVGIMG* e, const char* path)
 static GX_UNUSED int gxsLoadFileW(SVGIMG* e, const WCHAR* path)
 {
     return gxsLoadFromFileW(e, path, 0, 0);
+}
+
+/* loadsvgfileA / loadsvgfileW - which one you call says what encoding the
+ * PATH is in, and nothing else:
+ *
+ *   loadsvgfileA(&e, "icon.svg")   bytes, decoded with getpathcp()
+ *   loadsvgfileW(&e, L"icon.svg")  UTF-16, so any name at all
+ *
+ * The CONTENT is a separate question and settextcp() answers it: a BOM
+ * settles it when there is one, otherwise strict UTF-8 is tried and what
+ * fails it is decoded with gettextcp() (CP_UTF8 there is a no-op, since
+ * the strict pass has just tried it).  Either way what lands in the
+ * SVGIMG is UTF-8.
+ *
+ * Two knobs, two questions, no connection between them: a GBK file name
+ * around a UTF-8 document is loadsvgfileA with nothing set at all, and a
+ * UTF-8 name around a GBK document is loadsvgfileW with settextcp(936). */
+static GX_UNUSED int loadsvgfileA(SVGIMG* e, const char* path)
+{
+    return gxsLoadFileA(e, path);
+}
+
+static GX_UNUSED int loadsvgfileW(SVGIMG* e, const WCHAR* path)
+{
+    return gxsLoadFileW(e, path);
 }
 
 /* Write the held source back out. Returns 1 on success. */
@@ -14155,26 +15328,45 @@ static GX_UNUSED void freesvg(SVGIMG* e)
 
 /* Draw a loaded document into a rectangle: fit the viewBox, keep the
  * aspect ratio, centre it.  Nothing happens on an empty document. */
-static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h,
+                              const SVGIMG* e, int flav)
 {
     if (!gxsDocOk(e)) return;
-    gxsRenderCore(img, x, y, w, h, e->src);
+    gxsRenderCore(img, x, y, w, h, e->src, NULL, flav);
 }
 
-static GX_UNUSED void gxsPut5(double x, double y, double w, double h, const SVGIMG* e)
+static GX_UNUSED void gxsPut5(double x, double y, double w, double h, const SVGIMG* e, int flav)
 {
-    gxsPut6(NULL, x, y, w, h, e);
+    gxsPut6(NULL, x, y, w, h, e, flav);
 }
 
-static GX_UNUSED void gxsPut4(IMAGE* img, double x, double y, const SVGIMG* e)
+/* rotatesvg(): the same document, turned before it is fitted.  cx / cy are
+ * viewBox units, so the centre is named where the art is named, and
+ * GXS_ROT_NONE ("no centre given") falls back to the middle of the
+ * viewBox.  Nothing about the destination rectangle changes: the art is
+ * rotated inside it, which is what keeps a ring of headings all the same
+ * size. */
+static GX_UNUSED void gxsRotCore(IMAGE* img, double x, double y, double w, double h,
+                                 const SVGIMG* e, double rad, double cx, double cy)
+{
+    GXSRot r;
+    if (!gxsDocOk(e)) return;
+    r.on = 1;
+    r.rad = rad;
+    r.cx = cx;
+    r.cy = cy;
+    gxsRenderCore(img, x, y, w, h, e->src, &r, GXS_TX_AUTO);
+}
+
+static GX_UNUSED void gxsPut4(IMAGE* img, double x, double y, const SVGIMG* e, int flav)
 {
     if (!gxsDocOk(e)) return;
-    gxsPut6(img, x, y, (double)e->width, (double)e->height, e);
+    gxsPut6(img, x, y, (double)e->width, (double)e->height, e, flav);
 }
 
-static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e)
+static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e, int flav)
 {
-    gxsPut4(NULL, x, y, e);
+    gxsPut4(NULL, x, y, e, flav);
 }
 
 /* ---- C dispatch targets ------------------------------------------- *
@@ -14184,57 +15376,101 @@ static GX_UNUSED void gxsPut3(double x, double y, const SVGIMG* e)
  * type instead. */
 #ifndef __cplusplus
 static GX_UNUSED void gxs_put_1(const SVGIMG* e)
-{ gxsPut3(0, 0, e); }
+{ gxsPut3(0, 0, e, GXS_TX_AUTO); }
 static GX_UNUSED void gxs_put_2(IMAGE* img, const SVGIMG* e)
-{ gxsPut4(img, 0, 0, e); }
+{ gxsPut4(img, 0, 0, e, GXS_TX_AUTO); }
 static GX_UNUSED int gxs_load_2(SVGIMG* e, const char* svg)
 { return gxsLoadSrc(e, svg); }
 static GX_UNUSED int gxs_load_4(SVGIMG* e, int w, int h, const char* svg)
 { return gxsLoadSrc2(e, w, h, svg); }
 static GX_UNUSED void gxs_put_3(double x, double y, const SVGIMG* e)
-{ gxsPut3(x, y, e); }
+{ gxsPut3(x, y, e, GXS_TX_AUTO); }
 static GX_UNUSED void gxs_put_4(IMAGE* img, double x, double y, const SVGIMG* e)
-{ gxsPut4(img, x, y, e); }
+{ gxsPut4(img, x, y, e, GXS_TX_AUTO); }
 static GX_UNUSED void gxs_put_5(double x, double y, double w, double h, const SVGIMG* e)
-{ gxsPut5(x, y, w, h, e); }
+{ gxsPut5(x, y, w, h, e, GXS_TX_AUTO); }
 static GX_UNUSED void gxs_put_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
-{ gxsPut6(img, x, y, w, h, e); }
+{ gxsPut6(img, x, y, w, h, e, GXS_TX_AUTO); }
+
+/* putsvgA / putsvgW: the flavour spelled out.  putsvgA() draws <text>
+ * through outtextxyA(), putsvgW() through outtextxyW(), and neither one
+ * asks any question - that is the whole point of naming it.  The document
+ * check stays in all three: an SVGIMG that was never loaded has no src to
+ * walk, and walking one is a read through a stray pointer. */
+static GX_UNUSED void gxs_putA_1(const SVGIMG* e)
+{ gxsPut3(0, 0, e, GXS_TX_A); }
+static GX_UNUSED void gxs_putA_2(IMAGE* img, const SVGIMG* e)
+{ gxsPut4(img, 0, 0, e, GXS_TX_A); }
+static GX_UNUSED void gxs_putA_3(double x, double y, const SVGIMG* e)
+{ gxsPut3(x, y, e, GXS_TX_A); }
+static GX_UNUSED void gxs_putA_4(IMAGE* img, double x, double y, const SVGIMG* e)
+{ gxsPut4(img, x, y, e, GXS_TX_A); }
+static GX_UNUSED void gxs_putA_5(double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut5(x, y, w, h, e, GXS_TX_A); }
+static GX_UNUSED void gxs_putA_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut6(img, x, y, w, h, e, GXS_TX_A); }
+static GX_UNUSED void gxs_putW_1(const SVGIMG* e)
+{ gxsPut3(0, 0, e, GXS_TX_W); }
+static GX_UNUSED void gxs_putW_2(IMAGE* img, const SVGIMG* e)
+{ gxsPut4(img, 0, 0, e, GXS_TX_W); }
+static GX_UNUSED void gxs_putW_3(double x, double y, const SVGIMG* e)
+{ gxsPut3(x, y, e, GXS_TX_W); }
+static GX_UNUSED void gxs_putW_4(IMAGE* img, double x, double y, const SVGIMG* e)
+{ gxsPut4(img, x, y, e, GXS_TX_W); }
+static GX_UNUSED void gxs_putW_5(double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut5(x, y, w, h, e, GXS_TX_W); }
+static GX_UNUSED void gxs_putW_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e)
+{ gxsPut6(img, x, y, w, h, e, GXS_TX_W); }
+static GX_UNUSED void gxs_rot_6(double x, double y, double w, double h, const SVGIMG* e, double rad)
+{ gxsRotCore(NULL, x, y, w, h, e, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+static GX_UNUSED void gxs_rot_7(IMAGE* img, double x, double y, double w, double h,
+                                const SVGIMG* e, double rad)
+{ gxsRotCore(img, x, y, w, h, e, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+static GX_UNUSED void gxs_rot_8(double x, double y, double w, double h, const SVGIMG* e,
+                                double rad, double cx, double cy)
+{ gxsRotCore(NULL, x, y, w, h, e, rad, cx, cy); }
+static GX_UNUSED void gxs_rot_9(IMAGE* img, double x, double y, double w, double h,
+                                const SVGIMG* e, double rad, double cx, double cy)
+{ gxsRotCore(img, x, y, w, h, e, rad, cx, cy); }
 #endif
 
 /* ---- draw: load, put, free ----------------------------------------- */
 
-/* Text: the caller is responsible for setglcp() when the document holds
- * text in a legacy code page; nothing global is touched here. */
+/* Text: loadsvgfile() decided the encoding when it read the file, so no
+ * document reaches the renderer in a code page of its own and the caller
+ * has nothing to set.  settextcp() still picks the code page a document
+ * handed over in memory - loadsvg() with a string literal - is read as;
+ * nothing global is touched here. */
 
 static GX_UNUSED void gxs_draw_1(const char* svg)
 {
     SVGIMG e; memset(&e, 0, sizeof(e));
-    if (gxsLoadSrc(&e, svg)) { gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e); freesvg(&e); }
+    if (gxsLoadSrc(&e, svg)) { gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 static GX_UNUSED void gxs_draw_2(IMAGE* img, const char* svg)
 {
     SVGIMG e; memset(&e, 0, sizeof(e));
-    if (gxsLoadSrc(&e, svg)) { gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e); freesvg(&e); }
+    if (gxsLoadSrc(&e, svg)) { gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 static GX_UNUSED void gxs_draw_3(double x, double y, const char* svg)
 {
     SVGIMG e; memset(&e, 0, sizeof(e));
-    if (gxsLoadSrc(&e, svg)) { gxsPut3(x, y, &e); freesvg(&e); }
+    if (gxsLoadSrc(&e, svg)) { gxsPut3(x, y, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 static GX_UNUSED void gxs_draw_4(IMAGE* img, double x, double y, const char* svg)
 {
     SVGIMG e; memset(&e, 0, sizeof(e));
-    if (gxsLoadSrc(&e, svg)) { gxsPut4(img, x, y, &e); freesvg(&e); }
+    if (gxsLoadSrc(&e, svg)) { gxsPut4(img, x, y, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 static GX_UNUSED void gxs_draw_5(double x, double y, double w, double h, const char* svg)
 {
     SVGIMG e; memset(&e, 0, sizeof(e));
-    if (gxsLoadSrc(&e, svg)) { gxsPut5(x, y, w, h, &e); freesvg(&e); }
+    if (gxsLoadSrc(&e, svg)) { gxsPut5(x, y, w, h, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 static GX_UNUSED void gxs_draw_6(IMAGE* img, double x, double y, double w, double h, const char* svg)
 {
     SVGIMG e; memset(&e, 0, sizeof(e));
-    if (gxsLoadSrc(&e, svg)) { gxsPut6(img, x, y, w, h, &e); freesvg(&e); }
+    if (gxsLoadSrc(&e, svg)) { gxsPut6(img, x, y, w, h, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 
 /* Read from a file. Returns 1 on success. */
@@ -14243,12 +15479,12 @@ static GX_UNUSED int gxsFile(int n, IMAGE* img, double x, double y, double w, do
     SVGIMG e;
     memset(&e, 0, sizeof(e));
     if (!gxsLoadFileA(&e, path)) return 0;
-    if (n == 6)      gxsPut6(img, x, y, w, h, &e);
-    else if (n == 5) gxsPut5(x, y, w, h, &e);
-    else if (n == 4) gxsPut4(img, x, y, &e);
-    else if (n == 3) gxsPut3(x, y, &e);
-    else if (n == 2) gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e);
-    else             gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e);
+    if (n == 6)      gxsPut6(img, x, y, w, h, &e, GXS_TX_AUTO);
+    else if (n == 5) gxsPut5(x, y, w, h, &e, GXS_TX_AUTO);
+    else if (n == 4) gxsPut4(img, x, y, &e, GXS_TX_AUTO);
+    else if (n == 3) gxsPut3(x, y, &e, GXS_TX_AUTO);
+    else if (n == 2) gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO);
+    else             gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO);
     freesvg(&e);
     return 1;
 }
@@ -15281,6 +16517,7 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
 
