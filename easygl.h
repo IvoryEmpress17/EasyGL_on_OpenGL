@@ -47,6 +47,14 @@
  *     through settextcp() like every other A flavour here, so what is
  *     read back with getwintitle() is what was written.
  *
+ *   - freeimage(IMAGE*) releases the texture and framebuffer behind an
+ *     image, the raster counterpart of freesvg().  It leaves a VALID
+ *     EMPTY image - size 0, magic kept - so a freed image is ignored by
+ *     putimage() and can be Resize()d or loaded into again; EasyX gets
+ *     that from IMAGE's destructor, which a C program does not have.
+ *     Freeing the image selected by SetWorkingImage() puts the target
+ *     back on the canvas first.
+ *
  *   - setwindevsize(w, h) is the DEVICE pixel form of setwinsize() and
  *     the inverse of getwindevsize(): it asks for the window to be
  *     exactly w x h real pixels, so the round trip gives back what was
@@ -6539,6 +6547,51 @@ static void gxImageAlloc(IMAGE* img, int w, int h) {
 
 GX_INLINE void Resize(IMAGE* pImg, int width, int height) {
     gxImageAlloc(pImg, width, height);
+}
+
+/* freeimage(pImg) is the raster counterpart of freesvg(): it hands
+ * the GPU memory behind an IMAGE back and leaves a valid, EMPTY image - the
+ * same "released, but you may keep using the object" contract freesvg()
+ * has, and the one EasyX gets for free from IMAGE's C++ destructor.  EasyX
+ * has no such function, and a C program has no destructor, so without it an
+ * image that is loaded over and over in a loop holds onto every texture it
+ * ever had.
+ *
+ * width / height / logW / logH all become 0 and tex / fbo become 0, which is
+ * what gxImageOk() reports as "not drawable" - so a freed image is ignored
+ * by putimage() rather than drawn as garbage.  magic is KEPT, so the object
+ * is still a usable IMAGE: Resize() or loadimage() on it allocates a new
+ * pair and the whole thing starts over.  That is the other half of the
+ * contract - freeimage() is not a one-way door.
+ *
+ * Freeing the image that is currently selected with SetWorkingImage()
+ * (g_gx_workImg) drops the target back to the canvas first.  The opposite
+ * order would delete the framebuffer the renderer is bound to, and every
+ * later primitive would go nowhere.
+ *
+ * NULL and an IMAGE that was never initialised are both safe: the latter
+ * gets zeroed and marked usable, like freesvg() does for a garbage SVGIMG. */
+static GX_UNUSED void freeimage(IMAGE* pImg) {
+    bool wasWork;
+    if (!pImg) return;
+    /* A stack "IMAGE img;" is full of garbage, the same hazard freesvg()
+     * guards against: free the struct, never the pointer that was in it. */
+    if (pImg->magic != GXIMG_MAGIC) {
+        memset(pImg, 0, sizeof(*pImg));
+        pImg->magic = GXIMG_MAGIC;
+        return;
+    }
+    wasWork = (g_gx_workImg == pImg);
+    gxImageDestroy(pImg);
+    /* gxImageDestroy() clears the magic to say "this pair is gone".  Put it
+     * back: what is left is an empty image, not an unusable one. */
+    pImg->magic = GXIMG_MAGIC;
+    if (wasWork) {
+        g_gx_workImg = NULL;
+        gxSyncWorkTarget();    /* g_gx_target was pointing at the dead pair */
+        gxUpdateProj();
+        gxBindTarget();
+    }
 }
 
 static void gxClearImage(IMAGE* img, COLORREF c) {

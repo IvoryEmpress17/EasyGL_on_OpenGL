@@ -39,7 +39,15 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;
 .cat{cursor:pointer;padding:3px 8px 3px 6px;white-space:nowrap;color:#000;}
 .cat:hover{background:#e0e8f0;}
 .cat b{font-weight:bold;}
+/* 子章节：比分类低一级。缩进一档、颜色淡一档，跟分类拉开层次。
+* 图标用文件夹而不是页面——它装的是一组函数，不是一页内容；
+* 和分类的书一样跟着展开状态切换（关着的 / 打开的文件夹）。 */
+.s2{cursor:pointer;padding:2px 8px 2px 6px;white-space:nowrap;color:#333;margin-left:6px;}
+.s2:hover{background:#e0e8f0;}
+.s2 b{font-weight:bold;}
+.s2 img.ic{margin-right:4px;margin-left:2px;}
 ul.sub{list-style:none;margin:0;padding-left:16px;}
+ul.sub ul.sub{padding-left:14px;border-left:1px dotted #dcdcdc;}
 li.fun{cursor:pointer;padding:2px 8px 2px 6px;white-space:nowrap;color:#1a3d8f;}
 li.fun:hover{background:#dbe7f7;text-decoration:underline;}
 li.fun.sel{background:#c8dcfa;font-weight:bold;}
@@ -4106,6 +4114,7 @@ var DATA = [
   {
     "name": "GetImageBuffer",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "DWORD* GetImageBuffer(IMAGE* pImg = NULL);"
     ],
@@ -4126,6 +4135,7 @@ var DATA = [
   {
     "name": "GetImageHDC",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "HDC GetImageHDC(IMAGE* pImg = NULL);"
     ],
@@ -4145,6 +4155,7 @@ var DATA = [
   {
     "name": "GetWorkingImage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "IMAGE* GetWorkingImage();"
     ],
@@ -4156,6 +4167,7 @@ var DATA = [
   {
     "name": "IMAGE",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "typedef struct IMAGE",
       "{",
@@ -4212,6 +4224,7 @@ var DATA = [
   {
     "name": "Resize",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void Resize(IMAGE* pImg, int width, int height);"
     ],
@@ -4238,6 +4251,7 @@ var DATA = [
   {
     "name": "SVG 支持",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [],
     "brief": "easygl 自带的 SVG 渲染：把 SVG 文档装进 SVGIMG，再贴到画布上。",
     "params": [],
@@ -4272,6 +4286,7 @@ var DATA = [
   {
     "name": "SVGIMG",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "typedef struct SVGIMG {",
       "    char*        src;      /* 源码副本，NUL 结尾；NULL 表示空文档 */",
@@ -4321,6 +4336,7 @@ var DATA = [
   {
     "name": "SetWorkingImage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void SetWorkingImage(IMAGE* pImg);",
       "void SetWorkingImage();"
@@ -4340,6 +4356,7 @@ var DATA = [
   {
     "name": "drawsvg",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 显式 A 版：文本是窄字符串，按 settextcp() 的代码页解码 */",
       "void drawsvgA(const char* svg);",
@@ -4404,6 +4421,7 @@ var DATA = [
   {
     "name": "drawsvgfile",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 显式 A 版：路径是窄字符串，按 setpathcp() 的代码页解码 */",
       "int drawsvgfileA(const char* path);",
@@ -4467,6 +4485,7 @@ var DATA = [
   {
     "name": "flipimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void flipimage(IMAGE* pImg, IMAGE* pSrcImg);"
     ],
@@ -4485,8 +4504,37 @@ var DATA = [
     "remarks": []
   },
   {
+    "name": "freeimage",
+    "cat": "图像处理相关函数",
+    "sub": "标量图片",
+    "sub": "标量图片",
+    "sig": [
+      "void freeimage(IMAGE* pImg);"
+    ],
+    "brief": "释放一个 <a href='IMAGE.htm'>IMAGE</a> 占用的显存（纹理与帧缓冲），释放后它变成一个合法的空图像，可以继续使用。",
+    "params": [
+      [
+        "pImg",
+        "要释放的图像。传 NULL 是安全的。"
+      ]
+    ],
+    "ret": "无",
+    "remarks": [
+      "本库专有 —— EasyX 没有这个函数，因为它的 <a href='IMAGE.htm'>IMAGE</a> 是 C++ 对象，离开作用域时析构函数会自动释放；而本库的 <a href='IMAGE.htm'>IMAGE</a> 是一个普通结构体，<b>C 语言没有析构函数</b>，所以显存只能显式归还。",
+      "<b>什么时候必须调</b>：在循环里反复往同一个 <a href='IMAGE.htm'>IMAGE</a> 里 <a href='loadimage.htm'>loadimage</a>，或者反复 <a href='Resize.htm'>Resize</a> 的时候。旧的纹理不会自己消失，跑上几百轮就会攒下几百张纹理。",
+      "<pre class='code'>IMAGE img;\nfor (i = 0; i &lt; n; i++) {\n    loadimage(&amp;img, names[i]);\n    putimage(0, 0, &amp;img);\n    freeimage(&amp;img);        /* 否则这 n 张纹理会一起留在显存里 */\n}</pre>",
+      "<b>释放后它仍然是一个能用的 IMAGE</b>，这一点和 <a href='freesvg.htm'>freesvg</a> 一致：<code>width / height / logW / logH</code> 归零，<code>tex / fbo</code> 归零，库内部据此判定它「不可绘制」，因此 <a href='putimage.htm'>putimage</a> 会<b>忽略</b>它而不是画出一片垃圾。而它的标识仍然有效，所以再 <a href='Resize.htm'>Resize</a> 或 <a href='loadimage.htm'>loadimage</a> 一次就会重新分配 —— <b>freeimage 不是单向门</b>。",
+      "<pre class='code'>IMAGE img;\nloadimage(&amp;img, \"a.png\");\n/* ... 用 img ... */\nfreeimage(&amp;img);           /* 显存归还，img 变成合法的空图像 */\nloadimage(&amp;img, \"b.png\");  /* 还能接着用：重新分配 */</pre>",
+      "<b>释放正被 <a href='SetWorkingImage.htm'>SetWorkingImage</a> 选中的那一个，是安全的</b>：本函数先把绘图目标切回画布再释放。反过来的顺序会删掉渲染器正绑定着的帧缓冲，之后画什么都不会出现在屏幕上。",
+      "传 NULL、或者传一个从未初始化过的 <a href='IMAGE.htm'>IMAGE</a>（栈上的 <code>IMAGE img;</code> 里面是随机值）都安全：后者会被清零并置成可用的空图像，不会去释放一个野指针。",
+      "<b>不需要在 <a href='closegraph.htm'>closegraph</a> 之前逐个调用</b>：关窗时整个 GL 上下文一起销毁，所有纹理随之释放。本函数解决的是程序运行过程中反复分配的问题。",
+      "矢量那一侧的对应函数是 <a href='freesvg.htm'>freesvg</a>，语义相同。"
+    ]
+  },
+  {
     "name": "freesvg",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "void freesvg(SVGIMG* e);"
     ],
@@ -4501,12 +4549,14 @@ var DATA = [
     "remarks": [
       "对 <code>NULL</code>、对没用过的（栈上那句 <code>SVGIMG e;</code>）、对已经释放过的都安全，随便调。",
       "释放之后它仍是<b>合法的空文档</b>：可以再 load，<a href='putsvg.htm'>putsvg</a> 也不会出事，只是什么都不画。",
-      "不释放不会崩，只是那份源码副本一直占着内存——和 <a href='IMAGE.htm'>IMAGE</a> 用完要释放是同一件事。"
+      "不释放不会崩，只是那份源码副本一直占着内存——和 <a href='IMAGE.htm'>IMAGE</a> 用完要释放是同一件事。",
+      "标量图片那一侧的对应函数是 <a href='freeimage.htm'>freeimage</a>，语义相同。"
     ]
   },
   {
     "name": "getfiltermode",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "int getfiltermode();"
     ],
@@ -4518,6 +4568,7 @@ var DATA = [
   {
     "name": "getimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void getimage(IMAGE* pImg, int srcX, int srcY, int srcWidth, int srcHeight);",
       "void getimage(IMAGE* pImg, const IMAGE* pSrcImg, int srcX, int srcY,",
@@ -4561,6 +4612,7 @@ var DATA = [
   {
     "name": "getimagebuffermode",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "int getimagebuffermode();"
     ],
@@ -4572,6 +4624,7 @@ var DATA = [
   {
     "name": "getimagefilter",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "bool getimagefilter();"
     ],
@@ -4583,6 +4636,7 @@ var DATA = [
   {
     "name": "getpathcp",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "UINT getpathcp(void);"
     ],
@@ -4596,6 +4650,7 @@ var DATA = [
   {
     "name": "loadimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "/* 显式 A 版：const char* 窄字符，按当前代码页解释 */",
       "bool loadimageA(IMAGE* pImg, const char* pResType);",
@@ -4664,6 +4719,7 @@ var DATA = [
   {
     "name": "loadsvg",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 显式 A 版：文档文本是窄字符串，按 settextcp() 的代码页解码 */",
       "int loadsvgA(SVGIMG* e, const char* svg);",
@@ -4711,6 +4767,7 @@ var DATA = [
   {
     "name": "loadsvgfile",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 显式 A 版：const char* 字节串路径，按 setpathcp() 设定的代码页解码 */",
       "int loadsvgfileA(SVGIMG* e, const char* path);",
@@ -4747,6 +4804,7 @@ var DATA = [
   {
     "name": "loadsvgfromfile",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 不带后缀：按实参类型自动分派到下面两者之一 */",
       "int loadsvgfromfile(SVGIMG* e, const char* path);",
@@ -4793,6 +4851,7 @@ var DATA = [
   {
     "name": "mirrorimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void mirrorimage(IMAGE* pImg, IMAGE* pSrcImg);"
     ],
@@ -4813,6 +4872,7 @@ var DATA = [
   {
     "name": "miximagec",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void miximagec(double w1, const IMAGE* img, double w2, COLORREF c);",
       "void miximagec(double dx, double dy, double w1, const IMAGE* img,",
@@ -4855,6 +4915,7 @@ var DATA = [
   {
     "name": "miximagei",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void miximagei(double w1, const IMAGE* a, double w2, const IMAGE* b);",
       "void miximagei(double dx, double dy, double w1, const IMAGE* a,",
@@ -4896,6 +4957,7 @@ var DATA = [
   {
     "name": "putimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void putimage(int dstX, int dstY, const IMAGE* pImg, DWORD dwRop = SRCCOPY);",
       "void putimage(int dstX, int dstY, int dstWidth, int dstHeight,",
@@ -4946,6 +5008,7 @@ var DATA = [
   {
     "name": "putsvg",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 显式 W 版：<text> 一律走 outtextxyW（UTF-16 直通，推荐） */",
       "void putsvgW(const SVGIMG* e);",
@@ -5015,6 +5078,7 @@ var DATA = [
   {
     "name": "rotateimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void rotateimage(IMAGE* pImg, IMAGE* pSrcImg, double radian,",
       "                 COLORREF bkcolor = BLACK, bool autosize = false,",
@@ -5056,6 +5120,7 @@ var DATA = [
   {
     "name": "rotatesvg",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "void rotatesvg(double x, double y, double w, double h, const SVGIMG* e, double rad);",
       "void rotatesvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e, double rad);",
@@ -5113,6 +5178,7 @@ var DATA = [
   {
     "name": "saveimage",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "/* 显式 A 版：const char* 窄字符，按当前代码页解释 */",
       "bool saveimageA(const char* filename);",
@@ -5157,6 +5223,7 @@ var DATA = [
   {
     "name": "savesvgfile",
     "cat": "图像处理相关函数",
+    "sub": "矢量图片",
     "sig": [
       "/* 显式 A 版：路径是窄字符串，按 setpathcp() 的代码页解码 */",
       "int savesvgfileA(const SVGIMG* e, const char* path);",
@@ -5194,6 +5261,7 @@ var DATA = [
   {
     "name": "setfiltermode",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void setfiltermode(int mode);"
     ],
@@ -5212,6 +5280,7 @@ var DATA = [
   {
     "name": "setimagebuffermode",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void setimagebuffermode(int mode);"
     ],
@@ -5231,6 +5300,7 @@ var DATA = [
   {
     "name": "setimagefilter",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void setimagefilter(bool smooth);"
     ],
@@ -5249,6 +5319,7 @@ var DATA = [
   {
     "name": "setpathcp",
     "cat": "图像处理相关函数",
+    "sub": "标量图片",
     "sig": [
       "void setpathcp(UINT cp);"
     ],
@@ -11532,8 +11603,15 @@ var DATA = [
   }
 ]
 var CATS = ["基本说明", "系统支持与安装", "使用教程", "基本概念", "绘图设备相关函数", "颜色模型", "图形颜色及样式设置相关函数", "图形绘制相关函数", "文字输出相关函数", "图像处理相关函数", "消息处理相关函数", "描边相关函数", "渐变与模糊", "后处理着色器相关函数", "批量绘制", "3D 网格相关函数", "原生 OpenGL 访问", "窗口与系统", "性能与帧率", "信息与诊断", "关于 OpenGL", "兼容性", "示例程序", "A / W 版本"];
-var IC = {"bookc": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgP///8DAwICAgAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANBCLpQxauEGQaljjR7+4PNVAiD4ICOB0lVpyrsNGTl/DHODUaszrsiXAsYDMmIgVNsmCwQBJoI5lk7rZIE627LSAAAO2VQIBQsr9HA6YSWRlRrJhfUfirer1gSAQA7", "booko": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgPj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANUCFra7iaMacgcooxgQJxEoU2Z0TWfIVoX50mhIzKoRLGY5kZ2dRUWF8RELJ6AtMfjM6CJJsnXxSeAbjrMAdW6s2kt1eZVwfs2gRMhOcBuu0/KOCABADuf4UjntAnHxLKNwG63ayWAfE7n2CsRADs=", "cfg": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAAgAD4+ACAgPj4AP////j4+MDAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARhEEiAqrUzn5LESMUWJsABcsJJFKyZIcXanYkrBcjJrhsydQKPijV6xQyJQTBlkySe0AqUNCHGiAdfFQVasaalXAIhQIiuzXHnQ+RRJTDUJ1ecxLPlp/lNOfhNKS18GYQTEQA7", "tut": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AICAAP///8DAwICAgAAAACH5BAEAAAAALAAAAAAQABAAQANcCApFQSUas1QxAotTBPnFsWCEsHUfJI7CcKRpWDXe5zWUYkBCt9WqiqHzKsVWioNyyVQqAoyU4AHJzS4k0FLnMZl2RhmAdPnagpbhSYpOK4E3JMNw2EXu4openwAAO0Av3IkVACoVdXsAFDP4uSHN7/NPgCcRADs=", "page": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANJCArV7iuWMYK1lBg5xA3UoHFCF3bjMgllKQ5FxHQfKG5qWWe4YvzA4I9zQsVkk+IgSFQKUopCSwmdmU7PnhXLkxC+4LBWRgYkAAA7STExh1SeC5WkRI+nbiFALpupsbRaxBZFAAA7", "ext": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAA+AAAgACAgACAAPj4AP///8DAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARfEMhJ60QnhIGKMZ5xJJfIIWhKToegIeDnjdSBZsOgHRQmBrDQwYCSZAivWIxWGSWe0KfFluJNYUMkASmwAmxZmIxqRQwyts8OKkEgkwZNQLQCuOByek0gwBz+gHUWgxEAOw=="};
+var IC = {"bookc": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgP///8DAwICAgAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANBCLpQxauEGQaljjR7+4PNVAiD4ICOB0lVpyrsNGTl/DHODUaszrsiXAsYDMmIgVNsmCwQBJoI5lk7rZIE627LSAAAO2VQIBQsr9HA6YSWRlRrJhfUfirer1gSAQA7", "booko": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgPj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANUCFra7iaMacgcooxgQJxEoU2Z0TWfIVoX50mhIzKoRLGY5kZ2dRUWF8RELJ6AtMfjM6CJJsnXxSeAbjrMAdW6s2kt1eZVwfs2gRMhOcBuu0/KOCABADuf4UjntAnHxLKNwG63ayWAfE7n2CsRADs=", "cfg": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAAgAD4+ACAgPj4AP////j4+MDAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARhEEiAqrUzn5LESMUWJsABcsJJFKyZIcXanYkrBcjJrhsydQKPijV6xQyJQTBlkySe0AqUNCHGiAdfFQVasaalXAIhQIiuzXHnQ+RRJTDUJ1ecxLPlp/lNOfhNKS18GYQTEQA7", "tut": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AICAAP///8DAwICAgAAAACH5BAEAAAAALAAAAAAQABAAQANcCApFQSUas1QxAotTBPnFsWCEsHUfJI7CcKRpWDXe5zWUYkBCt9WqiqHzKsVWioNyyVQqAoyU4AHJzS4k0FLnMZl2RhmAdPnagpbhSYpOK4E3JMNw2EXu4openwAAO0Av3IkVACoVdXsAFDP4uSHN7/NPgCcRADs=", "page": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANJCArV7iuWMYK1lBg5xA3UoHFCF3bjMgllKQ5FxHQfKG5qWWe4YvzA4I9zQsVkk+IgSFQKUopCSwmdmU7PnhXLkxC+4LBWRgYkAAA7STExh1SeC5WkRI+nbiFALpupsbRaxBZFAAA7", "foldc": "data:image/gif;base64,R0lGODlhEAAQAIEAAAAAAAAAAPj4+AAAACH5BAEAAAAALAAAAAAQABAAQAhEAAEIHEiwoMAAAhIqXJgwwEGGEAU4BBCgosWLFwdiNEgQYcSFEz1+bMixZEGLJg9iXFnx4UiSFF/CFDkypEyJKXPqDAgAOw==", "foldo": "data:image/gif;base64,R0lGODlhEAAQAIEAAAAAAAAAAPj4+AAAACH5BAEAAAAALAAAAAAQABAAQAhEAAEIHEiwoMAAAhIqXBggwECECyMKaGiwosGGGC0elCiRIsSODjWKfEhRJMaTKEMC+MhRoUOWHEvCZKhyZcqSI3PqDAgAOw==",
+"ext": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAA+AAAgACAgACAAPj4AP///8DAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARfEMhJ60QnhIGKMZ5xJJfIIWhKToegIeDnjdSBZsOgHRQmBrDQwYCSZAivWIxWGSWe0KfFluJNYUMkASmwAmxZmIxqRQwyts8OKkEgkwZNQLQCuOByek0gwBz+gHUWgxEAOw=="};
 var CATIC = {"基本说明": "page", "系统支持与安装": "cfg", "使用教程": "tut", "基本概念": "page", "绘图设备相关函数": "page", "颜色模型": "page", "图形颜色及样式设置相关函数": "page", "图形绘制相关函数": "page", "文字输出相关函数": "page", "图像处理相关函数": "page", "消息处理相关函数": "page", "3D 网格相关函数": "page", "其它函数": "page", "easygl 扩展函数": "page", "原生 OpenGL 访问": "page", "关于 OpenGL": "ext", "兼容性": "ext", "示例程序": "tut"};
+/* 哪些分类下面还有一层子章节，以及它们的排列顺序。
+ * 只有在这里登记过的分类才会分层，其余分类保持原来的单层结构；
+ * 条目用 "sub" 字段说明自己归到哪一个，没有该字段（或为空）的条目
+ * 直接挂在分类下面，不进任何子章节。 */
+var SUBS = {"图像处理相关函数": ["标量图片", "矢量图片"]};
+
 /* 页面条目用什么图标：按所属分类查表，查不到就用“普通页面” */
 function icOf(cat){ return IC[CATIC[cat]] || IC.page; }
 /* data URI 在 IE7 及更早的引擎里加载不了，会在目录里画出一排碎图标。
@@ -11767,13 +11845,17 @@ function hasClass(el, cls){
   return false;
 }
 
+/* 分类（.cat）与子章节（.s2）共用这一套开关，靠 data-u 指出各自
+ * 控制的是哪一个 <ul>，所以两级的展开 / 折叠是同一份代码。 */
+function nodeUl(node){ return $(node.getAttribute('data-u')); }
+
 function catOpen(catEl){
-  var el = $('sub_' + catEl.getAttribute('data-c'));
+  var el = nodeUl(catEl);
   return el ? (el.style.display !== 'none') : false;
 }
 
 function setCat(catEl, open){
-  var el = $('sub_' + catEl.getAttribute('data-c'));
+  var el = nodeUl(catEl);
   if (!el) return;
   if (open === (el.style.display !== 'none')) return;
   var tw = catEl.getElementsByTagName('span')[0];
@@ -11781,23 +11863,28 @@ function setCat(catEl, open){
   if (open) {
     el.style.display = '';
     if (tw) tw.innerHTML = '-';
-    if (bk) bk.src = IC.booko;
+    /* 分类翻书，子章节开文件夹：图标跟着各自的展开状态换 */
+    if (bk) bk.src = hasClass(catEl, 'cat') ? IC.booko : IC.foldo;
   } else {
     el.style.display = 'none';
     if (tw) tw.innerHTML = '+';
-    if (bk) bk.src = IC.bookc;
+    if (bk) bk.src = hasClass(catEl, 'cat') ? IC.bookc : IC.foldc;
   }
 }
 
 function allCats(open){
-  var cats = byClass('cat', $('side'));
-  for (var i = 0; i < cats.length; i++) { setCat(cats[i], open); }
+  var ns = byClass('cat', $('side')), i;
+  for (i = 0; i < ns.length; i++) { setCat(ns[i], open); }
+  /* 全部打开时连子章节一起开，否则光看到分类标题没有内容 */
+  ns = byClass('s2', $('side'));
+  for (i = 0; i < ns.length; i++) { setCat(ns[i], open); }
 }
 
 /* ---------- 右键菜单 ----------
  *
- * 右键一个分类：一项「打开 / 关闭」，只作用于该分类。
- * 右键目录其它位置：两项「全部打开」「全部关闭」，作用于所有分类。
+ * 右键一个分类或子章节：一项「打开 / 关闭」，只作用于它自己。
+ * 右键目录其它位置：两项「全部打开」「全部关闭」，作用于所有分类
+ * 以及它们下面的子章节。
  *
  * 只在目录面板（cur === 'toc'）下弹出：索引和搜索面板没有分类可折叠。
  * 菜单挂在 body 下并用绝对定位，这样不会被 overflow:auto 的侧栏裁掉。
@@ -11869,6 +11956,8 @@ function gxMenuHandler(e){
   if (!inSide(t) || cur !== 'toc') { hideMenu(); return; }
   var n = t, cat = null;
   while (n && n !== $('side')) {
+    /* 先认子章节：它嵌在分类的 <ul> 里，命中 .cat 的那一层是它的上级 */
+    if (hasClass(n, 's2'))  { cat = n; break; }
     if (hasClass(n, 'cat')) { cat = n; break; }
     n = n.parentNode;
   }
@@ -11885,30 +11974,69 @@ function gxMenuHandler(e){
   return false;
 }
 
-/* ---------- 目录树 ---------- */
+/* ---------- 目录树 ----------
+ *
+ * 两层：分类 → 子章节 → 函数。只有 SUBS 里登记过的分类才有子章节，
+ * 其余分类仍是原来的单层结构，所以改动对它们没有任何影响。
+ * 条目按 "sub" 字段归组，SUBS 里的顺序就是显示顺序；没有 "sub"
+ * 的条目直接挂在分类下。 */
+function funLi(d){
+  return '<li class="fun" data-n="' + esc(d.name) + '"><img class="ic" src="'
+       + icOf(d.cat) + '">' + esc(d.name) + '</li>';
+}
+
 function renderToc(){
   var h = '<ul class="tree">';
   for (var c = 0; c < CATS.length; c++) {
-    var name = CATS[c], n = 0, sub = '';
+    var name = CATS[c], n = 0, sub = '', i, d, sn, k;
+    var subs = SUBS[name] || null;
+    var groups = {}, order = [], direct = '';
     sub += '<ul class="sub" id="sub_' + c + '" style="display:none">';
-    for (var i = 0; i < DATA.length; i++) {
-      if (DATA[i].cat !== name) continue;
+    for (i = 0; i < DATA.length; i++) {
+      d = DATA[i];
+      if (d.cat !== name) continue;
       n++;
-      sub += '<li class="fun" data-n="' + esc(DATA[i].name) + '"><img class="ic" src="'
-           + icOf(DATA[i].cat) + '">' + esc(DATA[i].name) + '</li>';
+      sn = subs ? (d.sub || '') : '';
+      if (!sn) { direct += funLi(d); continue; }
+      if (!groups[sn]) { groups[sn] = { html: '', num: 0 }; order.push(sn); }
+      groups[sn].html += funLi(d);
+      groups[sn].num++;
+    }
+    sub += direct;
+    /* 先按 SUBS 给定的顺序，再补上 DATA 里出现却没登记过的 */
+    var list = [], seen = {}, k2i;
+    for (k = 0; subs && k < subs.length; k++) {
+      if (groups[subs[k]]) { list.push(subs[k]); seen[subs[k]] = 1; }
+    }
+    for (k2i = 0; k2i < order.length; k2i++) {
+      if (!seen[order[k2i]]) list.push(order[k2i]);
+    }
+    for (k = 0; k < list.length; k++) {
+      var g = groups[list[k]], uid = 's2_' + c + '_' + k;
+      sub += '<li class="s2" data-u="' + uid + '"><span class="tw">+</span>'
+           + '<img class="ic" src="' + IC.foldc + '"><b>' + esc(list[k])
+           + '</b> (' + g.num + ')</li>'
+           + '<ul class="sub" id="' + uid + '" style="display:none">'
+           + g.html + '</ul>';
     }
     sub += '</ul>';
     if (n === 0) continue;
     /* 分类条目：折叠时是关上的书，展开时换成打开的书 */
-    h += '<li class="cat" data-c="' + c + '"><span class="tw">+</span>'
+    h += '<li class="cat" data-c="' + c + '" data-u="sub_' + c + '"><span class="tw">+</span>'
        + '<img class="ic" src="' + IC.bookc + '"><b>'
        + esc(name) + '</b> (' + n + ')</li>' + sub;
   }
   h += '</ul>';
   $('side').innerHTML = h;
   var cats = byClass('cat', $('side'));
-  for (var k = 0; k < cats.length; k++) {
-    cats[k].onclick = function(){
+  for (var k2 = 0; k2 < cats.length; k2++) {
+    cats[k2].onclick = function(){
+      setCat(this, !catOpen(this));
+    };
+  }
+  var subs2 = byClass('s2', $('side'));
+  for (var k3 = 0; k3 < subs2.length; k3++) {
+    subs2[k3].onclick = function(){
       setCat(this, !catOpen(this));
     };
   }
@@ -11926,7 +12054,8 @@ function renderIdx(){
   for (var i = 0; i < DATA.length; i++) {
     h += '<div class="irow" data-n="' + esc(DATA[i].name) + '"><img class="ic" src="'
        + icOf(DATA[i].cat) + '">' + esc(DATA[i].name)
-       + '<em>' + esc(DATA[i].cat) + '</em></div>';
+       + '<em>' + esc(DATA[i].cat)
+       + (DATA[i].sub ? ' \u00b7 ' + esc(DATA[i].sub) : '') + '</em></div>';
   }
   h += '</div>';
   $('side').innerHTML = h;
@@ -12157,7 +12286,9 @@ function show(name, fromToc){
   selName = name;
   var isEx = (d.kind === 'example');
   var h = '<div class="page">';
-  h += '<h1>' + esc(d.name) + '<span class="tag">' + esc(d.cat) + '</span></h1>';
+  /* 有子章节时把两级都标出来，读者才知道这个函数属于哪一小类 */
+  h += '<h1>' + esc(d.name) + '<span class="tag">'
+     + esc(d.cat + (d.sub ? ' \u00b7 ' + d.sub : '')) + '</span></h1>';
   /* 简介已在生成时转义过，这里不能再 esc 一次，否则里面的跳转链接会变成字面文本 */
   if (d.brief) h += '<p class="brief">' + d.brief + '</p>';
   /* 示例页：先声明源码编码，读者照抄时才知道该存成什么格式 */
