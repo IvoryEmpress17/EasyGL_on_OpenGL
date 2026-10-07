@@ -4226,6 +4226,7 @@ var DATA = [
    "<h3 style='margin:14px 0 6px;color:#10307a;'>不支持什么，以及为什么</h3><div class='warn'><code>filter</code> / <code>feGaussianBlur</code>：库里没有逐像素的滤镜管线，<a href='blurimage.htm'>blurimage</a> 作用于整张 <a href='IMAGE.htm'>IMAGE</a>，没法只作用到某一个元素上。<code>pattern</code> / <code>marker</code>：marker 需要沿路径查询切线方向，pattern 需要任意平铺单元，而库里只有六种固定的填充图案。富文本（tspan 换行、字距、竖排）：只认起点与 <code>text-anchor</code>，每个 <code>&lt;text&gt;</code> 画一行。<code>&lt;style&gt;</code> 块与 CSS 选择器：只读取行内的 <code>style=''</code> 属性。SMIL 动画：只做静态渲染。</div>",
    "<h3 style='margin:14px 0 6px;color:#10307a;'>值得知道的一件事：形状里的渐变</h3><a href='gradlinear.htm'>gradlinear</a> / <a href='gradradial.htm'>gradradial</a> 铺的是<b>矩形</b>上的渐变，不是形状上的。要拿渐变填一个路径，就用库里已有的东西分三步做出一张离屏遮罩：先建一张包围盒大小的图并填黑；再把形状填成白色（白＝在内部，黑＝在外部）；然后用 <code>GX_BLEND_MUL</code> 把渐变乘进去（白处留下渐变，黑处仍是黑），最后用 <code>GX_BLEND_ADD</code> 贴回原处——加黑色等于什么都没加，于是只有形状内部显现出来。抗锯齿的边缘顺带变成部分覆盖，无需额外处理。包围盒太大（超过 <code>GX_SVG_MAX_MASK</code>，默认 2048）时退回平涂，颜色取各色标的平均值。",
    "<h3 style='margin:14px 0 6px;color:#10307a;'>&lt;image&gt;：三种来源</h3><code>href</code>（或 <code>xlink:href</code>）可以是<b>内嵌的 data: URL</b>（<code>data:image/png;base64,...</code>）、<b>http / https 网址</b>，或者<b>磁盘路径</b>。内嵌的先解码、网址的先下载，两者都落到临时文件再交给 <a href='loadimage.htm'>loadimage</a> 读，因此支持 loadimage 认识的每一种格式。同一个地址或同一段内嵌数据只在第一次真正取，之后走缓存，所以一帧里画一百次同一个图标不会下载一百次。<code>preserveAspectRatio</code> 的 <code>meet</code> / <code>slice</code> 与 x / y 对齐都有效，不写就是 SVG 默认的「缩放并居中」。图片继承当前的裁剪框、透明度和变换；取不到就只是这一张不画，不会连累整幅图。",
+   "<h3 style='margin:14px 0 6px;color:#10307a;'>&lt;image&gt;：图片本身就是 SVG</h3>来源里写着 <code>svg+xml</code>（<code>data:image/svg+xml;base64,...</code>）或者路径以 <code>.svg</code> 结尾时，这张图<b>不走 loadimage</b>：<a href='loadimage.htm'>loadimage</a> 是 GDI+，只认 png / jpg / bmp / gif，把一段 SVG 文本当成 png 去解必然失败。此时内层文档交给 SVG 渲染器画成一张位图再贴出来，<b>SVG 套 SVG 因此能画</b>——这类文档以前会加载成功却什么都不画，只剩一片黑。位图按 <code>&lt;image&gt;</code> 盒子<b>在目标上占多少像素</b>来定尺寸（<code>width</code> / <code>height</code> 是 viewBox 单位，直接拿它当像素会把一张100 单位的图渲成 100 像素再拉伸到 420 像素上——糊就是这么来的），位图尺寸按<b>设备像素</b>算，不是逻辑单位：开了 <a href='fixhighdpi.htm'>fixhighdpi</a> 或系统缩放不是 100% 时，一个 660 逻辑单位宽的框在屏上其实是 990 个像素，只渲 660 个再拉伸就会发虚。上限 <code>GXS_IMG_RASTER_MAX</code>；盒子变大时会重渲，变小则沿用已有的大图。绘制时按整幅贴：位图是设备像素、框是逻辑单位，两者不同，因此通过 <code>logW</code> / <code>logH</code> 声明它代表多少逻辑单位，而不是把框的尺寸当作源像素数去读。位图先清成透明：<a href='Resize.htm'>Resize</a> 填的是不透明黑，不清的话一张没有底色的图会变成黑方块。其余三种来源与缓存行为完全照旧。",
    "<h3 style='margin:14px 0 6px;color:#10307a;'>&lt;text&gt;：逐字排版</h3>每个字形单独定位，所以 x / y / dx / dy 这些<b>逐字</b>属性才有意义：给绝对 x / y 就把光标挪过去，不给就接着上一个字往后排；dx / dy 列表和 <code>letter-spacing</code> 再把它推开。字体由 <code>font-family</code> / <code>font-size</code> / <code>font-weight</code> / <code>font-style</code> / <code>text-decoration</code> 决定，<code>dominant-baseline</code> 选基线（默认 alphabetic）。注意 SVG 的 y 是<b>基线</b>而不是 <a href='outtextxy.htm'>outtextxy</a> 那种左上角，字是<b>坐</b>在那条线上的，不会挂到线下面去。文档里的文字画完会把字体还原，不会覆盖你自己的。",
    "这些接口随 <code>EASYGL_H</code> 一同发布。",
    "<b>文档编码</b>：从文件读入的文档一律<b>转成 UTF-8 存储</b>，所以中文以及任何 Unicode 字符都能正常画出来。带 BOM 时按 BOM 判断——<code>EF BB BF</code> 是 UTF-8，<code>FF FE</code> 是 UTF-16 小端，<code>FE FF</code> 是 UTF-16 大端，三种都直接支持；没有 BOM 时先用<b>严格</b> UTF-8 校验，通过就是 UTF-8，不通过则按 <a href='settextcp.htm'>settextcp</a> 设置的代码页当作 ANSI 解出来再转 UTF-8。默认代码页是 CP_ACP（中文 Windows 上即 GBK），因此 GBK 存的 .svg 不需要做任何设置。",
@@ -4234,7 +4235,12 @@ var DATA = [
    "<b>font-size</b> 按 SVG 规范解释为<b>字号（em）</b>，与浏览器一致：同一个 font-size 在任何字体下都得到同样的大小。（库自身的 <a href='settextstyle.htm'>settextstyle</a> 仍以正数为「行高 cell height」，两者语义不同，互不影响。）",
    "<b>字号</b>：<code>font-size</code> 是 <b>em</b>（像浏览器那样），不是「行高」——同一字号在不同字体系列下画出来的大小是一致的，不会因为字体内部行距不同而逐个变大变小。",
    "<b>transform</b>：<code>translate / scale / rotate / matrix / skewX / skewY</code> 都按 SVG 语法解析，包括编辑器常用的 <code>translate(x,y) scale(s,s)</code> 这种「把缩放写在 transform 里」的写法——此时 <code>font-size</code> 写的是缩放前的大小，实际字号是 <code>font-size &times; scale</code>。",
-   "画文档时<b>建议用 <a href='putsvg.htm'>putsvgW</a></b>：源码在 <a href='SVGIMG.htm'>SVGIMG</a> 里是 UTF-8，绘制前已转成 UTF-16，W 版直通、零转换、不失真；<a href='putsvg.htm'>putsvgA</a> 每字要来回转两趟，<a href='putsvg.htm'>putsvg</a> 还要逐字校验一遍。"
+   "画文档时<b>建议用 <a href='putsvg.htm'>putsvgW</a></b>：源码在 <a href='SVGIMG.htm'>SVGIMG</a> 里是 UTF-8，绘制前已转成 UTF-16，W 版直通、零转换、不失真；<a href='putsvg.htm'>putsvgA</a> 每字要来回转两趟，<a href='putsvg.htm'>putsvg</a> 还要逐字校验一遍。",
+   "子路径<b>末点落在首点上时按闭合处理</b>，即使没有写 <code>Z</code>。部分导出工具生成的图形只靠坐标走回起点而不带闭合指令，描边时被当作开放折线，起点拿到两个<b>端帽</b>而不是连接——在五角星那种极尖的臂尖上就表现为一条被削平的腿。填充不受影响（填充本来就隐式闭合），所以只有轮廓看起来不对。判断用的是相对于图形包围盒的容差，因此 C 形、弧线这类首尾本不重合的开放路径不会被误判。",
+   "SVG 的 <code>opacity</code> 是<b>覆盖度</b>（0.5 表示半可见），而 <code>setalpha()</code> 要的是<b>透明度</b>（0 为实心），两者相反，库内部会在传入时把它反过来，无需手动换算。",
+   "<code>&lt;image&gt;</code> 的半透明曾完全不生效：贴图时每个顶点都按<code>gxAlphaOf(WHITE)</code> 推送，只读取颜色的 alpha 字节而不读全局 alpha，因此 <code>setalpha()</code> 对贴图没有任何作用。现在半透明的图片改走顶点带覆盖度的绘制路径，该值才真正传得进去。",
+   "填充、描边与文字在结束时把透明度<b>恢复成进入前的值</b>，而不是清成不透明——全局 alpha 会影响之后所有绘制，带 opacity 的文档以前会让 putsvg() 之后画的一切都变半透明。",
+   "渐变色标上的 <code>stop-opacity</code> 目前尚未支持（渐变着色器只传 RGB），整块的 <code>opacity</code> 与 <code>fill-opacity</code> / <code>stroke-opacity</code> 均正常。"
   ]
  },
  {
@@ -4309,6 +4315,21 @@ var DATA = [
   "name": "drawsvg",
   "cat": "图像处理相关函数",
   "sig": [
+   "/* 显式 A 版：文本是窄字符串，按 settextcp() 的代码页解码 */",
+   "void drawsvgA(const char* svg);",
+   "void drawsvgA(IMAGE* img, const char* svg);",
+   "void drawsvgA(double x, double y, const char* svg);",
+   "void drawsvgA(IMAGE* img, double x, double y, const char* svg);",
+   "void drawsvgA(double x, double y, double w, double h, const char* svg);",
+   "void drawsvgA(IMAGE* img, double x, double y, double w, double h, const char* svg);",
+   "/* 显式 W 版：文本是 UTF-16，六种形状同名同参 */",
+   "void drawsvgW(const WCHAR* svg);",
+   "void drawsvgW(IMAGE* img, const WCHAR* svg);",
+   "void drawsvgW(double x, double y, const WCHAR* svg);",
+   "void drawsvgW(IMAGE* img, double x, double y, const WCHAR* svg);",
+   "void drawsvgW(double x, double y, double w, double h, const WCHAR* svg);",
+   "void drawsvgW(IMAGE* img, double x, double y, double w, double h, const WCHAR* svg);",
+   "/* 不带后缀：只有窄字符串一种 */",
    "void drawsvg(const char* svg);",
    "void drawsvg(IMAGE* img, const char* svg);",
    "void drawsvg(double x, double y, const char* svg);",
@@ -4340,11 +4361,13 @@ var DATA = [
    ],
    [
     "svg",
-    "SVG 文档源码，NUL 结尾的字符串。"
+    "SVG 文档源码。不带后缀的名字<b>只收窄字符串</b>；要宽字符串请写 <code>drawsvgW</code>。"
    ]
   ],
   "ret": "无",
   "remarks": [
+   "<b>推荐写后缀。</b>六种形状 A / W 两版都有。<code>drawsvgA</code> 的文本按 <a href='settextcp.htm'>settextcp</a>() 的代码页解码，<code>drawsvgW</code> 收 UTF-16。不带后缀的名字<b>只有窄字符串一种</b>。",
+   "<div class='warn'><b>不写后缀是危险的写法。</b>不带后缀的名字要靠编译器按实参类型挑实现：C++ 下是重载，而 C 下 <code>loadsvg</code> / <code>drawsvg</code> / <code>drawsvgfile</code> 只是<b>数参数个数</b>的宏，根本没有类型信息可用——传宽字符串过去不会「自动选 W 版」，只会把 <code>WCHAR*</code> 塞给 <code>const char*</code>。要宽字符，就老老实实写 <b>W</b> 后缀。同理，字符串来自哪种编码只有你自己知道，交给编译器猜不如自己写死。</div>",
    "等价于 <a href='loadsvg.htm'>loadsvg</a> + <a href='putsvg.htm'>putsvg</a> + <a href='freesvg.htm'>freesvg</a>：<b>画一次就扔</b>用这一族最省事；同一份文档要画很多遍，请用 <a href='loadsvg.htm'>loadsvg</a> 装好再反复 <a href='putsvg.htm'>putsvg</a>，免得每次都重新解析一遍文本。",
    "文本里没有根 <code>&lt;svg&gt;</code> 元素时（比如塞进来一段 HTML，或一张 PNG 的字节）什么都不画，也不会报错。",
    "不指定 w / h 时按文档自身尺寸画，也就是 3 / 4 参形式的尺寸来源。",
@@ -4356,6 +4379,21 @@ var DATA = [
   "name": "drawsvgfile",
   "cat": "图像处理相关函数",
   "sig": [
+   "/* 显式 A 版：路径是窄字符串，按 setpathcp() 的代码页解码 */",
+   "int drawsvgfileA(const char* path);",
+   "int drawsvgfileA(IMAGE* img, const char* path);",
+   "int drawsvgfileA(double x, double y, const char* path);",
+   "int drawsvgfileA(IMAGE* img, double x, double y, const char* path);",
+   "int drawsvgfileA(double x, double y, double w, double h, const char* path);",
+   "int drawsvgfileA(IMAGE* img, double x, double y, double w, double h, const char* path);",
+   "/* 显式 W 版：路径是 UTF-16，六种形状同名同参 */",
+   "int drawsvgfileW(const WCHAR* path);",
+   "int drawsvgfileW(IMAGE* img, const WCHAR* path);",
+   "int drawsvgfileW(double x, double y, const WCHAR* path);",
+   "int drawsvgfileW(IMAGE* img, double x, double y, const WCHAR* path);",
+   "int drawsvgfileW(double x, double y, double w, double h, const WCHAR* path);",
+   "int drawsvgfileW(IMAGE* img, double x, double y, double w, double h, const WCHAR* path);",
+   "/* 不带后缀：只有窄字符串一种 */",
    "int drawsvgfile(const char* path);",
    "int drawsvgfile(IMAGE* img, const char* path);",
    "int drawsvgfile(double x, double y, const char* path);",
@@ -4387,11 +4425,13 @@ var DATA = [
    ],
    [
     "path",
-    "文件路径，<code>const char*</code> 走 A 版，<code>const WCHAR*</code> 走 W 版。"
+    "文件路径。不带后缀的名字<b>只收窄字符串</b>；要宽字符串请写 <code>drawsvgfileW</code>。"
    ]
   ],
   "ret": "成功返回 1，失败返回 0。",
   "remarks": [
+   "<b>推荐写后缀。</b>路径的编码由 <b>A / W</b> 决定，与文件内容无关：<code>drawsvgfileA</code> 的路径字节按 <a href='setpathcp.htm'>setpathcp</a>() 解码，<code>drawsvgfileW</code> 走 <code>_wfopen()</code>。不带后缀的名字<b>只有窄字符串一种</b>。",
+   "<div class='warn'><b>不写后缀是危险的写法。</b>不带后缀的名字要靠编译器按实参类型挑实现：C++ 下是重载，而 C 下 <code>loadsvg</code> / <code>drawsvg</code> / <code>drawsvgfile</code> 只是<b>数参数个数</b>的宏，根本没有类型信息可用——传宽字符串过去不会「自动选 W 版」，只会把 <code>WCHAR*</code> 塞给 <code>const char*</code>。要宽字符，就老老实实写 <b>W</b> 后缀。同理，字符串来自哪种编码只有你自己知道，交给编译器猜不如自己写死。</div>",
    "内部就是 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a> + <a href='putsvg.htm'>putsvg</a> + <a href='freesvg.htm'>freesvg</a>：文件不存在、是空的、或者名字叫 .svg 其实是别的格式，都返回 0 且什么都不画。",
    "没有指定尺寸的形式——想读成某个尺寸，用 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a>(&amp;e, path, w, h) 再 <a href='putsvg.htm'>putsvg</a>。",
    "编码处理同 <a href='loadsvgfromfile.htm'>loadsvgfromfile</a>：ANSI 文件按 <a href='settextcp.htm'>settextcp</a> 的代码页解出，最终都是 UTF-8。",
@@ -4599,6 +4639,13 @@ var DATA = [
   "name": "loadsvg",
   "cat": "图像处理相关函数",
   "sig": [
+   "/* 显式 A 版：文档文本是窄字符串，按 settextcp() 的代码页解码 */",
+   "int loadsvgA(SVGIMG* e, const char* svg);",
+   "int loadsvgA(SVGIMG* e, int w, int h, const char* svg);",
+   "/* 显式 W 版：文档文本是 UTF-16，转成 UTF-8 后交给同一个解析器 */",
+   "int loadsvgW(SVGIMG* e, const WCHAR* svg);",
+   "int loadsvgW(SVGIMG* e, int w, int h, const WCHAR* svg);",
+   "/* 不带后缀：只有窄字符串一种，C 下根本没有类型可分派 */",
    "/* 不带 w, h：固有尺寸取文档自己声明的 */",
    "int loadsvg(SVGIMG* e, const char* svg);",
    "/* 带 w, h：把文档当成 w × h */",
@@ -4612,7 +4659,7 @@ var DATA = [
    ],
    [
     "svg",
-    "SVG 文档源码，NUL 结尾的字符串。"
+    "SVG 文档源码。不带后缀的名字<b>只收窄字符串</b>；要宽字符串请写 <code>loadsvgW</code>。"
    ],
    [
     "w",
@@ -4625,6 +4672,8 @@ var DATA = [
   ],
   "ret": "成功返回 1，失败返回 0。",
   "remarks": [
+   "<b>推荐写后缀。</b>文档文本的编码由 <b>A / W</b> 决定：<code>loadsvgA</code> 按 <a href='settextcp.htm'>settextcp</a>() 的代码页解码，<code>loadsvgW</code> 收 UTF-16 并转成 UTF-8——文档在库里<b>本来就以 UTF-8 存放</b>，所以 W 只是另一条入口，不是第二种格式。",
+   "<div class='warn'><b>不写后缀是危险的写法。</b>不带后缀的名字要靠编译器按实参类型挑实现：C++ 下是重载，而 C 下 <code>loadsvg</code> / <code>drawsvg</code> / <code>drawsvgfile</code> 只是<b>数参数个数</b>的宏，根本没有类型信息可用——传宽字符串过去不会「自动选 W 版」，只会把 <code>WCHAR*</code> 塞给 <code>const char*</code>。要宽字符，就老老实实写 <b>W</b> 后缀。同理，字符串来自哪种编码只有你自己知道，交给编译器猜不如自己写死。</div>",
    "复制一份源码，由 <a href='SVGIMG.htm'>SVGIMG</a> 持有，用完 <a href='freesvg.htm'>freesvg</a>。",
    "第一个 <code>&lt;</code> 之前的内容会被跳过，所以带 UTF-8 BOM、开头有空行或空格都不影响。",
    "<b>必须有根 <code>&lt;svg&gt;</code> 元素</b>才认：一段 HTML、一张 PNG 都会被拒（返回 0），而不是被当成一份“什么都不画”的文档。",
@@ -5083,6 +5132,12 @@ var DATA = [
   "name": "savesvgfile",
   "cat": "图像处理相关函数",
   "sig": [
+   "/* 显式 A 版：路径是窄字符串，按 setpathcp() 的代码页解码 */",
+   "int savesvgfileA(const SVGIMG* e, const char* path);",
+   "int savesvgfileA(const char* path, const SVGIMG* e);",
+   "/* 显式 W 版：路径是 UTF-16，_wfopen() 直开，不经代码页 */",
+   "int savesvgfileW(const SVGIMG* e, const WCHAR* path);",
+   "int savesvgfileW(const WCHAR* path, const SVGIMG* e);",
    "/* 不带后缀：两个参数谁先谁后都行，按实参类型自动分派 */",
    "int savesvgfile(const SVGIMG* e, const char* path);",
    "int savesvgfile(const SVGIMG* e, const WCHAR* path);",
@@ -5093,18 +5148,21 @@ var DATA = [
   "params": [
    [
     "e",
-    "要写出的 <a href='SVGIMG.htm'>SVGIMG</a>。"
+    "写哪个文档的源码"
    ],
    [
     "path",
-    "目标文件路径。"
+    "写到哪个文件（新建或覆盖）"
    ]
   ],
   "ret": "成功返回 1，失败返回 0。",
   "remarks": [
+   "<b>推荐写后缀。</b>路径的编码由 <b>A / W</b> 决定，与文本内容无关：<code>savesvgfileA</code> 的路径字节按 <a href='setpathcp.htm'>setpathcp</a>() 的代码页解码（默认 CP_ACP，中文 Windows 上是 936 即 GBK），<code>savesvgfileW</code> 走 <code>_wfopen()</code>，什么名字都能表达。",
+   "<b>两个参数顺序随意</b>，A / W 两版都一样：<code>(e, path)</code> 和 <code>(path, e)</code> 都收。",
    "写的是<b>加载时的那份源码文本</b>（已统一为 UTF-8），不是渲染出来的图：内容、注释、空白原样保留。",
-   "写出去的编码是 <b>UTF-8</b>：文档在读入时就已经转成 UTF-8，所以从一个 GBK 文件读进来再存回去，内容一字不变而编码变成 UTF-8。要存成位图，请用 <a href='putsvg.htm'>putsvg</a>(&amp;img, 0, 0, &amp;e) 渲染进一个 <a href='IMAGE.htm'>IMAGE</a>，再 <a href='saveimage.htm'>saveimage</a>。",
-   "空文档（没 load 成功、或已 <a href='freesvg.htm'>freesvg</a>）返回 0。"
+   "写出去的编码是 <b>UTF-8</b>：文档在读入时就已经转成 UTF-8，所以从一个 GBK 文件读进来再存回去，内容一字不变而编码变成 UTF-8。要存成位图，请用 <a href='putsvg.htm'>putsvg</a>(&amp;img, 0, 0, &amp;e) 画进一张 <a href='IMAGE.htm'>IMAGE</a> 再 <a href='saveimage.htm'>saveimage</a>。",
+   "空文档（没 load 成功、或已 <a href='freesvg.htm'>freesvg</a>）返回 0。",
+   "全部 A / W 对的清单见 <a href='A / W 版本总览.htm'>A / W 版本总览</a>。"
   ]
  },
  {
@@ -8686,6 +8744,7 @@ var DATA = [
   "remarks": [
    "这一页是一份能直接编译运行的完整程序。为什么要有 A / W 两个名字：原来的写法是「同一个函数名，编译器按字符串实参的类型挑实现」（C11 用 _Generic，C++ 用重载）。多数时候很方便，但有个死角：想固定用某一版时没有名字可用。比如手上是一个 const WCHAR* 变量，却想让它按窄字符路径走；或者反过来，想在定义 UNICODE 的项目里明确指定窄版。现在这类函数都额外提供了显式的 xxxA / xxxW，用户可以自己决定，不必依赖编译器的推导。",
    "<b>两组函数名，两种调用方式</b>：<table class='t'><thead><tr><th>类别</th><th>函数</th><th>说明</th></tr></thead><tbody><tr class='head'><td>显式 A / W</td><td><code>outtextA</code> / <code>outtextW</code>、<code>outtextxyA</code> / <code>outtextxyW</code>、<code>textwidthA</code> / <code>textwidthW</code>、<code>textheightA</code> / <code>textheightW</code>、<code>setwindowtextA</code> / <code>setwindowtextW</code></td><td>原名本来就是这么定义的，A / W 就是全部。</td></tr><tr><td>宏 / 重载 + 显式 A / W</td><td><code>drawtext</code>、<code>inputbox</code>、<code>InputBox</code>、<code>messagebox</code>、<code>settextstyle</code>、<code>loadimage</code>、<code>saveimage</code></td><td>原来只有 <code>drawtext</code> 这样的统一名（按实参类型分派），现在另外提供了 <code>drawtextA</code> / <code>drawtextW</code> 等显式名。</td></tr></tbody></table>",
+   "<b>本轮补上的 SVG 四个</b>：<a href='loadsvg.htm'>loadsvg</a> / <a href='drawsvg.htm'>drawsvg</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> / <a href='savesvgfile.htm'>savesvgfile</a> 现在都有显式的 A / W 名。其中前三个<b>不带后缀时只有窄字符串一种</b>，C 下是数参数个数的宏，传宽字符串不会自动选 W 版——所以这几个尤其要写后缀，详见 <a href='A / W 版本总览.htm'>A / W 版本总览</a>。",
    "<b>A 版和 W 版的区别只在字符串</b>：<code>A</code> 版接受 <code>const char*</code>，按 <a href='settextcp.htm'>settextcp</a> 设定的代码页解码（默认 CP_ACP）；<code>W</code> 版接受 <code>const WCHAR*</code>，是 UTF-16，<b>不经任何转换</b>。其余参数、返回值、行为完全一致。这也是为什么 W 版用起来更省心 —— 字符串内容不受源码存成什么编码影响。",
    "<b>为什么左右分开画</b>：A 版与 W 版是两套实现，若某一版在转换上有 bug，只有并排对照才看得出。两边内容应当逐字相同；不一致就说明其中一版有问题。",
    "<b>源文件编码与宽字面量</b>：A 版字符串按 <a href='settextcp.htm'>settextcp</a>(936) 解码，所以源文件存成 GBK 才不出乱码；存成 UTF-8 就把这一句改成 <code>settextcp(CP_UTF8)</code>。W 版写成 <code>L'...'</code>，是 UTF-16、<b>不经任何转换</b>，所以本例 W 版直接写了中文 <code>L'W 版：UTF-16 不转换'</code> 也不受源码编码影响 —— 这正是 W 版省心的原因。 此外，本例把字符串里的中文都写成 <code>\\xXX</code> 转义（窄串是 GBK 字节、宽串是 UTF-16 码元），这样源码的字符串部分是纯 ASCII，<b>无论用什么编码打开都不会变成乱码</b>，编译出的字节也完全确定。",
@@ -11388,13 +11447,14 @@ var DATA = [
    "int textwidth(const char* str);       /* 自动选中上面第一个          */",
    "int textwidth(const WCHAR* str);      /* 自动选中上面第二个          */"
   ],
-  "brief": "凡接受字符串的函数都有一对实现：A 版收窄字符 <code>char*</code>，W 版收宽字符 <code>WCHAR*</code>。两者都能直接调用，不写后缀时由编译器按实参类型自动选一个。",
+  "brief": "凡接受字符串的函数都有一对实现：A 版收窄字符 <code>char*</code>，W 版收宽字符 <code>WCHAR*</code>。<b>推荐直接写 A / W 后缀</b>，把「用哪一版」握在自己手里，别交给编译器去猜。",
   "params": [],
   "ret": [],
   "remarks": [
    "<b>两者的唯一区别在字符串怎么解码</b>：A 版拿到 <code>char*</code> 后按 <a href='settextcp.htm'>settextcp</a>() 设的代码页转成宽字符再交给 GDI+（默认 CP_ACP，中文 Windows 上是 936 即 GBK）；W 版拿到 <code>WCHAR*</code> 直接就是 UTF-16，<b>不经任何转换</b>。所以源文件存成什么编码，只影响 A 版 —— W 版无论怎么存都不会错。",
-   "<h3 style='margin:14px 0 6px;color:#10307a;'>全部 A / W 对</h3><table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class='head'><td><a href='outtext.htm'>outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href='outtextxy.htm'>outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href='textwidth.htm'>textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href='textheight.htm'>textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href='drawtext.htm'>drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href='settextstyle.htm'>settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href='loadimage.htm'>loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href='saveimage.htm'>saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href='inputbox.htm'>inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href='InputBox.htm'>InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href='messagebox.htm'>messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href='setwindowtext.htm'>setwindowtext</a></td><td><code>setwindowtextA / setwindowtextW</code></td><td>改窗口标题</td></tr></tbody></table>",
-   "<h3 style='margin:14px 0 6px;color:#10307a;'>什么时候必须写后缀</h3>不写后缀时，编译器按实参类型选版本，绝大多数情况够用。但下面三种情形<b>必须</b>显式写：<ul style='margin:6px 0 6px 18px;'><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b> —— 不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>把函数<b>当函数指针传递</b>，或存进表里，不带后缀的宏形式没有单一地址可取。</li></ul>",
+   "<h3 style='margin:14px 0 6px;color:#10307a;'>全部 A / W 对</h3><table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class='head'><td><a href='outtext.htm'>outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href='outtextxy.htm'>outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href='textwidth.htm'>textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href='textheight.htm'>textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href='drawtext.htm'>drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href='settextstyle.htm'>settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href='loadimage.htm'>loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href='saveimage.htm'>saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href='inputbox.htm'>inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href='InputBox.htm'>InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href='messagebox.htm'>messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href='setwindowtext.htm'>setwindowtext</a></td><td><code>setwindowtextA / setwindowtextW</code></td><td>改窗口标题</td></tr><tr><td><a href='loadsvgfile.htm'>loadsvgfile</a></td><td><code>loadsvgfileA / loadsvgfileW</code></td><td>从文件载入 SVG</td></tr><tr><td><a href='loadsvgfromfile.htm'>loadsvgfromfile</a></td><td><code>loadsvgfromfileA / loadsvgfromfileW</code></td><td>从文件载入并指定尺寸</td></tr><tr><td><a href='savesvgfile.htm'>savesvgfile</a></td><td><code>savesvgfileA / savesvgfileW</code></td><td>把 SVG 源码写回文件</td></tr><tr><td><a href='loadsvg.htm'>loadsvg</a></td><td><code>loadsvgA / loadsvgW</code></td><td>从文本载入 SVG</td></tr><tr><td><a href='drawsvg.htm'>drawsvg</a></td><td><code>drawsvgA / drawsvgW</code></td><td>一步：载入文本并画出</td></tr><tr><td><a href='drawsvgfile.htm'>drawsvgfile</a></td><td><code>drawsvgfileA / drawsvgfileW</code></td><td>一步：载入文件并画出</td></tr><tr><td><a href='putsvg.htm'>putsvg</a></td><td><code>putsvgA / putsvgW</code></td><td>把已载入的 SVG 画出来</td></tr></tbody></table>",
+   "<h3 style='margin:14px 0 6px;color:#10307a;'>为什么推荐写后缀：不写是危险的</h3><div class='warn'>不带后缀的名字看着省事，实际上把「用哪一版」交给了编译器，而 C 下<b>根本没有类型可分派</b>。下面三种情况都会出问题：<ul style='margin:6px 0 6px 18px;'><li><b>宽字符串传过去不会自动选 W 版。</b>C11 下 <a href='loadsvg.htm'>loadsvg</a> / <a href='drawsvg.htm'>drawsvg</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> 只是<b>数参数个数</b>的宏，拿到 <code>WCHAR*</code> 也照样塞给 <code>const char*</code>，编译能过、运行时读的是错的内存；</li><li><b>C++ 下宽字符串直接编译不过</b>：这些名字只有 <code>const char*</code> 重载，传 <code>WCHAR*</code> 没有可行重载；</li><li><b>字符串是哪来的、什么编码，只有你知道。</b>编译器只能看见类型，看不见「这段字节是 GBK 还是 UTF-8」。</li></ul>写上后缀则三者全部消失：<b>用什么版本由我说了算</b>，而且换了 <code>UNICODE</code> 宏、换了编译器都不会变。</div>",
+   "<h3 style='margin:14px 0 6px;color:#10307a;'>不写后缀什么时候还能用</h3>不写后缀时编译器按实参类型选版本，在<b>纯窄字符串且类型明确</b>的场景是对的，比如 <code>outtextxy(10, 10, 'abc')</code>。真正非写不可的是这三种情形：<ul style='margin:6px 0 6px 18px;'><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b>——不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>要<b>宽字符串</b>，或要把函数<b>当函数指针传递</b>、存进表里（不带后缀的宏形式没有单一地址可取）。</li></ul>除此之外，<b>建议一律写后缀</b>：代价只是多打一个字母。",
    "<h3 style='margin:14px 0 6px;color:#10307a;'>只有 A 版的函数</h3>下面这些<b>没有 W 版也不该有</b> —— 它们的字符串不是文本，而是给驱动或 GL 看的 ASCII 标识符：<table class='t'><thead><tr><th>函数</th><th>字符串内容</th><th>为什么没有 W 版</th></tr></thead><tbody><tr class='head'><td><a href='setpostshader.htm'>setpostshader</a></td><td>着色器源码</td><td>GLSL 源码必须是 ASCII，驱动不认宽字符</td></tr><tr><td><a href='getpostloc.htm'>getpostloc</a></td><td>uniform 名字</td><td>GL 的 ASCII 标识符</td></tr><tr><td><a href='glgetproc.htm'>glgetproc</a></td><td>扩展函数名</td><td>同上</td></tr><tr><td><a href='GetEasyGLVer.htm'>GetEasyGLVer</a> / <a href='GetEasyXVer.htm'>GetEasyXVer</a></td><td>版本串</td><td>返回 ASCII，不是 TCHAR 接口</td></tr><tr><td><a href='getadapterinfo.htm'>getadapterinfo</a> / <a href='getdisplaymode.htm'>getdisplaymode</a><br><a href='getglslver.htm'>getglslver</a> / <a href='getglver.htm'>getglver</a><br><a href='getrendererinfo.htm'>getrendererinfo</a> / <a href='getvendorinfo.htm'>getvendorinfo</a></td><td>诊断信息串</td><td>驱动返回的就是 ASCII</td></tr></tbody></table>",
    "<h3 style='margin:14px 0 6px;color:#10307a;'>字体结构体：两版都有</h3><code>setfont</code> / <code>getfont</code> / <code>gettextstyle</code> 以及 <code>settextstyle</code> 的单参形式，既可以传 <code>LOGFONTA*</code> 也可以传 <code>LOGFONTW*</code>：<table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>说明</th></tr></thead><tbody><tr class='head'><td><a href='setfont.htm'>setfont</a></td><td><code>setfontA / setfontW</code></td><td>按指针类型分派；C++ 下是重载，C11 下是宏</td></tr><tr><td><a href='getfont.htm'>getfont</a></td><td><code>getfontA / getfontW</code></td><td>取出当前字体，装进你给的那个结构体</td></tr><tr><td><a href='gettextstyle.htm'>gettextstyle</a></td><td><code>gettextstyleA / gettextstyleW</code></td><td>与 getfont 同义</td></tr><tr><td><code>settextstyle(结构体)</code></td><td><code>settextstyleA / settextstyleW</code></td><td>单参形式是 LOGFONT 形式，同样两版都收</td></tr></tbody></table><b>为什么要传 LOGFONTW*</b>：库内部把当前字体保存为 <code>LOGFONTW</code>，字体也用 <code>CreateFontIndirectW</code> 创建。传 <code>LOGFONTA*</code> 时，面上的字体名会按 <a href='settextcp.htm'>settextcp</a> 的代码页转成宽字符；如果那个代码页表示不了这个名字（比如 GBK 存不下某些字体名），转换就已经有损了。所以<b>能拿到宽名字就用 W 版</b> —— A 版能表示的 W 版都能表示，反过来不成立。",
    "<b>C++ 与 C11 的差别</b>：C++ 下 A / W 是真正的重载，<code>textwidth('a')</code> 和 <code>textwidth(L'a')</code> 直接选出不同函数；C11 没有重载，不带后缀的名字是宏，用 <code>_Generic</code> 按实参类型分派，<b>显式 A / W 名字在两种语言下都存在且可直接调用</b>。这就是本页建议的做法 —— 换来的是'用哪个版本由我说了算'。",

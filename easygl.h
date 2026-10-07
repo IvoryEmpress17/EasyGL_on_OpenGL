@@ -35,6 +35,35 @@
  *
  * Revision 20261006 (two code pages, two crashes, two layout bugs)
  *
+ *   - An SVG <image> raster is drawn WHOLE and declares the logical
+ *     box through logW / logH.  The 7-argument form reads dw source
+ *     PIXELS, so a 420 unit box against an 840 pixel raster stopped
+ *     the UVs at halfway and showed one quarter of the picture.
+ *
+ *   - An SVG <image> is rasterised at DEVICE pixels, not logical
+ *     ones: with fixhighdpi or a scaled display a box 660 logical
+ *     units wide covers 990 screen pixels, and rendering 660 of
+ *     them is what made nested SVG go soft.
+ *
+ *   - loadsvg / drawsvg / drawsvgfile / savesvgfile each gained an
+ *     explicit A / W pair, so every public function that takes a
+ *     string now has one.  No suffix is the risky spelling here:
+ *     in C those four are macros that COUNT ARGUMENTS, so a WCHAR*
+ *     is not dispatched to the W version - it is handed to a
+ *     const char* parameter.  Name the version you want.
+ *
+ *   - An <image> whose source is itself an SVG - data:image/svg+xml, an
+ *     http address ending in .svg, a file called something.svg - is
+ *     rendered with the SVG renderer into a bitmap instead of being
+ *     handed to loadimage(), which is GDI+ and knows png / jpg / bmp /
+ *     gif only.  It used to be written to a .png temp file, fail to
+ *     decode, and be dropped in silence, so such a document loaded,
+ *     drew nothing, and left a black screen.  The raster is sized from
+ *     the <image> box so it is scaled down rather than up, capped at
+ *     GXS_IMG_RASTER_MAX, and cleared to transparent first - Resize()
+ *     fills with opaque black, which turns an image with no background
+ *     of its own into a black square.
+ *
  *   - putsvg() is putsvgA() / putsvgW() when you want to say which of
  *     outtextxyA() / outtextxyW() the <text> in a document goes to,
  *     and the plain name picks per character: one that survives a
@@ -64,7 +93,78 @@
  *     GX_DEFAULT_PATH_CODEPAGE joins it.
  *
  *
+ *   - SVG opacity is COVERAGE and setalpha() takes TRANSPARENCY - 0.5
+ *     means half visible in one and 0 is solid in the other - so the
+ *     value is turned round on the way in.  An <image> never got
+ *     that far: it was drawn with a blit, and a blit pushes every
+ *     vertex with gxAlphaOf(WHITE), which reads the alpha byte of the
+ *     COLOUR and never the global alpha, so setalpha() had no way to
+ *     reach it and opacity='0.5' came out solid.  A translucent image
+ *     now goes through the corner alpha draw, which carries the
+ *     coverage on the vertices where it does reach.
  *
+ *   - Filling, stroking and text put the alpha back the way they found
+ *     it instead of clearing it to opaque.  One global alpha feeds
+ *     every later draw, so a document carrying opacity used to reach
+ *     out past putsvg() and make everything the program drew after it
+ *     translucent - the same leak the font had.
+ *   - Translucent over opaque stays opaque.  glBlendFunc() applies one
+ *     pair of factors to colour and alpha alike, so (SRC_ALPHA,
+ *     ONE_MINUS_SRC_ALPHA) left the destination alpha at
+ *     srcA*srcA + dstA*(1-srcA) - 0.5 over 1.0 gave 0.75 instead of 1.0 -
+ *     and every translucent draw quietly punched a hole in the canvas.
+ *     GX_BLEND_ALPHA now uses glBlendFuncSeparate() so alpha gets the
+ *     srcA + dstA*(1-srcA) that "over" requires.
+ *   - Every texture is PREMULTIPLIED.  A framebuffer already is - "over"
+ *     leaves premultiplied pixels behind - and file pixels are made so
+ *     on upload, so one texture means one thing wherever it is sampled.
+ *     Sampling a texture as if it were straight multiplies the colour by
+ *     alpha a SECOND time: a white wing at 0.502 coverage landed 119 in
+ *     the texture and came out as 60, i.e. half transparent BLACK, out
+ *     where the canvas was empty.  On the opaque body the alpha was 1.0,
+ *     the second multiply was the identity and it looked correct, which
+ *     is why this read as a clipping bug for so long.  gxPresent() is
+ *     the one caller that must NOT undo it: it writes the canvas to the
+ *     back buffer with blending off, and premultiplied straight to the
+ *     screen IS "over" onto opaque black.  It uses uUseTex 5 for that.
+ *
+ *   - The gradient shader premultiplies too.  It handed over straight
+ *     colour while the blend takes the source at GL_ONE, so a radial
+ *     glow fading to nothing filled in solid: the outer rings carry
+ *     almost no alpha and yet contributed their full colour.
+ *
+ *   - A texture is already premultiplied, so the shader must not
+ *     premultiply it again.  It folded every sample with its own alpha a
+ *     SECOND time: a half transparent white wing went into the bake as
+ *     238*0.502 = 119 and came back out as 119*0.502 = 60, so the wing
+ *     was dark everywhere it sat on empty canvas.  Where it lay on the
+ *     opaque body the alpha was 1.0, the extra multiply was the
+ *     identity and it looked correct.  A premultiplied colour now only
+ *     follows the opacity the caller asked for; straight colour (a fill,
+ *     a vertex colour, an alpha mask) is still folded once.
+ *
+ *   - The pipeline is PREMULTIPLIED end to end.  "over" leaves
+ *     premultiplied pixels behind, so a framebuffer always held them
+ *     and only the convention was in doubt.  Textures were read back as
+ *     if they were straight, and a bilinear tap in straight space pulls
+ *     COLOUR out of a texel that has no alpha to carry it - which is a
+ *     white halo round anything fading out, and it got worse with every
+ *     extra pass (bake, rotateimage, blit) because each one filtered
+ *     again.  Filtering in the space the pixels are stored in cannot do
+ *     that.  The shader premultiplies on output, the blend takes GL_ONE
+ *     for the source, and nothing un-premultiplies anywhere.  One pair
+ *     of factors now serves colour and alpha alike, so a driver without
+ *     glBlendFuncSeparate() gets the right answer from plain
+ *     glBlendFunc().
+ *
+ *   - A gradient stop can now carry its own stop-opacity.  The shader
+ *     interpolated the stop COLOURS but took one alpha for the whole
+ *     gradient, so a stop fading to nothing stayed solid and the
+ *     gradient degenerated into a flat rectangle - both documents that
+ *     fade #9966ff to zero at offset 1 came out as solid blocks.  The
+ *     opacity rides in the alpha byte of the stop colour, where the
+ *     rest of the library carries it: 0 there means solid, so every
+ *     GRADSTOP built the old way is unaffected.
  *   - loadsvgfile() is loadsvgfileA() / loadsvgfileW(), and the path and
  *     the content are two separate knobs.  The A / W says what encoding
  *     the PATH is in - bytes decoded with getpathcp(), or UTF-16 - and
@@ -177,6 +277,11 @@
  *     URL is decoded into a temporary file, an address is downloaded into
  *     one (urlmon is loaded on demand, so nothing new is linked), and
  *     both are then read with loadimage() and drawn with putimage().
+ *     A source that names an SVG - "svg+xml" in a data: URL's type, or
+ *     ".svg" on a path - skips loadimage() and is rendered by the SVG
+ *     renderer into a bitmap instead, so SVG nested in SVG draws.  The
+ *     raster is sized from how many pixels the <image> box covers on the
+ *     target, not from its width / height, which are viewBox units.
  *     preserveAspectRatio honours the "meet" / "slice" split and the
  *     x/y alignment pair, so the usual "fit and centre" reading is what
  *     you get when the attribute is left out.  The image inherits the
@@ -1296,6 +1401,12 @@ static PFNGLGETSTRING gxGetString = 0;
 typedef void (APIENTRY *PFNGLBLENDEQUATION)(GLenum);
 static PFNGLBLENDEQUATION gxBlendEquation = 0;
 
+/* glBlendFuncSeparate() is GL 1.4, so the same reasoning applies: a header
+ * that stops at GL 1.1 does not declare it.  Loaded by hand, and optional -
+ * without it GX_BLEND_ALPHA falls back to glBlendFunc(). */
+typedef void (APIENTRY *PFNGLBLENDFUNCSEPARATE)(GLenum, GLenum, GLenum, GLenum);
+static PFNGLBLENDFUNCSEPARATE gxBlendFuncSeparate = 0;
+
 typedef HGLRC (WINAPI *PFN_WGLCREATECTXATTRIBS)(HDC, HGLRC, const int*);
 #define WGL_CONTEXT_MAJOR_VERSION_ARB            0x2091
 #define WGL_CONTEXT_MINOR_VERSION_ARB            0x2092
@@ -1352,6 +1463,8 @@ static void gxLoadGL(void) {
      * glGetString above.  A driver without it simply loses GX_BLEND_SUB. */
     gxBlendEquation =
         (PFNGLBLENDEQUATION)wglGetProcAddress("glBlendEquation");
+    gxBlendFuncSeparate =
+        (PFNGLBLENDFUNCSEPARATE)wglGetProcAddress("glBlendFuncSeparate");
     if (!gxGetString) {
         HMODULE hGL = GetModuleHandleA("opengl32.dll");
         if (!hGL) hGL = LoadLibraryA("opengl32.dll");
@@ -2090,20 +2203,46 @@ static const char* GX_FS =
     "varying vec2 vPos;\n"
     "void main(){\n"
     "  vec4 c = vColor;\n"
+    "  float pm = 0.0;\n"
     "  if(uUseTex==1) c.a *= texture2D(uTex,vUV).a;\n"
-    "  else if(uUseTex==2) c = texture2D(uTex,vUV);\n"
+    "  else if(uUseTex==2){ c = texture2D(uTex,vUV); pm = 1.0; }\n"
     "  else if(uUseTex==3) c.a *= texture2D(uTex,vPos*uPatScale+uPatOff).a;\n"
-    "  else if(uUseTex==4) c = vec4(1.0-texture2D(uTex,vUV).rgb, texture2D(uTex,vUV).a);\n"
+    /* Also a texture: the invert is a colour operation and leaves
+     * the sample premultiplied, so it is flagged like uUseTex 2.
+     * Folding it with its own alpha again made a radial glow that
+     * fades to nothing come out as a SOLID disc - every ring out
+     * to the edge got the same treatment the core did. */
+    "  else if(uUseTex==4){ vec4 t4 = texture2D(uTex,vUV);\n"
+    "                      c = vec4(t4.a - t4.rgb, t4.a); pm = 1.0; }\n"
     "  if(uMixMode!=0){\n"
     "    vec4 d = (uMixMode==1) ? uMixColor : texture2D(uTex2,vUV);\n"
-    "    vec4 sp = vec4(c.rgb*c.a, c.a);\n"
+    "    vec4 sp = (pm>0.5) ? c : vec4(c.rgb*c.a, c.a);\n"
     "    vec4 dp = vec4(d.rgb*d.a, d.a);\n"
     "    vec4 mp = mix(sp, dp, uMixW);\n"
     "    c = (mp.a>0.001) ? vec4(mp.rgb/mp.a, mp.a) : vec4(0.0,0.0,0.0,0.0);\n"
+    "    pm = 0.0;\n"
     "  }\n"
-    "  c.a *= uAlpha;\n"
-    "  if(uVertA==1 && uUseTex!=0) c.a *= vColor.a;\n"
+    "  float op = uAlpha;\n"
+    "  if(uVertA==1 && uUseTex!=0) op *= vColor.a;\n"
+    "  c.a *= op;\n"
     "  if(uNoBlend==1){ if(c.a<0.5) discard; c.a=1.0; }\n"
+    /* PREMULTIPLIED from here on - every texture and every framebuffer
+     * holds it and the blend factors below expect it.
+     *
+     * Only for colour that is NOT already premultiplied.  A texture
+     * sample (pm) is one, and multiplying it by its alpha a second
+     * time is what darkened a half transparent white wing: it went
+     * into the bake as 238*0.502 = 119 of premultiplied white, and
+     * came back out as 119*0.502 = 60.  Where the wing lay on the
+     * opaque body the alpha was 1.0, the second multiply was the
+     * identity and it looked right - which is why this read as a
+     * clipping bug, and then as a halo, for so long.
+     *
+     * A premultiplied colour only follows the opacity the caller
+     * asked for (op); it must not be folded with its own alpha
+     * again. */
+    "  if(pm>0.5) c.rgb *= op;\n"
+    "  else c.rgb *= c.a;\n"
     "  gl_FragColor = c;\n"
     "}\n";
 
@@ -2450,10 +2589,10 @@ GX_INLINE int gxRop2Fix(int rop2) {
 static void gxSetBlendEquation(int mode) {
     switch (mode) {
     case GX_BLEND_ADD:
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glBlendFunc(GL_ONE, GL_ONE);
         break;
     case GX_BLEND_SUB:
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glBlendFunc(GL_ONE, GL_ONE);
         break;
     case GX_BLEND_MUL:
         glBlendFunc(GL_DST_COLOR, GL_ZERO);
@@ -2465,7 +2604,25 @@ static void gxSetBlendEquation(int mode) {
         glBlendFunc(GL_ONE, GL_ZERO);
         break;
     default:                       /* GX_BLEND_ALPHA */
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        /* Colour: src*a + dst*(1-a), the usual "over".
+         *
+         * Alpha has to get its OWN factors.  glBlendFunc() applies one pair
+         * to everything, and with (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) that
+         * makes the destination alpha srcA*srcA + dstA*(1-srcA) instead of
+         * the srcA + dstA*(1-srcA) that "over" requires.  On an opaque
+         * canvas every translucent draw then punches a hole: 0.5 put over
+         * 1.0 leaves 0.75, not 1.0, and the pixel goes on to blend with
+         * whatever sits behind the canvas.
+         *
+         * That is what let a half see through wing show the background
+         * through the SOLID body underneath it.  Drawing translucent over
+         * opaque has to stay opaque - "over" says so, and the colour is the
+         * only thing that should change. */
+        if (gxBlendFuncSeparate)
+            gxBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+                                GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        else
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         break;
     }
     /* GL_FUNC_ADD is the default equation, so every mode except SUB works
@@ -6370,23 +6527,47 @@ static void gxClearImage(IMAGE* img, COLORREF c) {
 }
 
 /* Upload a top-down or bottom-up 32bpp pixel block into an IMAGE. */
-static void gxImageUpload(IMAGE* img, const unsigned char* px, int w, int h, bool bottomUp) {
+static void gxImageUpload(IMAGE* img, const unsigned char* px, int w, int h,
+                          bool bottomUp, bool straightIn) {
+    unsigned char* buf;
+    int row, i;
     if (!img || !px || w < 1 || h < 1) return;
     gxImageAlloc(img, w, h);
     if (!img->tex) return;
-    glBindTexture(GL_TEXTURE_2D, img->tex);
-    if (bottomUp) {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    } else {
-        int row;
-        unsigned char* flip = (unsigned char*)malloc((size_t)w * (size_t)h * 4);
-        if (!flip) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); return; }
-        for (row = 0; row < h; row++)
-            memcpy(&flip[(size_t)row * (size_t)w * 4],
-                   &px[(size_t)(h - 1 - row) * (size_t)w * 4], (size_t)w * 4);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, flip);
-        free(flip);
+    buf = (unsigned char*)malloc((size_t)w * (size_t)h * 4);
+    if (!buf) { MessageBoxA(NULL, "Out of memory", "Error", MB_OK); return; }
+    for (row = 0; row < h; row++) {
+        const unsigned char* sp =
+            &px[(size_t)(bottomUp ? row : h - 1 - row) * (size_t)w * 4];
+        memcpy(&buf[(size_t)row * (size_t)w * 4], sp, (size_t)w * 4);
     }
+    /* Every texture in the library is PREMULTIPLIED from here on.  A
+     * framebuffer is already that way - "over" leaves premultiplied
+     * pixels behind - so a texture sampled the same way twice means the
+     * same thing twice.  File pixels are STRAIGHT and are converted on
+     * the way in.
+     *
+     * Without it a half transparent white wing came out as half
+     * transparent BLACK outside the body: the blend wrote 238*0.502 = 119
+     * premultiplied into the texture, the sampler handed 119 to a blend
+     * that multiplied by alpha again and gave 60.  Where the wing sat on
+     * the opaque body the alpha was 1.0, the second multiply was the
+     * identity, and it looked right - which is what made the bug look
+     * like a clipping problem for so long.
+     *
+     * Opaque input is untouched, so bmp / jpg cost nothing. */
+    if (straightIn) {
+        for (i = 0; i < w * h; i++) {
+            unsigned a = buf[i * 4 + 3];
+            if (a >= 255) continue;
+            buf[i * 4 + 0] = (unsigned char)(buf[i * 4 + 0] * a / 255);
+            buf[i * 4 + 1] = (unsigned char)(buf[i * 4 + 1] * a / 255);
+            buf[i * 4 + 2] = (unsigned char)(buf[i * 4 + 2] * a / 255);
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, img->tex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+    free(buf);
 }
 
 /*======================================================================
@@ -6430,6 +6611,7 @@ typedef struct GRADSTOP {
 static const char* GX_GRAD_FS =
     "#version 120\n"
     "uniform vec4 uStops[16];   /* rgb = colour, w = position 0..1 */\n"
+    "uniform float uStopA[16];   /* one opacity per stop, 0..1 */\n"
     "uniform int  uStopN;\n"
     "uniform vec4 uGeo;         /* mode 1: start point   2/3: centre */\n"
     "uniform vec4 uGeo2;        /* mode 1: end point     2: radii  3: a0 in turns */\n"
@@ -6438,26 +6620,30 @@ static const char* GX_GRAD_FS =
     "varying vec4 vColor;\n"
     "varying vec2 vUV;\n"
     "varying vec2 vPos;\n"
-    "vec3 gxGradSample(float t)\n"
+    "vec4 gxGradSample(float t)\n"
     "{\n"
     "    int n = uStopN;\n"
-    "    if (n <= 0) return vec3(0.0);\n"
-    "    if (n == 1) return uStops[0].rgb;\n"
+    "    if (n <= 0) return vec4(0.0);\n"
+    "    if (n == 1) return vec4(uStops[0].rgb, uStopA[0]);\n"
     "    t = clamp(t, 0.0, 1.0);\n"
     "    vec3 c = uStops[0].rgb;\n"
+    "    float a = uStopA[0];\n"
     "    /* The stops are sorted by the caller, so the last one whose\n"
     "     * position is <= t is the one that wins - which is what a single\n"
-    "     * forward pass over a bounded loop gives. */\n"
+    "     * forward pass over a bounded loop gives.  The opacity rides\n"
+    "     * along on the same fraction, so a stop that fades out actually\n"
+    "     * fades instead of staying solid. */\n"
     "    for (int i = 0; i < 15; i++) {\n"
     "        if (i < n - 1) {\n"
     "            float p0 = uStops[i].w;\n"
     "            float p1 = uStops[i + 1].w;\n"
     "            float f  = (p1 > p0) ? (t - p0) / (p1 - p0) : 0.0;\n"
     "            f = clamp(f, 0.0, 1.0);\n"
-    "            if (t >= p0) c = mix(uStops[i].rgb, uStops[i + 1].rgb, f);\n"
+    "            if (t >= p0) { c = mix(uStops[i].rgb, uStops[i+1].rgb, f);\n"
+    "                           a = mix(uStopA[i], uStopA[i+1], f); }\n"
     "        }\n"
     "    }\n"
-    "    return c;\n"
+    "    return vec4(c, a);\n"
     "}\n"
     "void main()\n"
     "{\n"
@@ -6478,7 +6664,17 @@ static const char* GX_GRAD_FS =
     "    } else {\n"
     "        t = 0.0;\n"
     "    }\n"
-    "    gl_FragColor = vec4(gxGradSample(t), uAlpha);\n"
+    "    vec4 g = gxGradSample(t);\n"
+    "    /* The stop opacity is part of the gradient; uAlpha is the global\n"
+    "     * setalpha() level on top of it. */\n"
+    "    float ga = g.a * uAlpha;\n"
+    /* PREMULTIPLIED, like every other source in the library: the
+     * blend takes the source colour at GL_ONE and expects it.
+     * Left straight, a radial glow that fades to nothing came out
+     * as a SOLID disc - the outer rings carry almost no alpha but
+     * handed over their full colour anyway, so the whole way out
+     * to the edge filled in at the colour of the core. */
+    "    gl_FragColor = vec4(g.rgb * ga, ga);\n"
     "}\n";
 
 #define GX_BLUR_MAX_TAPS   49      /* centre + 24 to each side */
@@ -6505,12 +6701,17 @@ static const char* GX_BLUR_FS =
     "     * towards whatever is underneath, which shows up as a dark rim.\n"
     "     * Dividing the accumulated colour by the accumulated alpha keeps\n"
     "     * the edge the colour it was. */\n"
-    "    if (s.a > 1e-5) s.rgb /= s.a;\n"
+    /* Averaged PREMULTIPLIED, which is why it is stored that way:
+     * a tap over a texel with no alpha contributes nothing instead
+     * of contributing its colour, so a soft edge keeps its own
+     * colour and picks up no rim. */
+
     "    gl_FragColor = s;\n"
     "}\n";
 
 static GLuint g_gx_gradProg = 0, g_gx_gradVbo = 0;
 static GLint  g_gx_gradProj = -1, g_gx_gradStops = -1, g_gx_gradStopN = -1,
+              g_gx_gradStopA = -1,
               g_gx_gradGeo = -1, g_gx_gradGeo2 = -1, g_gx_gradMode = -1,
               g_gx_gradAlpha = -1;
 
@@ -6549,6 +6750,7 @@ static bool gxGradBuild(void) {
     g_gx_gradProj  = glGetUniformLocation(g_gx_gradProg, "uProj");
     g_gx_gradStops = glGetUniformLocation(g_gx_gradProg, "uStops");
     g_gx_gradStopN = glGetUniformLocation(g_gx_gradProg, "uStopN");
+    g_gx_gradStopA = glGetUniformLocation(g_gx_gradProg, "uStopA");
     g_gx_gradGeo   = glGetUniformLocation(g_gx_gradProg, "uGeo");
     g_gx_gradGeo2  = glGetUniformLocation(g_gx_gradProg, "uGeo2");
     g_gx_gradMode  = glGetUniformLocation(g_gx_gradProg, "uMode");
@@ -6597,6 +6799,7 @@ static void gxGradPaint(double l, double t, double r, double b, int mode,
     float verts[48];
     float arr[4 * GX_GRAD_MAX_STOPS];
     GRADSTOP s[GX_GRAD_MAX_STOPS];
+    float sa[GX_GRAD_MAX_STOPS];
     double tmp;
     int cnt, i, k;
 
@@ -6626,6 +6829,12 @@ static void gxGradPaint(double l, double t, double r, double b, int mode,
         arr[i * 4 + 2] = (float)GetBValue(s[i].color) / 255.f;
         arr[i * 4 + 3] = (float)s[i].pos;
     }
+    /* One opacity per stop.  It lives in the alpha byte of the stop
+     * colour, which is where the rest of the library carries it: a
+     * GRADSTOP built as { RGB(r,g,b), pos } has 0 there, and this
+     * library reads 0 as OPAQUE, so every gradient written before this
+     * existed still comes out solid exactly as it always did. */
+    for (i = 0; i < cnt; i++) sa[i] = gxAlphaOf(s[i].color);
 
     {
         float x0 = (float)l, y0 = (float)t;
@@ -6647,6 +6856,7 @@ static void gxGradPaint(double l, double t, double r, double b, int mode,
     glUniformMatrix4fv(g_gx_gradProj, 1, GL_FALSE, g_gx_proj);
     glUniform4fv(g_gx_gradStops, cnt, arr);
     glUniform1i(g_gx_gradStopN, cnt);
+    glUniform1fv(g_gx_gradStopA, cnt, sa);
     glUniform4f(g_gx_gradGeo,  (float)g0x, (float)g0y, 0.f, 0.f);
     glUniform4f(g_gx_gradGeo2, (float)g1x, (float)g1y, 0.f, 0.f);
     glUniform1i(g_gx_gradMode, mode);
@@ -6841,7 +7051,8 @@ static void gxGetImageFrom(IMAGE* dst, GLuint srcFbo, int srcW, int srcH,
     /* glReadPixels origin is bottom-left, source rect origin is top-left. */
     px = gxReadTarget(srcFbo, cx, srcH - cy - chh, cw, chh);
     if (!px) return;
-    gxImageUpload(dst, px, cw, chh, true);
+    /* Read out of a framebuffer, so already premultiplied. */
+    gxImageUpload(dst, px, cw, chh, true, false);
     free(px);
 }
 
@@ -7198,7 +7409,8 @@ static bool gxLoadImageFile(const WCHAR* file, IMAGE* img, int w, int h, bool re
         if (!hasAlpha) {
             for (i = 0; i < iw * ih; i++) px[i * 4 + 3] = 255;
         }
-        gxImageUpload(img, px, iw, ih, true);
+        /* Decoded from a file, so straight. */
+        gxImageUpload(img, px, iw, ih, true, true);
         if (hasAlpha) img->flags |= GXIMG_ALPHA;
         else img->flags &= ~GXIMG_ALPHA;
         ok = (img->tex != 0);
@@ -8735,7 +8947,7 @@ static HWND gxInitGraph(int w, int h) {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_COLOR_LOGIC_OP);
     glBindFramebuffer(GL_FRAMEBUFFER, g_gx_fbo);
     glViewport(0, 0, g_gx_devW, g_gx_devH);
@@ -10665,6 +10877,7 @@ static GX_UNUSED char* gxsUnescape(const char* s);
 static GX_UNUSED char* gxsReadFile(const char* path, size_t* outN);
 static GX_UNUSED char* gxsReadFileW(const WCHAR* path, size_t* outN);
 static GX_UNUSED char* gxsReadFileUtf8W(const WCHAR* path);
+static GX_UNUSED char* gxsReadFileUtf8(const char* path);
 static GX_UNUSED int  gxsWriteFile(const char* path, const char* text, size_t n);
 static GX_UNUSED int  gxsWriteFileW(const WCHAR* path, const char* text, size_t n);
 static GX_UNUSED int  gxsHasRootSvg(const char* s);
@@ -10698,6 +10911,8 @@ static GX_UNUSED void gxs_put_1(const SVGIMG* e);
 static GX_UNUSED void gxs_put_2(IMAGE* img, const SVGIMG* e);
 static GX_UNUSED int  gxs_load_2(SVGIMG* e, const char* svg);
 static GX_UNUSED int  gxs_load_4(SVGIMG* e, int w, int h, const char* svg);
+static GX_UNUSED int  gxs_loadw_2(SVGIMG* e, const WCHAR* svg);
+static GX_UNUSED int  gxs_loadw_4(SVGIMG* e, int w, int h, const WCHAR* svg);
 static GX_UNUSED void gxs_put_3(double x, double y, const SVGIMG* e);
 static GX_UNUSED void gxs_put_4(IMAGE* img, double x, double y, const SVGIMG* e);
 static GX_UNUSED void gxs_put_5(double x, double y, double w, double h, const SVGIMG* e);
@@ -10727,13 +10942,27 @@ static GX_UNUSED void gxs_draw_3(double x, double y, const char* svg);
 static GX_UNUSED void gxs_draw_4(IMAGE* img, double x, double y, const char* svg);
 static GX_UNUSED void gxs_draw_5(double x, double y, double w, double h, const char* svg);
 static GX_UNUSED void gxs_draw_6(IMAGE* img, double x, double y, double w, double h, const char* svg);
+static GX_UNUSED void gxs_draww_1(const WCHAR* svg);
+static GX_UNUSED void gxs_draww_2(IMAGE* img, const WCHAR* svg);
+static GX_UNUSED void gxs_draww_3(double x, double y, const WCHAR* svg);
+static GX_UNUSED void gxs_draww_4(IMAGE* img, double x, double y, const WCHAR* svg);
+static GX_UNUSED void gxs_draww_5(double x, double y, double w, double h, const WCHAR* svg);
+static GX_UNUSED void gxs_draww_6(IMAGE* img, double x, double y, double w, double h, const WCHAR* svg);
 static GX_UNUSED int  gxs_dfile_1(const char* path);
 static GX_UNUSED int  gxs_dfile_2(IMAGE* img, const char* path);
 static GX_UNUSED int  gxs_dfile_3(double x, double y, const char* path);
 static GX_UNUSED int  gxs_dfile_4(IMAGE* img, double x, double y, const char* path);
 static GX_UNUSED int  gxs_dfile_5(double x, double y, double w, double h, const char* path);
 static GX_UNUSED int  gxs_dfile_6(IMAGE* img, double x, double y, double w, double h, const char* path);
+static GX_UNUSED int  gxs_dfw_1(const WCHAR* path);
+static GX_UNUSED int  gxs_dfw_2(IMAGE* img, const WCHAR* path);
+static GX_UNUSED int  gxs_dfw_3(double x, double y, const WCHAR* path);
+static GX_UNUSED int  gxs_dfw_4(IMAGE* img, double x, double y, const WCHAR* path);
+static GX_UNUSED int  gxs_dfw_5(double x, double y, double w, double h, const WCHAR* path);
+static GX_UNUSED int  gxs_dfw_6(IMAGE* img, double x, double y, double w, double h, const WCHAR* path);
 static GX_UNUSED int  gxsFile(int n, IMAGE* img, double x, double y, double w, double h, const char* path);
+static GX_UNUSED int  gxsFileW(int n, IMAGE* img, double x, double y, double w, double h,
+                              const WCHAR* path);
 static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h,
                                     const char* svg, const GXSRot* rot, int flav);
 #endif
@@ -11252,6 +11481,18 @@ static GX_UNUSED int  loadsvg(SVGIMG* e, const char* svg)
 { return gxsLoadSrc(e, svg); }
 static GX_UNUSED int  loadsvg(SVGIMG* e, int w, int h, const char* svg)
 { return gxsLoadSrc2(e, w, h, svg); }
+static GX_UNUSED int  loadsvgA(SVGIMG* e, const char* svg)
+{ return gxsLoadSrc(e, svg); }
+static GX_UNUSED int  loadsvgA(SVGIMG* e, int w, int h, const char* svg)
+{ return gxsLoadSrc2(e, w, h, svg); }
+/* A document is held as UTF-8, so W is only a different way in, never a
+ * second format: the wide text is converted and given to the same parser. */
+static GX_UNUSED int  loadsvgW(SVGIMG* e, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  int r = u ? gxsLoadSrc(e, u) : 0; free(u); return r; }
+static GX_UNUSED int  loadsvgW(SVGIMG* e, int w, int h, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  int r = u ? gxsLoadSrc2(e, w, h, u) : 0; free(u); return r; }
 static GX_UNUSED int  loadsvgfile(SVGIMG* e, const char* path)
 { return loadsvgfileA(e, path); }
 static GX_UNUSED int  loadsvgfile(SVGIMG* e, const WCHAR* path)
@@ -11279,6 +11520,14 @@ static GX_UNUSED int  savesvgfile(const SVGIMG* e, const WCHAR* path)
 static GX_UNUSED int  savesvgfile(const char* path, const SVGIMG* e)
 { return gxsSaveA(e, path); }
 static GX_UNUSED int  savesvgfile(const WCHAR* path, const SVGIMG* e)
+{ return gxsSaveW(e, path); }
+static GX_UNUSED int  savesvgfileA(const SVGIMG* e, const char* path)
+{ return gxsSaveA(e, path); }
+static GX_UNUSED int  savesvgfileA(const char* path, const SVGIMG* e)
+{ return gxsSaveA(e, path); }
+static GX_UNUSED int  savesvgfileW(const SVGIMG* e, const WCHAR* path)
+{ return gxsSaveW(e, path); }
+static GX_UNUSED int  savesvgfileW(const WCHAR* path, const SVGIMG* e)
 { return gxsSaveW(e, path); }
 static GX_UNUSED void putsvg(const SVGIMG* e)
 { gxsPut3(0, 0, e, GXS_TX_AUTO); }
@@ -11355,6 +11604,65 @@ static GX_UNUSED int  drawsvgfile(double x, double y, double w, double h, const 
 { return gxs_dfile_5(x, y, w, h, path); }
 static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, double h, const char* path)
 { return gxs_dfile_6(img, x, y, w, h, path); }
+
+/* drawsvg / drawsvgfile carry a string too, so they get the same A / W
+ * pair the rest of the family has.  Without a suffix the plain name keeps
+ * guessing from the argument type, and in C there is nothing to guess with:
+ * the macro only counts arguments, so a WCHAR path never compiled before. */
+static GX_UNUSED void drawsvgA(const char* svg)
+{ gxs_draw_1(svg); }
+static GX_UNUSED void drawsvgA(IMAGE* img, const char* svg)
+{ gxs_draw_2(img, svg); }
+static GX_UNUSED void drawsvgA(double x, double y, const char* svg)
+{ gxs_draw_3(x, y, svg); }
+static GX_UNUSED void drawsvgA(IMAGE* img, double x, double y, const char* svg)
+{ gxs_draw_4(img, x, y, svg); }
+static GX_UNUSED void drawsvgA(double x, double y, double w, double h, const char* svg)
+{ gxs_draw_5(x, y, w, h, svg); }
+static GX_UNUSED void drawsvgA(IMAGE* img, double x, double y, double w, double h, const char* svg)
+{ gxs_draw_6(img, x, y, w, h, svg); }
+static GX_UNUSED void drawsvgW(const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  if (u) { gxs_draw_1(u); free(u); } }
+static GX_UNUSED void drawsvgW(IMAGE* img, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  if (u) { gxs_draw_2(img, u); free(u); } }
+static GX_UNUSED void drawsvgW(double x, double y, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  if (u) { gxs_draw_3(x, y, u); free(u); } }
+static GX_UNUSED void drawsvgW(IMAGE* img, double x, double y, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  if (u) { gxs_draw_4(img, x, y, u); free(u); } }
+static GX_UNUSED void drawsvgW(double x, double y, double w, double h, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  if (u) { gxs_draw_5(x, y, w, h, u); free(u); } }
+static GX_UNUSED void drawsvgW(IMAGE* img, double x, double y, double w, double h, const WCHAR* svg)
+{ char* u = gxDupBytesFromWideCp(svg, CP_UTF8);
+  if (u) { gxs_draw_6(img, x, y, w, h, u); free(u); } }
+static GX_UNUSED int  drawsvgfileA(const char* path)
+{ return gxs_dfile_1(path); }
+static GX_UNUSED int  drawsvgfileA(IMAGE* img, const char* path)
+{ return gxs_dfile_2(img, path); }
+static GX_UNUSED int  drawsvgfileA(double x, double y, const char* path)
+{ return gxs_dfile_3(x, y, path); }
+static GX_UNUSED int  drawsvgfileA(IMAGE* img, double x, double y, const char* path)
+{ return gxs_dfile_4(img, x, y, path); }
+static GX_UNUSED int  drawsvgfileA(double x, double y, double w, double h, const char* path)
+{ return gxs_dfile_5(x, y, w, h, path); }
+static GX_UNUSED int  drawsvgfileA(IMAGE* img, double x, double y, double w, double h, const char* path)
+{ return gxs_dfile_6(img, x, y, w, h, path); }
+static GX_UNUSED int  drawsvgfileW(const WCHAR* path)
+{ return gxs_dfw_1(path); }
+static GX_UNUSED int  drawsvgfileW(IMAGE* img, const WCHAR* path)
+{ return gxs_dfw_2(img, path); }
+static GX_UNUSED int  drawsvgfileW(double x, double y, const WCHAR* path)
+{ return gxs_dfw_3(x, y, path); }
+static GX_UNUSED int  drawsvgfileW(IMAGE* img, double x, double y, const WCHAR* path)
+{ return gxs_dfw_4(img, x, y, path); }
+static GX_UNUSED int  drawsvgfileW(double x, double y, double w, double h, const WCHAR* path)
+{ return gxs_dfw_5(x, y, w, h, path); }
+static GX_UNUSED int  drawsvgfileW(IMAGE* img, double x, double y, double w, double h, const WCHAR* path)
+{ return gxs_dfw_6(img, x, y, w, h, path); }
 
 #else /* !__cplusplus */
 
@@ -11937,6 +12245,16 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
 #define rotatesvg(...)   GXS_CAT(gxs_rot_,   GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define drawsvg(...)     GXS_CAT(gxs_draw_,  GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define drawsvgfile(...) GXS_CAT(gxs_dfile_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+/* The spelled out pair.  In C the plain names only COUNT arguments, and
+ * there is no _Generic on a string in this file, so a WCHAR document or a
+ * WCHAR path had no way in at all before these existed.  The A forms are the
+ * plain names under another name - same targets, same type checking. */
+#define loadsvgA(...)      loadsvg(__VA_ARGS__)
+#define drawsvgA(...)      drawsvg(__VA_ARGS__)
+#define drawsvgfileA(...)  drawsvgfile(__VA_ARGS__)
+#define loadsvgW(...)      GXS_CAT(gxs_loadw_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define drawsvgW(...)      GXS_CAT(gxs_draww_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define drawsvgfileW(...)  GXS_CAT(gxs_dfw_,   GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 #define GXS_ISWIDE(f) _Generic((f),                                     \
         const WCHAR* : 1, WCHAR* : 1,                                    \
@@ -11970,9 +12288,17 @@ static GX_UNUSED int  drawsvgfile(IMAGE* img, double x, double y, double w, doub
                           : gxsSaveA((const SVGIMG*)(a), (const char*)(b))) \
         : (GXS_ISWIDE(a) ? gxsSaveW((const SVGIMG*)(b), (const WCHAR*)(a)) \
                           : gxsSaveA((const SVGIMG*)(b), (const char*)(a))))
+#define savesvgfileA(a, b)                                             \
+    (GXS_ISIMG(a) ? gxsSaveA((const SVGIMG*)(a), (const char*)(b))     \
+                  : gxsSaveA((const SVGIMG*)(b), (const char*)(a)))
+#define savesvgfileW(a, b)                                             \
+    (GXS_ISIMG(a) ? gxsSaveW((const SVGIMG*)(a), (const WCHAR*)(b))    \
+                  : gxsSaveW((const SVGIMG*)(b), (const WCHAR*)(a)))
 #else
 #define loadsvgfile(e, f) loadsvgfileA((e), (const char*)(f))
-#define savesvgfile(a, b) gxsSaveA((const SVGIMG*)(a), (const char*)(b))
+#define savesvgfile(a, b)  gxsSaveA((const SVGIMG*)(a), (const char*)(b))
+#define savesvgfileA(a, b) gxsSaveA((const SVGIMG*)(a), (const char*)(b))
+#define savesvgfileW(a, b) gxsSaveW((const SVGIMG*)(a), (const WCHAR*)(b))
 #define loadsvgfromfile(...) GXS_CAT(gxs_lff_, GXS_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define gxs_lff_2(e, f)       gxsLoadFromFileA((e), (const char*)(f), 0, 0)
 #define gxs_lff_4(e, f, w, h) gxsLoadFromFileA((e), (const char*)(f), (w), (h))
@@ -13124,7 +13450,7 @@ static void gxsCollectDefs(char* buf, GXSCtx* cx)
         if (inGrad && g && strcmp(t.name, "stop") == 0) {
             GRADSTOP* st;
             const char* col;
-            double off;
+            double off, op;
             int none = 0, gid = -1;
             if (g->n >= GX_GRAD_MAX_STOPS) continue;
             st = &g->stop[g->n];
@@ -13143,13 +13469,44 @@ static void gxsCollectDefs(char* buf, GXSCtx* cx)
                           while (*q && *q != ';' && k < 63) tmp[k++] = *q++;
                           tmp[k] = 0;
                           gxsColor(tmp, &st->color, &none, &gid, cx);
-                          col = "-"; }
+                          col = "-"; } }
+                      { const char* so = strstr(st2, "stop-opacity");
+                        if (so) { so = strchr(so, ':'); if (so) {
+                          so++;
+                          while (*so && gxsIsSpace(*so)) so++;
+                          { double ov; const char* bp = so;
+                            if (gxsNum(&bp, &ov)) {
+                              if (ov < 0) ov = 0; if (ov > 1) ov = 1;
+                              if (ov < 1) {
+                                int r = GetRValue(st->color),
+                                    gg = GetGValue(st->color),
+                                    b  = GetBValue(st->color);
+                                st->color = ARGB((BYTE)((1.0-ov)*255.0+0.5),
+                                                 r, gg, b);
+                              } } } } }
                     } }
                 }
             }
             if (col && col[0] != '-') gxsColor(col, &st->color, &none, &gid, cx);
             else if (!col) st->color = RGB(0, 0, 0);
             if (none) st->color = RGB(0, 0, 0);
+            /* stop-opacity: how opaque THIS stop is.  It rides in the
+             * alpha byte of the stop colour, where the gradient shader
+             * picks it up - a byte this library reads as transparency,
+             * so 0 (what RGB() leaves there) means solid, which is what
+             * a stop that says nothing should be.
+             *
+             * Left out of the shader it made the whole gradient solid:
+             * both these documents fade #9966ff to nothing at offset 1,
+             * and a gradient that cannot fade is just a rectangle. */
+            op = gxsD(&t, "stop-opacity", 1);
+            if (op < 0) op = 0;
+            if (op > 1) op = 1;
+            if (op < 1) {
+                int r = GetRValue(st->color), gg = GetGValue(st->color),
+                    b  = GetBValue(st->color);
+                st->color = ARGB((BYTE)((1.0 - op) * 255.0 + 0.5), r, gg, b);
+            }
             st->pos = off;
             g->n++;
             continue;
@@ -13711,6 +14068,7 @@ static void gxsDashStroke(const POINT* p, int n, int closed, double width,
 /* Fill one path, with the gradient fallback */
 static void gxsFillPath(GXSCtx* cx, const GXSPath* pa, const GXSStyle* st)
 {
+    BYTE oldAlpha = getalpha();
     if (st->fillNone) return;
     if (st->fillOpacity <= 0 || st->opacity <= 0) return;
 
@@ -13721,20 +14079,21 @@ static void gxsFillPath(GXSCtx* cx, const GXSPath* pa, const GXSStyle* st)
         setfillcolor(avg);
         setalpha(gxsToAlpha(st->fillOpacity * st->opacity));
         gxsFillRings(pa, st->fillRule, 0.0, 0.0);
-        setalpha(0);
+        setalpha(oldAlpha);
         return;
     }
 
     setfillcolor(st->fill);
     setalpha(gxsToAlpha(st->fillOpacity * st->opacity));
     gxsFillRings(pa, st->fillRule, 0.0, 0.0);
-    setalpha(0);
+    setalpha(oldAlpha);
 }
 
 static void gxsStrokePath(const GXSPath* pa, const GXSStyle* st, double scale)
 {
     int i;
     double w;
+    BYTE oldAlpha = getalpha();
     if (st->strokeNone) return;
     if (st->strokeOpacity <= 0 || st->opacity <= 0) return;
     w = st->strokeW * scale;
@@ -13745,15 +14104,38 @@ static void gxsStrokePath(const GXSPath* pa, const GXSStyle* st, double scale)
     setstrokecap(st->cap);
     setstrokejoin(st->join);
     for (i = 0; i < pa->n; i++) {
-        int n = 0;
-        POINT* p = gxsToPts(&pa->s[i], &n);
-        if (!p || n < 2) { free(p); continue; }
-        if (st->dashN > 0) gxsDashStroke(p, n, pa->s[i].closed, w, st->dash, st->dashN, st->dashOff * scale, scale);
-        else if (pa->s[i].closed) strokepolygon(p, n, w);
-        else strokepolyline(p, n, w);
-        free(p);
+        const GXSSub* sb = &pa->s[i];
+        int n = 0, j;
+        POINT* p;
+        POINTF* pf;
+        if (!sb->p || sb->n < 2) continue;
+        if (st->dashN > 0) {
+            /* Dashes still go through the integer path: gxsDashStroke() is
+             * POINT based and a dash pattern is measured in pixels anyway. */
+            p = gxsToPts(sb, &n);
+            if (!p || n < 2) { free(p); continue; }
+            gxsDashStroke(p, n, sb->closed, w, st->dash, st->dashN, st->dashOff * scale, scale);
+            free(p);
+            continue;
+        }
+        /* POINTF, not POINT: gxsToPts() rounds to whole pixels, and near a
+         * needle sharp tip the flattened curve produces points a pixel apart.
+         * Half a pixel of rounding on a 1 pixel segment is up to 30 degrees
+         * of direction error, which throws the segment NORMALS off - and the
+         * normals are what the join is built from.  That is what bites the
+         * tips off; the caps never read the normals, which is why only the
+         * joined corners were damaged. */
+        pf = (POINTF*)malloc((size_t)sb->n * sizeof(POINTF));
+        if (!pf) continue;
+        for (j = 0; j < sb->n; j++) {
+            pf[j].x = (float)sb->p[j].x;
+            pf[j].y = (float)sb->p[j].y;
+        }
+        if (sb->closed) strokepolygonf(pf, sb->n, w);
+        else            strokepolylinef(pf, sb->n, w);
+        free(pf);
     }
-    setalpha(0);
+    setalpha(oldAlpha);
 }
 
 /* ==================================================================
@@ -14052,6 +14434,7 @@ static void gxsDrawRun(int x, int y, const WCHAR* w, int flav)
 
 static void gxsDrawText(GXSCtx* cx, const GXSTag* t, GXSStyle* st, char** p)
 {
+    BYTE oldAlpha = getalpha();
     double xa[GXS_TXT_MAX], ya[GXS_TXT_MAX], dxa[GXS_TXT_MAX], dya[GXS_TXT_MAX];
     int    xn = 0, yn = 0, dxn = 0, dyn = 0;
     int    isText = (strcmp(t->name, "text") == 0);
@@ -14178,7 +14561,7 @@ static void gxsDrawText(GXSCtx* cx, const GXSTag* t, GXSStyle* st, char** p)
     cx->penY = penY;
 
     if (vis) {
-        setalpha(0);
+        setalpha(oldAlpha);
         gxsClipEnd(&csv);
     }
     free(w);
@@ -14200,6 +14583,13 @@ static void gxsDrawText(GXSCtx* cx, const GXSTag* t, GXSStyle* st, char** p)
  * fails the image instead of failing to link. */
 #ifndef GXS_IMG_MAX
 #define GXS_IMG_MAX 32
+#endif
+
+/* The largest raster an SVG payload is rendered at, in pixels either way.
+ * The <image> box is in viewBox units, so an absent or absurd width would
+ * otherwise ask for a texture the size of a small building. */
+#ifndef GXS_IMG_RASTER_MAX
+#define GXS_IMG_RASTER_MAX 2048
 #endif
 
 #define GXS_MIN2(a, b) ((a) < (b) ? (a) : (b))
@@ -14230,6 +14620,8 @@ static int gxsNetReady(void)
 static struct GXSImgEnt {
     char*  key;
     IMAGE  img;
+    int    isSvg;     /* rendered from an SVG payload, so it can be re-rendered */
+    int    rw, rh;    /* for isSvg: the pixel size it is currently rendered at  */
 } g_gxsImg[GXS_IMG_MAX];
 static int g_gxsImgN = 0;
 
@@ -14237,11 +14629,11 @@ static int g_gxsImgN = 0;
  * cache is full the oldest entry is dropped: there is no cheaper rule
  * that is not wrong, and a document with more live <image> sources than
  * this is rare. */
-static IMAGE* gxsImgSlot(const char* key, int* found)
+static struct GXSImgEnt* gxsImgEnt(const char* key, int* found)
 {
     int i;
     for (i = 0; i < g_gxsImgN; i++)
-        if (strcmp(g_gxsImg[i].key, key) == 0) { *found = 1; return &g_gxsImg[i].img; }
+        if (strcmp(g_gxsImg[i].key, key) == 0) { *found = 1; return &g_gxsImg[i]; }
     *found = 0;
     if (g_gxsImgN < GXS_IMG_MAX) {
         i = g_gxsImgN++;
@@ -14251,10 +14643,10 @@ static IMAGE* gxsImgSlot(const char* key, int* found)
                 (size_t)(GXS_IMG_MAX - 1) * sizeof(g_gxsImg[0]));
         i = GXS_IMG_MAX - 1;
     }
+    memset(&g_gxsImg[i], 0, sizeof(g_gxsImg[i]));
     g_gxsImg[i].key = gxsStrDup(key);
     if (!g_gxsImg[i].key) { g_gxsImgN--; return NULL; }
-    memset(&g_gxsImg[i].img, 0, sizeof(IMAGE));
-    return &g_gxsImg[i].img;
+    return &g_gxsImg[i];
 }
 
 static void gxsImgDrop(IMAGE* im)
@@ -14333,23 +14725,155 @@ static void gxsMimeExt(const char* mime, WCHAR* ext)
     else                          wcscpy(ext, L"png");
 }
 
+/* Does this source name an SVG document rather than a bitmap?
+ *
+ * Only the part before the first comma is looked at for a data: URI - the
+ * payload is opaque and may itself contain the word - and a plain path or
+ * URL is searched whole.  "svg+xml" is the registered MIME type, ".svg" the
+ * usual file name. */
+static int gxsSrcIsSvg(const char* s)
+{
+    static const char* pat[2] = { "svg+xml", ".svg" };
+    const char* c = strchr(s, ',');
+    size_t n = c ? (size_t)(c - s) : strlen(s);
+    int k;
+    for (k = 0; k < 2; k++) {
+        size_t m = strlen(pat[k]), i;
+        if (n < m) continue;
+        for (i = 0; i + m <= n; i++)
+            if (strncmp(s + i, pat[k], m) == 0) return 1;
+    }
+    return 0;
+}
+
+/* An <image> whose payload is itself an SVG document.
+ *
+ * loadimage() is GDI+ and knows png / jpg / bmp / gif only, so a
+ * data:image/svg+xml URI was written to a .png temp file, failed to decode
+ * and was dropped in silence - a document that loaded, drew nothing, and
+ * left the caller looking at a black screen.  Render the inner document
+ * with the SVG renderer and hand back the bitmap, which is what every
+ * caller of this wants either way.
+ *
+ * hintW / hintH are how many PIXELS the <image> box covers on the target,
+ * so the raster comes out at the size it will be drawn at and is scaled
+ * down rather than up.  Zero means "whatever the document says about
+ * itself".  Both are capped at GXS_IMG_RASTER_MAX. */
+static int gxsImgFromSvgText(IMAGE* im, const char* text, size_t n,
+                             int hintW, int hintH)
+{
+    SVGIMG doc;
+    char* src;
+    int w, h;
+
+    if (!text || n == 0) return 0;
+    src = (char*)malloc(n + 1);
+    if (!src) return 0;
+    memcpy(src, text, n);
+    src[n] = 0;
+
+    memset(&doc, 0, sizeof(doc));
+    if (!gxsLoadSrc(&doc, src)) { free(src); freesvg(&doc); return 0; }
+    free(src);
+
+    w = (hintW > 0) ? hintW : (doc.width  > 0 ? doc.width  : 100);
+    h = (hintH > 0) ? hintH : (doc.height > 0 ? doc.height : 100);
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (w > GXS_IMG_RASTER_MAX) w = GXS_IMG_RASTER_MAX;
+    if (h > GXS_IMG_RASTER_MAX) h = GXS_IMG_RASTER_MAX;
+
+    Resize(im, w, h);
+    if (!gxImageOk(im)) { freesvg(&doc); return 0; }
+    /* Resize() fills with opaque black.  An <image> that carries no
+     * background of its own has to be empty, or every one of them is a
+     * black square with the art on top. */
+    gxClearFbo(im->fbo, im->width, im->height, BLACK, 0.f);
+    gxsRenderCore(im, 0, 0, (double)w, (double)h, doc.src, NULL, GXS_TX_AUTO);
+    freesvg(&doc);
+    return 1;
+}
+
+/* The pixel box a user-space rectangle covers once the transform has been
+ * applied.  All four corners: a flipped matrix would otherwise swap them.
+ *
+ * An SVG payload is rasterised at THIS size and not at the width / height
+ * written in the document.  Those are viewBox units, so an <image
+ * width='100'> sitting in a viewBox that is drawn across 420 pixels was
+ * rendered 100 pixels wide and then stretched four times over - sharp in
+ * the source, blurry on screen. */
+static void gxsBoxPx(const GXSMat* m, double x, double y, double w, double h,
+                     double* l, double* t, double* r, double* b)
+{
+    GXSPt a = gxsXf(m, x,     y);
+    GXSPt c = gxsXf(m, x + w, y + h);
+    GXSPt d = gxsXf(m, x,     y + h);
+    GXSPt e = gxsXf(m, x + w, y);
+    *l = GXS_MIN2(GXS_MIN2(a.x, c.x), GXS_MIN2(d.x, e.x));
+    *t = GXS_MIN2(GXS_MIN2(a.y, c.y), GXS_MIN2(d.y, e.y));
+    *r = GXS_MAX2(GXS_MAX2(a.x, c.x), GXS_MAX2(d.x, e.x));
+    *b = GXS_MAX2(GXS_MAX2(a.y, c.y), GXS_MAX2(d.y, e.y));
+}
+
+static int gxsRasterPx(double v)
+{
+    int n = (int)(v + 0.5);
+    if (n < 1) n = 1;
+    if (n > GXS_IMG_RASTER_MAX) n = GXS_IMG_RASTER_MAX;
+    return n;
+}
+
+/* How many device pixels one logical unit of what is being drawn into
+ * covers.  gxsBoxPx() measures the <image> box in LOGICAL units, but the
+ * raster is a texture and a texture is counted in pixels: at 150% a box
+ * 660 logical units wide covers 990 pixels of screen, and rendering 660
+ * of them is exactly what made a nested SVG go soft on a scaled display.
+ * Only the canvas is scaled - an IMAGE target is 1:1, its pixels ARE the
+ * coordinate space - so anything but the canvas gives 1. */
+static void gxsTargetScale(const GXSCtx* cx, double* sx, double* sy)
+{
+    if (!cx->target && !GetWorkingImage()) {
+        *sx = (g_gx_scaleX > 0.f) ? (double)g_gx_scaleX : 1.0;
+        *sy = (g_gx_scaleY > 0.f) ? (double)g_gx_scaleY : 1.0;
+    } else {
+        *sx = *sy = 1.0;
+    }
+}
+
 /* Materialise the source as a file and load it.  *tmp receives the file
- * that has to be deleted afterwards, or L"" when the source was a path. */
-static int gxsImgLoad(IMAGE* im, const char* href, WCHAR* tmp)
+ * that has to be deleted afterwards, or L"" when the source was a path.
+ *
+ * hintW / hintH are the size to rasterise at in PIXELS, used only when the
+ * source turns out to be an SVG - see gxsImgFromSvgText(). */
+static int gxsImgLoad(IMAGE* im, const char* href, WCHAR* tmp,
+                      int hintW, int hintH)
 {
     unsigned char* raw;
     size_t n;
     WCHAR* wh;
+    int isSvg = gxsSrcIsSvg(href);
 
     tmp[0] = 0;
     if (strncmp(href, "data:", 5) == 0) {
         const char* b64 = strstr(href, ";base64,");
         WCHAR ext[8];
+        int enc = (b64 != NULL);
         if (b64) b64 += 8;
         else {                                  /* an unencoded data: URI */
             b64 = strchr(href, ',');
             if (!b64) return 0;
             b64++;
+        }
+        if (isSvg) {
+            if (!enc)   /* written out in full; percent escapes left alone */
+                return gxsImgFromSvgText(im, b64, strlen(b64), hintW, hintH);
+            raw = gxsB64Decode(b64, &n);
+            if (!raw) return 0;
+            {
+                int ok = gxsImgFromSvgText(im, (const char*)raw, n, hintW, hintH);
+                free(raw);
+                return ok;
+            }
         }
         raw = gxsB64Decode(b64, &n);
         if (!raw) return 0;
@@ -14376,7 +14900,21 @@ static int gxsImgLoad(IMAGE* im, const char* href, WCHAR* tmp)
         if (gxsUrlDownload(NULL, wh, tmp, 0, NULL) != 0) { free(wh); return 0; }
         free(wh);
         wh = NULL;
+        if (isSvg) {
+            char* txt = gxsReadFileW(tmp, &n);
+            int ok = gxsImgFromSvgText(im, txt, txt ? n : 0, hintW, hintH);
+            free(txt);
+            _wremove(tmp);
+            tmp[0] = 0;
+            return ok;
+        }
     } else {
+        if (isSvg) {
+            char* txt = gxsReadFileUtf8(href);
+            int ok = gxsImgFromSvgText(im, txt, txt ? strlen(txt) : 0, hintW, hintH);
+            free(txt);
+            return ok;
+        }
         wh = gxDupWideFromBytesPath(href);
         if (!wh) return 0;
     }
@@ -14416,50 +14954,108 @@ static void gxsFitImage(const char* par, double iw, double ih, double sw, double
 static void gxsDrawImage(GXSCtx* cx, const GXSTag* t, GXSStyle* st)
 {
     const char* href = gxsHref(t);
+    struct GXSImgEnt* ent;
     IMAGE* im;
-    int found;
+    int found, pass, isSvg, rw, rh;
     WCHAR tmp[MAX_PATH];
     GXSClipSave csv;
-    GXSPt a, b;
     double ix, iy, iw, ih, w, h, ox, oy, l, tp, r, bt;
 
     if (!href || st->opacity <= 0) return;
-    im = gxsImgSlot(href, &found);
-    if (!im) return;
-    if (!found) {
-        if (!gxsImgLoad(im, href, tmp)) {
+    isSvg = gxsSrcIsSvg(href);
+    ix = gxsD(t, "x", 0);
+    iy = gxsD(t, "y", 0);
+    iw = gxsD(t, "width",  0);
+    ih = gxsD(t, "height", 0);
+
+    ent = gxsImgEnt(href, &found);
+    if (!ent) return;
+    im = &ent->img;
+
+    /* At most two tries: an <image> that names no width / height is sized
+     * by whatever it points at, and that is only known once it is loaded. */
+    for (pass = 0; pass < 2; pass++) {
+        rw = rh = 0;
+        if (iw > 0 && ih > 0) {
+            double dsx, dsy;
+            gxsBoxPx(&cx->xf, ix, iy, iw, ih, &l, &tp, &r, &bt);
+            gxsTargetScale(cx, &dsx, &dsy);
+            /* Logical units in, device pixels out. */
+            rw = gxsRasterPx((r - l) * dsx);
+            rh = gxsRasterPx((bt - tp) * dsy);
+        }
+        /* A cached raster is kept unless the box has OUTGROWN it.  A
+         * smaller box only draws it smaller, which costs nothing, and a box
+         * that changes every frame would otherwise re-render every frame. */
+        if (found && !(isSvg && (rw > ent->rw || rh > ent->rh))) break;
+        if (!gxsImgLoad(im, href, tmp, rw, rh)) {
             gxsImgDrop(im);
             if (tmp[0]) _wremove(tmp);
             return;
         }
+        found = 1;
+        ent->isSvg = isSvg;
+        /* Device pixels, not logical units: that is what the raster was
+         * asked for and what the cache compares against. */
+        ent->rw = (rw > 0) ? rw : im->width;
+        ent->rh = (rh > 0) ? rh : im->height;
+        if (iw > 0 && ih > 0) break;
+        iw = (double)im->width;             /* intrinsic size */
+        ih = (double)im->height;
     }
     if (!gxImageOk(im)) return;
-
-    ix = gxsD(t, "x", 0);
-    iy = gxsD(t, "y", 0);
-    iw = gxsD(t, "width",  (double)im->logW);
-    ih = gxsD(t, "height", (double)im->logH);
     if (!(iw > 0) || !(ih > 0)) return;
-    gxsFitImage(gxsAttr(t, "preserveAspectRatio"), im->logW, im->logH, iw, ih,
-                &w, &h, &ox, &oy);
+
+    if (isSvg) {
+        /* The raster was made by fitting the inner viewBox into a box this
+         * size, so it goes in as it stands. */
+        w = iw; h = ih; ox = oy = 0;
+    } else {
+        gxsFitImage(gxsAttr(t, "preserveAspectRatio"), im->logW, im->logH,
+                    iw, ih, &w, &h, &ox, &oy);
+    }
+    gxsBoxPx(&cx->xf, ix + ox, iy + oy, w, h, &l, &tp, &r, &bt);
 
     gxsClipBegin(cx, st, &csv);
-    /* The four corners, not two: a flipped matrix would otherwise swap
-     * them and putimage() draws the box the way round it is given. */
-    a = gxsXf(&cx->xf, ix + ox,       iy + oy);
-    b = gxsXf(&cx->xf, ix + ox + w,   iy + oy + h);
-    {
-        GXSPt c = gxsXf(&cx->xf, ix + ox,     iy + oy + h);
-        GXSPt d = gxsXf(&cx->xf, ix + ox + w, iy + oy);
-        l  = GXS_MIN2(GXS_MIN2(a.x, b.x), GXS_MIN2(c.x, d.x));
-        tp = GXS_MIN2(GXS_MIN2(a.y, b.y), GXS_MIN2(c.y, d.y));
-        r  = GXS_MAX2(GXS_MAX2(a.x, b.x), GXS_MAX2(c.x, d.x));
-        bt = GXS_MAX2(GXS_MAX2(a.y, b.y), GXS_MAX2(c.y, d.y));
+    if (r - l >= 0.5 && bt - tp >= 0.5) {
+        double op = gxsClampD(st->opacity, 0, 1);
+        if (op < 1.0) {
+            /* SVG opacity is COVERAGE - 0.5 means half visible - while
+             * setalpha() takes the TRANSPARENCY, where 0 is solid.  The
+             * two are opposites, so the value has to be turned round on
+             * the way in.
+             *
+             * And it cannot go through setalpha() anyway: every blit
+             * pushes its vertices with gxAlphaOf(WHITE), which reads the
+             * alpha byte of the COLOUR and never the global one, so the
+             * global alpha has no path to a putimage() at all.  The
+             * corner alpha draw carries the coverage on the vertices
+             * instead, which is where it does reach.  Without this an
+             * <image opacity='0.5'> came out solid. */
+            if (isSvg) {
+                im->logW = (int)(r - l + 0.5);
+                im->logH = (int)(bt - tp + 0.5);
+            }
+            gxAlphaGrad(l, tp, r - l, bt - tp, im, op, op, op, op);
+        } else if (isSvg) {
+            /* An SVG raster is DEVICE pixels but the box it is drawn into
+             * is LOGICAL: at 200% a 420 unit box holds 840 of them.  The
+             * 7-argument form reads dw source PIXELS, so handing it 420
+             * against an 840 pixel texture stopped the UVs at halfway and
+             * only the top left quarter of the picture was read.
+             *
+             * Say instead how many logical units the raster stands for and
+             * draw it whole: every pixel is read, and the box is filled
+             * exactly - which is what logW / logH are for. */
+            im->logW = (int)(r - l + 0.5);
+            im->logH = (int)(bt - tp + 0.5);
+            gxPutImage3((int)floor(l + 0.5), (int)floor(tp + 0.5), im);
+        } else {
+            gxPutImage7((int)floor(l + 0.5), (int)floor(tp + 0.5),
+                        (int)(r - l + 0.5), (int)(bt - tp + 0.5),
+                        im, 0, 0);
+        }
     }
-    if (r - l >= 0.5 && bt - tp >= 0.5)
-        gxPutImage7((int)floor(l + 0.5), (int)floor(tp + 0.5),
-                    (int)(r - l + 0.5), (int)(bt - tp + 0.5),
-                    im, 0, 0);
     gxsClipEnd(&csv);
 }
 
@@ -15429,9 +16025,65 @@ static GX_UNUSED void gxs_rot_7(IMAGE* img, double x, double y, double w, double
 static GX_UNUSED void gxs_rot_8(double x, double y, double w, double h, const SVGIMG* e,
                                 double rad, double cx, double cy)
 { gxsRotCore(NULL, x, y, w, h, e, rad, cx, cy); }
-static GX_UNUSED void gxs_rot_9(IMAGE* img, double x, double y, double w, double h,
-                                const SVGIMG* e, double rad, double cx, double cy)
-{ gxsRotCore(img, x, y, w, h, e, rad, cx, cy); }
+
+/* The wide spelling of loadsvg / drawsvg: the document text arrives as
+ * UTF-16, is converted to UTF-8, and is then handled exactly as the
+ * narrow one is.  A caller holding a WCHAR buffer no longer has to make
+ * a lossy trip through the current code page to reach the parser. */
+static GX_UNUSED int gxs_loadw_2(SVGIMG* e, const WCHAR* svg)
+{
+    char* a;
+    int r;
+    if (!e || !svg) return 0;
+    a = gxDupBytesFromWideCp(svg, CP_UTF8);
+    if (!a) return 0;
+    r = gxsLoadSrc(e, a);
+    free(a);
+    return r;
+}
+
+static GX_UNUSED int gxs_loadw_4(SVGIMG* e, int w, int h, const WCHAR* svg)
+{
+    char* a;
+    int r;
+    if (!e || !svg) return 0;
+    a = gxDupBytesFromWideCp(svg, CP_UTF8);
+    if (!a) return 0;
+    r = gxsLoadSrc2(e, w, h, a);
+    free(a);
+    return r;
+}
+
+static GX_UNUSED void gxs_draww_1(const WCHAR* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxs_loadw_2(&e, svg)) { gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draww_2(IMAGE* img, const WCHAR* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxs_loadw_2(&e, svg)) { gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draww_3(double x, double y, const WCHAR* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxs_loadw_2(&e, svg)) { gxsPut3(x, y, &e, GXS_TX_AUTO); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draww_4(IMAGE* img, double x, double y, const WCHAR* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxs_loadw_2(&e, svg)) { gxsPut4(img, x, y, &e, GXS_TX_AUTO); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draww_5(double x, double y, double w, double h, const WCHAR* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxs_loadw_2(&e, svg)) { gxsPut5(x, y, w, h, &e, GXS_TX_AUTO); freesvg(&e); }
+}
+static GX_UNUSED void gxs_draww_6(IMAGE* img, double x, double y, double w, double h, const WCHAR* svg)
+{
+    SVGIMG e; memset(&e, 0, sizeof(e));
+    if (gxs_loadw_2(&e, svg)) { gxsPut6(img, x, y, w, h, &e, GXS_TX_AUTO); freesvg(&e); }
+}
 #endif
 
 /* ---- draw: load, put, free ----------------------------------------- */
@@ -15473,18 +16125,37 @@ static GX_UNUSED void gxs_draw_6(IMAGE* img, double x, double y, double w, doubl
     if (gxsLoadSrc(&e, svg)) { gxsPut6(img, x, y, w, h, &e, GXS_TX_AUTO); freesvg(&e); }
 }
 
+/* Draw a loaded document with the argument shape n means. */
+static GX_UNUSED void gxsDraw(SVGIMG* e, int n, IMAGE* img, double x, double y,
+                              double w, double h)
+{
+    if (n == 6)      gxsPut6(img, x, y, w, h, e, GXS_TX_AUTO);
+    else if (n == 5) gxsPut5(x, y, w, h, e, GXS_TX_AUTO);
+    else if (n == 4) gxsPut4(img, x, y, e, GXS_TX_AUTO);
+    else if (n == 3) gxsPut3(x, y, e, GXS_TX_AUTO);
+    else if (n == 2) gxsPut6(img, 0, 0, (double)e->width, (double)e->height, e, GXS_TX_AUTO);
+    else             gxsPut6(NULL, 0, 0, (double)e->width, (double)e->height, e, GXS_TX_AUTO);
+}
+
 /* Read from a file. Returns 1 on success. */
 static GX_UNUSED int gxsFile(int n, IMAGE* img, double x, double y, double w, double h, const char* path)
 {
     SVGIMG e;
     memset(&e, 0, sizeof(e));
     if (!gxsLoadFileA(&e, path)) return 0;
-    if (n == 6)      gxsPut6(img, x, y, w, h, &e, GXS_TX_AUTO);
-    else if (n == 5) gxsPut5(x, y, w, h, &e, GXS_TX_AUTO);
-    else if (n == 4) gxsPut4(img, x, y, &e, GXS_TX_AUTO);
-    else if (n == 3) gxsPut3(x, y, &e, GXS_TX_AUTO);
-    else if (n == 2) gxsPut6(img, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO);
-    else             gxsPut6(NULL, 0, 0, (double)e.width, (double)e.height, &e, GXS_TX_AUTO);
+    gxsDraw(&e, n, img, x, y, w, h);
+    freesvg(&e);
+    return 1;
+}
+
+/* The same from a wide path, which is the only way a name outside the
+ * current code page can be given at all. */
+static GX_UNUSED int gxsFileW(int n, IMAGE* img, double x, double y, double w, double h, const WCHAR* path)
+{
+    SVGIMG e;
+    memset(&e, 0, sizeof(e));
+    if (!gxsLoadFileW(&e, path)) return 0;
+    gxsDraw(&e, n, img, x, y, w, h);
     freesvg(&e);
     return 1;
 }
@@ -15495,6 +16166,13 @@ static GX_UNUSED int gxs_dfile_3(double x, double y, const char* path) { return 
 static GX_UNUSED int gxs_dfile_4(IMAGE* img, double x, double y, const char* path) { return gxsFile(4, img, x, y, 0, 0, path); }
 static GX_UNUSED int gxs_dfile_5(double x, double y, double w, double h, const char* path) { return gxsFile(5, NULL, x, y, w, h, path); }
 static GX_UNUSED int gxs_dfile_6(IMAGE* img, double x, double y, double w, double h, const char* path) { return gxsFile(6, img, x, y, w, h, path); }
+
+static GX_UNUSED int gxs_dfw_1(const WCHAR* path) { return gxsFileW(1, NULL, 0, 0, 0, 0, path); }
+static GX_UNUSED int gxs_dfw_2(IMAGE* img, const WCHAR* path) { return gxsFileW(2, img, 0, 0, 0, 0, path); }
+static GX_UNUSED int gxs_dfw_3(double x, double y, const WCHAR* path) { return gxsFileW(3, NULL, x, y, 0, 0, path); }
+static GX_UNUSED int gxs_dfw_4(IMAGE* img, double x, double y, const WCHAR* path) { return gxsFileW(4, img, x, y, 0, 0, path); }
+static GX_UNUSED int gxs_dfw_5(double x, double y, double w, double h, const WCHAR* path) { return gxsFileW(5, NULL, x, y, w, h, path); }
+static GX_UNUSED int gxs_dfw_6(IMAGE* img, double x, double y, double w, double h, const WCHAR* path) { return gxsFileW(6, img, x, y, w, h, path); }
 
 /* Silence the unused warnings for declarations nobody referenced */
 static bool gxsTagNum2(const GXSTag* t, const char* n, double* out)
@@ -16517,6 +17195,7 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
 
