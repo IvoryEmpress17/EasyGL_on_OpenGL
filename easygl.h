@@ -11469,7 +11469,8 @@ static inline void gettextstyle(LOGFONTW* f) { gxGetFontW(f); }
  *     setcliprect(l, t, r, b)  clip to that box
  *     setcliprect(NULL)        stop clipping
  *     setcliprect()            the same
- * clearcliprect() is the plain name for the last one. */
+ * clearcliprect() is the plain name for the last one, and is
+ * mirrored on the C side by a macro so both flavours have it. */
 static inline void setcliprect(int left, int top, int right, int bottom) {
     gxSetClipBox(left, top, right, bottom);
 }
@@ -11856,8 +11857,13 @@ static GX_UNUSED int  drawsvgfileW(IMAGE* img, double x, double y, double w, dou
 #define strokepolyline(...)     GX_DISPATCH(gx_spl_, __VA_ARGS__)
 #define strokepolylinef(...)    GX_DISPATCH(gx_splf_, __VA_ARGS__)
 /* setcliprect() picks its meaning from the argument count: four integers
- * set a box, an empty list (or NULL) clears it. */
+ * set a box, an empty list (or NULL) clears it.
+ * clearcliprect() is the plain name for the clearing one.  It exists
+ * on the C++ side as an overload too, so both flavours spell it the
+ * same way; before it was added here only C++ had it, and a C program
+ * had to write setcliprect() with no arguments instead. */
 #define setcliprect(...)        GX_DISPATCH(gx_clipb_, __VA_ARGS__)
+#define clearcliprect()         gxClearClipBox()
 #define strokepolygon(...)      GX_DISPATCH(gx_spg_, __VA_ARGS__)
 #define strokepolygonf(...)     GX_DISPATCH(gx_spgf_, __VA_ARGS__)
 #define fillstrokepolygon(...)  GX_DISPATCH(gx_fspg_, __VA_ARGS__)
@@ -17195,7 +17201,6 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
-
 
 
 
