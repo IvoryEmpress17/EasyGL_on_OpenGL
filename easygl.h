@@ -35,6 +35,27 @@
  *
  * Revision 20261006 (two code pages, two crashes, two layout bugs)
  *
+ *   - setwintitle() / getwintitle() are the window caption, and
+ *     setwindowtext() is gone: the name said "window" without saying
+ *     what about the window, and EasyX has no way to read the caption
+ *     back at all.  EasyX sources that called setwindowtext() call
+ *     setwintitle() instead - same argument, same effect.
+ *
+ *     The title is stored as UTF-16, so initgraph() building a new window
+ *     hands back the one that was set instead of the built in "OpenGL",
+ *     and setting it before initgraph() works.  The A flavour decodes
+ *     through settextcp() like every other A flavour here, so what is
+ *     read back with getwintitle() is what was written.
+ *
+ *   - setwindevsize(w, h) is the DEVICE pixel form of setwinsize() and
+ *     the inverse of getwindevsize(): it asks for the window to be
+ *     exactly w x h real pixels, so the round trip gives back what was
+ *     asked for at any DPI - the same pair setwinsize() / getwinsize()
+ *     make in logical units.  The request is stored as LOGICAL units
+ *     (divided by the DPI factor) because that is the pair a rebuilt
+ *     window is scaled back up from; storing the device number would
+ *     scale it again on every rebuild.
+ *
  *   - An SVG <image> raster is drawn WHOLE and declares the logical
  *     box through logW / logH.  The 7-argument form reads dw source
  *     PIXELS, so a 420 unit box against an 840 pixel raster stopped
@@ -1633,6 +1654,14 @@ GX_DEFINE_ARRAY(GxFontVec, FontRec)
  *  4. Global state
  *====================================================================*/
 typedef struct GxTarget { GLuint fbo; GLuint tex; int w, h; } GxTarget;
+
+/* The window title in UTF-16, whatever flavour it was set in.  Keeping a
+ * copy is what makes it survive: initgraph() destroys the old window and
+ * makes a new one, and CreateWindowExW() is handed this string, so the
+ * caption does not fall back to the built in "OpenGL" on a re-init.  See
+ * setwintitle() / getwintitle() below. */
+#define GX_WINTITLE_MAX 512
+static WCHAR g_gx_wndTitle[GX_WINTITLE_MAX] = L"OpenGL";
 
 static HWND   g_gx_hwnd  = NULL;
 static HDC    g_gx_hdc   = NULL;
@@ -8840,7 +8869,13 @@ static HWND gxInitGraph(int w, int h) {
     if (g_gx_varWinSize) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
     rc.left = 0; rc.top = 0; rc.right = w; rc.bottom = h;
     AdjustWindowRect(&rc, style, FALSE);
-    g_gx_hwnd = CreateWindowExA(0, "GX_OpenGL_Window", "OpenGL", style,
+    /* CreateWindowExW and the stored title: the wide entry point takes
+     * the title as UTF-16 instead of squeezing it through the ANSI code
+     * page on the way in, and g_gx_wndTitle already is UTF-16.  A class
+     * is looked up by name and Windows keeps one name per class whichever
+     * RegisterClassEx flavour made it, so the wide spelling finds the
+     * class registered above. */
+    g_gx_hwnd = CreateWindowExW(0, L"GX_OpenGL_Window", g_gx_wndTitle, style,
                              CW_USEDEFAULT, CW_USEDEFAULT,
                              rc.right - rc.left, rc.bottom - rc.top,
                              NULL, NULL, hInst, NULL);
@@ -9096,6 +9131,34 @@ GX_INLINE void setwinsize(int w, int h) {
     g_gx_baseW = w; g_gx_baseH = h;
     gxResizeMainWindow((int)((float)w * g_gx_dpiFix + 0.5f),
                        (int)((float)h * g_gx_dpiFix + 0.5f));
+}
+
+/* setwindevsize(w, h) is the DEVICE pixel form of setwinsize(), and the
+ * inverse of getwindevsize(): it asks for the window to be exactly w x h
+ * real pixels, so
+ *
+ *     setwindevsize(1536, 1152); getwindevsize(&w, &h);
+ *
+ * comes back as 1536x1152 at any DPI - the round trip setwinsize() /
+ * getwinsize() make in logical units.  It is the one to reach for when the
+ * number in hand is a pixel count: a glReadPixels() buffer, the row stride
+ * GetImageBuffer() hands out, the real client rectangle of the window.
+ *
+ * The request is still stored as LOGICAL units - g_gx_baseW / g_gx_baseH,
+ * divided by the DPI factor - because that is the pair a rebuilt window
+ * (fixhighdpi(), a DPI change, a variablewinsize() drag) is scaled back up
+ * from.  Keeping the device number instead would scale it again on the
+ * next rebuild, which is exactly what setwinsize() avoided by storing
+ * logical.  So the two setters differ only in what they take, and at a
+ * factor of 1 they are the same call. */
+GX_INLINE void setwindevsize(int w, int h) {
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    g_gx_baseW = (int)((float)w / g_gx_dpiFix + 0.5f);
+    g_gx_baseH = (int)((float)h / g_gx_dpiFix + 0.5f);
+    if (g_gx_baseW < 1) g_gx_baseW = 1;
+    if (g_gx_baseH < 1) g_gx_baseH = 1;
+    gxResizeMainWindow(w, h);
 }
 
 /* Read the window size back.  Either pointer may be NULL, the same
@@ -9602,8 +9665,102 @@ static void getviewport(int* left, int* top, int* right, int* bottom,
     if (clip)   *clip   = g_gx_vpClip ? 1 : 0;
 }
 
-static void setwindowtextA(const char* s) { if (g_gx_hwnd) SetWindowTextA(g_gx_hwnd, s); }
-static void setwindowtextW(const WCHAR* s) { if (g_gx_hwnd) SetWindowTextW(g_gx_hwnd, s); }
+/*--------------------------- window title (easygl) --------------------*/
+/* setwintitle() / getwintitle(): the pair EasyX never had.  EasyX offers
+ * setwindowtext() to set the caption of the drawing window and nothing to
+ * read it back, and the name says "window" without saying what about the
+ * window.  These two do the same job under a name that says what they
+ * work on, and add the getter.
+ *
+ * Both flavours keep the title as UTF-16:
+ *
+ *   setwintitleA()  decodes with the page settextcp() names - no guessing,
+ *                   same rule as every other byte string here: a GBK
+ *                   source needs nothing set, a UTF-8 one asks for
+ *                   settextcp(CP_UTF8).  GX_GUESS_UTF8 is honoured as it
+ *                   is everywhere else.  What this buys over calling
+ *                   SetWindowTextA() straight is that the page is the
+ *                   program's choice and not the system's.
+ *   setwintitleW()  takes UTF-16 and stores it as it stands.
+ *
+ * Keeping a copy is also what makes the title survive: initgraph() on an
+ * already open window destroys it and builds a new one, and the new one
+ * used to come back with the built in "OpenGL" caption.  The copy is what
+ * CreateWindowExW() is given now, so what you set is what you see - set
+ * it before initgraph(), after it, or across a re-init.
+ *
+ * getwintitle() reads the live window when there is one and the copy when
+ * there is not, so it never has to answer with an empty string just
+ * because the window is not up yet.  It always reports the FULL length of
+ * the title, terminator not counted, so a return >= n is how a caller
+ * tells that the text in buf was cut short.
+ */
+static void gxSetWinTitleW(const WCHAR* s) {
+    int i = 0;
+    if (!s) s = L"";
+    while (s[i] && i < GX_WINTITLE_MAX - 1) { g_gx_wndTitle[i] = s[i]; i++; }
+    g_gx_wndTitle[i] = 0;
+    if (g_gx_hwnd) SetWindowTextW(g_gx_hwnd, g_gx_wndTitle);
+}
+static void setwintitleW(const WCHAR* s) {
+    gxSetWinTitleW(s);
+}
+static void setwintitleA(const char* s) {
+    WCHAR* w = gxDupWideFromBytes(s);
+    gxSetWinTitleW(w ? w : L"");
+    free(w);
+}
+
+/* Copies the current title into tmp and returns its length.  The window
+ * wins while it exists - a caption changed straight through Win32 shows
+ * up here too - and the stored copy is the answer before initgraph(). */
+static int gxWinTitleInto(WCHAR* tmp, int cap) {
+    int i = 0, n;
+    if (cap <= 0) return 0;
+    tmp[0] = 0;
+    n = g_gx_hwnd ? GetWindowTextW(g_gx_hwnd, tmp, cap) : 0;
+    if (n > 0 && tmp[0]) return n;
+    while (g_gx_wndTitle[i] && i < cap - 1) { tmp[i] = g_gx_wndTitle[i]; i++; }
+    tmp[i] = 0;
+    return i;
+}
+/* getwintitleW(): n counts WCHARs.  buf == NULL or n <= 0 asks for the
+ * size and writes nothing. */
+static int getwintitleW(WCHAR* buf, int n) {
+    WCHAR tmp[GX_WINTITLE_MAX];
+    int i = 0;
+    gxWinTitleInto(tmp, GX_WINTITLE_MAX);
+    while (tmp[i]) { if (buf && i < n - 1) buf[i] = tmp[i]; i++; }
+    if (buf && n > 0) buf[(i < n - 1) ? i : (n - 1)] = 0;
+    return i;
+}
+/* getwintitleA(): n counts BYTES.  Same size query, and the same length
+ * back - the number of bytes the title needs, terminator not counted. */
+static int getwintitleA(char* buf, int n) {
+    WCHAR tmp[GX_WINTITLE_MAX];
+    UINT  cp = g_gx_textCodePage;
+    int   i = 0, k, need, len;
+    gxWinTitleInto(tmp, GX_WINTITLE_MAX);
+    while (tmp[i]) i++;
+    if (i <= 0) { if (buf && n > 0) buf[0] = 0; return 0; }
+    need = WideCharToMultiByte(cp, 0, tmp, -1, NULL, 0, NULL, NULL) - 1;
+    if (need < 0) need = 0;
+    if (!buf || n <= 0) return need;         /* size query, nothing written */
+    len = WideCharToMultiByte(cp, 0, tmp, -1, buf, n, NULL, NULL);
+    if (len > 0) return need;
+    /* Does not fit: give back one character at a time until it does, so a
+     * multi byte character is never left half written in buf. */
+    k = i;
+    len = 0;
+    while (k > 1 && len <= 0) {
+        k--;
+        len = WideCharToMultiByte(cp, 0, tmp, k, buf, n, NULL, NULL);
+    }
+    if (len <= 0) buf[0] = 0;
+    else if (len >= n) buf[n - 1] = 0;
+    else buf[len] = 0;
+    return need;
+}
 
 /*------------------- window / cursor helpers (easygl) ------------------*/
 /* Pure Win32 one liners that EasyX programs otherwise have to reach for
@@ -11066,8 +11223,10 @@ static inline void FlushBatchDraw(int l, int t, int r, int b) {
     gx_flushbatch4(l, t, r, b);
 }
 
-static inline void setwindowtext(const char* s)  { setwindowtextA(s); }
-static inline void setwindowtext(const WCHAR* s) { setwindowtextW(s); }
+static inline void setwintitle(const char* s)  { setwintitleA(s); }
+static inline void setwintitle(const WCHAR* s) { setwintitleW(s); }
+static inline int  getwintitle(char* buf, int n)  { return getwintitleA(buf, n); }
+static inline int  getwintitle(WCHAR* buf, int n) { return getwintitleW(buf, n); }
 
 
 /*------------------------------ images --------------------------------*/
@@ -11342,9 +11501,12 @@ static inline void fillstrokepolygonf(const POINTF* p, int n, double w) { gx_fsp
  * instead of leaving it to the argument type - and to keep a call from
  * silently changing flavour when a literal gains or loses an L prefix.
  *
- * textwidthA/W, textheightA/W, outtextA/W, outtextxyA/W and
- * setwindowtextA/W are ordinary functions defined earlier, so they are
- * already callable and are not repeated here.
+ * textwidthA/W, textheightA/W, outtextA/W, outtextxyA/W,
+ * setwintitleA/W and getwintitleA/W are ordinary functions defined
+ * earlier, so they are already callable and are not repeated here.
+ * getwintitleA/W take a buffer and its size - bytes for A, WCHARs for W -
+ * and return the length of the title, so a call with NULL and 0 is the way
+ * to ask how big the buffer has to be.
  *--------------------------------------------------------------------*/
 static inline int drawtextA(const char* s, const RECT* pr, UINT fmt) {
     return gx_drawtext_rectA(s, pr, fmt);
@@ -11767,7 +11929,17 @@ static GX_UNUSED int  drawsvgfileW(IMAGE* img, double x, double y, double w, dou
         WCHAR*:       outtextxyW((x), (y), (const WCHAR*)(s)),                 \
         const WCHAR*: outtextxyW((x), (y), (const WCHAR*)(s)),                 \
         default:      gx_outtextxy_ch((x), (y), (int)(size_t)(s)))
-#define setwindowtext(s) GX_STRSEL(s, setwindowtextA, setwindowtextW)
+#define setwintitle(s)   GX_STRSEL(s, setwintitleA, setwintitleW)
+/* getwintitle(buf, n): two arguments, so GX_STRSEL cannot do it - the
+ * flavour follows the BUFFER, which is the thing that has to match.  The
+ * size_t cast on n only exists because every arm of a _Generic has to
+ * type check, even the ones that are not taken. */
+#define getwintitle(buf, n)                                                   \
+    _Generic(((buf) + 0),                                                     \
+        char*:        getwintitleA((char*)(buf), (int)(size_t)(n)),            \
+        const char*:  getwintitleA((char*)(buf), (int)(size_t)(n)),            \
+        WCHAR*:       getwintitleW((WCHAR*)(buf), (int)(size_t)(n)),           \
+        const WCHAR*: getwintitleW((WCHAR*)(buf), (int)(size_t)(n)))
 
 /* drawtext(str, rect, format)  /  drawtext(x, y, str) */
 #define GX_DT_POS(a, b, c)                                                    \
@@ -12102,9 +12274,12 @@ static GX_UNUSED int  drawsvgfileW(IMAGE* img, double x, double y, double w, dou
  * leaving it to the argument type - and to keep a call from silently
  * changing flavour when a literal gains or loses an L prefix.
  *
- * textwidthA/W, textheightA/W, outtextA/W, outtextxyA/W and
- * setwindowtextA/W are ordinary functions defined earlier, so they are
- * already callable and are not repeated here.
+ * textwidthA/W, textheightA/W, outtextA/W, outtextxyA/W,
+ * setwintitleA/W and getwintitleA/W are ordinary functions defined
+ * earlier, so they are already callable and are not repeated here.
+ * getwintitleA/W take a buffer and its size - bytes for A, WCHARs for W -
+ * and return the length of the title, so a call with NULL and 0 is the way
+ * to ask how big the buffer has to be.
  *--------------------------------------------------------------------*/
 
 /* drawtextA / drawtextW: (str, rect, fmt) or (x, y, str).  Which shape
@@ -17201,6 +17376,7 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
 

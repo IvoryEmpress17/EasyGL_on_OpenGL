@@ -714,7 +714,7 @@ var DATA = [
     ],
     "ret": "无",
     "remarks": [
-      "等于「逻辑尺寸 × <a href='gethighdpiscale.htm'>gethighdpiscale</a>()」。配合 <a href='GetImageBuffer.htm'>GetImageBuffer</a> 逐像素处理时用此值计算行距。"
+      "等于「逻辑尺寸 × <a href='gethighdpiscale.htm'>gethighdpiscale</a>()」。配合 <a href='GetImageBuffer.htm'>GetImageBuffer</a> 逐像素处理时用此值计算行距。要按这个单位设置窗口尺寸，用 <a href='setwindevsize.htm'>setwindevsize</a>（与本函数互为逆运算）。"
     ]
   },
   {
@@ -1086,6 +1086,34 @@ var DATA = [
     ]
   },
   {
+    "name": "setwindevsize",
+    "cat": "绘图设备相关函数",
+    "sig": [
+      "void setwindevsize(int w, int h);"
+    ],
+    "brief": "设置绘图窗口的<b>物理</b>尺寸（设备像素）。",
+    "params": [
+      [
+        "w",
+        "新的物理宽度，单位为像素。"
+      ],
+      [
+        "h",
+        "新的物理高度，单位为像素。"
+      ]
+    ],
+    "ret": "无",
+    "remarks": [
+      "与 <a href='getwindevsize.htm'>getwindevsize</a> <b>互为逆运算</b>：<code>setwindevsize(1536, 1152)</code> 之后 <a href='getwindevsize.htm'>getwindevsize</a> 在任何 DPI 下都返回 1536×1152。想按逻辑单位设置请用 <a href='setwinsize.htm'>setwinsize</a>。",
+      "本库专有。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>两个 set 用哪个</h3>唯一区别是<b>参数用什么单位</b>，其余行为完全一致：<table class='t'><thead><tr><th>函数</th><th>参数单位</th><th>互为逆运算的 get</th><th>什么时候用</th></tr></thead><tbody><tr class='head'><td><a href='setwinsize.htm'>setwinsize</a></td><td>逻辑单位</td><td><a href='getwinsize.htm'>getwinsize</a></td><td>尺寸来自布局、字号、你自己在逻辑坐标里算出来的数。</td></tr><tr><td><a href='setwindevsize.htm'>setwindevsize</a></td><td>设备像素</td><td><a href='getwindevsize.htm'>getwindevsize</a></td><td>尺寸来自像素：<a href='GetImageBuffer.htm'>GetImageBuffer</a> 的行距、glReadPixels 的缓冲区、窗口客户区的真实像素。</td></tr></tbody></table>两者换算是「物理尺寸 = 逻辑尺寸 × <a href='gethighdpiscale.htm'>gethighdpiscale</a>()」。在 100% 缩放（系数为 1）下两个函数<b>完全等价</b>；只有开启 <a href='fixhighdpi.htm'>fixhighdpi</a> 或显示器缩放不是 100% 时才有区别。",
+      "用像素数设置时不必自己除系数——本函数内部先换算成逻辑尺寸再交给窗口，省掉一次乘除，也不会因为四舍五入差一个像素。",
+      "内部记录的仍是<b>逻辑</b>尺寸（本函数会先除以 DPI 系数再存），因为窗口重建（<a href='fixhighdpi.htm'>fixhighdpi</a>、DPI 变化、<a href='variablewinsize.htm'>variablewinsize</a> 拖动）时是从逻辑尺寸重新乘回去的；直接记物理值会让每次重建都再放大一次。",
+      "本函数<b>不改变缩放因子</b>，因此改变窗口尺寸会同时改变逻辑范围。",
+      "随窗口一起重建的还有：画布纹理、MSAA 缓冲、投影矩阵、视口。已绘制的内容需要重新绘制。"
+    ]
+  },
+  {
     "name": "setwinsize",
     "cat": "绘图设备相关函数",
     "sig": [
@@ -1106,7 +1134,7 @@ var DATA = [
     "remarks": [
       "窗口的<b>物理</b>尺寸为「逻辑尺寸 × 高 DPI 系数」，即 setwinsize(1024, 768) 在 150% 缩放下会创建 1536×1152 物理像素的窗口。",
       "本函数<b>不改变缩放因子</b>，因此改变窗口尺寸会同时改变逻辑范围：例如在 <a href='setaspectratio.htm'>setaspectratio</a>(2, 2) 生效时，800×600 的窗口对应 400×300 的逻辑空间。",
-      "与 <a href='getwinsize.htm'>getwinsize</a> <b>互为逆运算</b>：setwinsize(1024, 768) 之后 getwinsize 在任何 DPI 下都返回 1024×768。需要物理像素尺寸请用 <a href='getwindevsize.htm'>getwindevsize</a>。",
+      "与 <a href='getwinsize.htm'>getwinsize</a> <b>互为逆运算</b>：setwinsize(1024, 768) 之后 getwinsize 在任何 DPI 下都返回 1024×768。需要按物理像素设置请用 <a href='setwindevsize.htm'>setwindevsize</a>，读取请用 <a href='getwindevsize.htm'>getwindevsize</a>。",
       "随窗口一起重建的还有：画布纹理、MSAA 缓冲、投影矩阵、视口。已绘制的内容需要重新绘制。"
     ]
   },
@@ -7107,6 +7135,43 @@ var DATA = [
     "remarks": []
   },
   {
+    "name": "getwintitle",
+    "cat": "窗口与系统",
+    "sig": [
+      "/* 显式 A 版：char* 缓冲区，n 按字节算，标题按当前代码页编码 */",
+      "int getwintitleA(char* buf, int n);",
+      "/* 显式 W 版：WCHAR* 缓冲区，n 按字符算，UTF-16，不经代码页 */",
+      "int getwintitleW(WCHAR* buf, int n);",
+      "/* 不带后缀：按 buf 的类型自动分派到上面两者之一 */",
+      "int getwintitle(char* buf, int n);",
+      "int getwintitle(WCHAR* buf, int n);",
+      "/* 通用写法：LPTSTR 按项目是否定义 UNICODE 展开为上面两者之一 */",
+      "int getwintitle(LPTSTR buf, int n);"
+    ],
+    "brief": "读取绘图窗口的标题。",
+    "params": [
+      [
+        "buf",
+        "接收标题的缓冲区。传 NULL 时不写入任何东西，只返回长度。"
+      ],
+      [
+        "n",
+        "缓冲区容量：<b>A 版按字节算</b>，<b>W 版按 WCHAR 个数算</b>。写 0（配合 buf == NULL）就是只问长度。"
+      ]
+    ],
+    "ret": "返回标题的<b>完整长度</b>，不含结尾的 \\0：A 版是字节数，W 版是字符数。缓冲区装不下时返回的仍是这个完整长度，而不是实际写入量。",
+    "remarks": [
+      "本库专有。",
+      "<b>返回值是完整长度，不是写入量。</b>所以缓冲区给小了不会丢信息：先问长度，按长度分配，再取一次即可。写进缓冲区的串一定以 \\0 结尾；A 版在装不下时会退到最后一个能<b>完整转换</b>的字符，不会吐出半个汉字。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>两步取到完整标题</h3>不知道标题有多长时的标准写法：",
+      "<pre class='code'>int n = getwintitleA(NULL, 0);            /* 第一步：只要长度，不拷贝 */\nchar* s = (char*)malloc((size_t)n + 1);\ngetwintitleA(s, n + 1);                   /* 第二步：按长度分配后再取 */\n/* ... 用 s ... */\nfree(s);</pre>长度已知、或者只是拿个够大的栈缓冲时，一步就够：",
+      "<pre class='code'>char title[256];\ngetwintitleA(title, 256);</pre>",
+      "<b>传 NULL 时请写后缀。</b>不带后缀的 <code>getwintitle</code> 是按 <code>buf</code> 的类型分派的，<code>NULL</code> 是 <code>void*</code>，没有对应分支；C++ 下两个重载又都能从 0 转换过去，会直接报歧义。所以上面两步写法里一律用 <code>getwintitleA</code> / <code>getwintitleW</code>。（先 <code>char* p = NULL;</code> 再传 <code>p</code> 是可以的——那已经是 <code>char*</code> 了。）",
+      "窗口已经建好时，读的是窗口当前的真实标题，所以 <a href='setwintitle.htm'>setwintitle</a> 改过的标题能立刻读回来；窗口还没建（<a href='initgraph.htm'>initgraph</a> 之前）时，读的是库记下来的那份副本，与建窗后看到的标题一致。",
+      "<b>显式 A / W 名字</b>：上面两组 <code>getwintitleA</code> / <code>getwintitleW</code> 都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个版本<b>取到的是同一个标题</b>（A 版多一步：按 <a href='settextcp.htm'>settextcp</a> 设定的代码页编码成字节），显式写死的好处是缓冲区类型变化时不会悄悄换实现。"
+    ]
+  },
+  {
     "name": "hideconsole",
     "cat": "窗口与系统",
     "sig": [
@@ -7243,32 +7308,6 @@ var DATA = [
     ]
   },
   {
-    "name": "setwindowtext",
-    "cat": "窗口与系统",
-    "sig": [
-      "/* 显式 A 版：const char* 窄字符，按当前代码页解释 */",
-      "void setwindowtextA(const char* str);",
-      "/* 显式 W 版：const WCHAR* 宽字符，UTF-16，不经代码页 */",
-      "void setwindowtextW(const WCHAR* str);",
-      "/* 不带后缀：按实参类型自动分派到上面两者之一 */",
-      "void setwindowtext(const char* str);",
-      "void setwindowtext(const WCHAR* str);",
-      "/* 通用写法：LPCTSTR 按项目是否定义 UNICODE 自动展开为上面两者之一 */",
-      "void setwindowtext(LPCTSTR str);"
-    ],
-    "brief": "设置绘图窗口标题。",
-    "params": [
-      [
-        "str",
-        "标题文本。"
-      ]
-    ],
-    "ret": "无",
-    "remarks": [
-      "<b>显式 A / W 名字</b>：上面两组 xxxA / xxxW 从 20261003 起都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个字串版本<b>行为完全一致</b>（A 版先按 <a href='settextcp.htm'>settextcp</a> 设定的代码页转成宽字符串），显式写死的好处是：字符串字面量加上或去掉 L 前缀时，调用不会悄悄换实现。"
-    ]
-  },
-  {
     "name": "setwindowtopmost",
     "cat": "窗口与系统",
     "sig": [
@@ -7284,6 +7323,39 @@ var DATA = [
     "ret": "无",
     "remarks": [
       "本库专有。"
+    ]
+  },
+  {
+    "name": "setwintitle",
+    "cat": "窗口与系统",
+    "sig": [
+      "/* 显式 A 版：窄字符串，按当前代码页解码 */",
+      "void setwintitleA(const char* str);",
+      "/* 显式 W 版：宽字符串，UTF-16，不经代码页 */",
+      "void setwintitleW(const WCHAR* str);",
+      "/* 不带后缀：按实参类型自动分派到上面两者之一 */",
+      "void setwintitle(const char* str);",
+      "void setwintitle(const WCHAR* str);",
+      "/* 通用写法：LPCTSTR 按项目是否定义 UNICODE 展开为上面两者之一 */",
+      "void setwintitle(LPCTSTR str);"
+    ],
+    "brief": "设置绘图窗口的标题。",
+    "params": [
+      [
+        "str",
+        "新的窗口标题。"
+      ]
+    ],
+    "ret": "无",
+    "remarks": [
+      "本库专有。",
+      "本库<b>没有</b> <code>setwindowtext</code>：EasyX 那个名字只说了「窗口」，没说是窗口的什么，而且它也没有把标题读回来的函数。EasyX 代码里的 <code>setwindowtext(...)</code> 直接改成 <code>setwintitle(...)</code> 即可，参数与行为一致；要读回标题用 <a href='getwintitle.htm'>getwintitle</a>。",
+      "<b>标题会被记住。</b>库自己存一份，建窗时装上去，所以可以<b>早于 <a href='initgraph.htm'>initgraph</a> 调用</b>——先设好再开窗，窗口一出来就是你要的标题，不会闪一下默认的 “OpenGL”；窗口被重新创建时也不会退回默认值。",
+      "<pre class='code'>setwintitleA(\"my program\");   /* before initgraph is fine */\ninitgraph(640, 480);         /* the title is installed here */</pre>窗口已经建好时随时可以改，立刻生效：",
+      "<pre class='code'>setwintitleW(L\"my program\");  /* UTF-16, no code page involved */</pre>",
+      "A 版按 <a href='settextcp.htm'>settextcp</a>() 设的代码页解码（默认 CP_ACP，中文 Windows 上通常是 936 即 GBK）；源文件存成 UTF-8 就先 <code>settextcp(CP_UTF8)</code>。W 版是 UTF-16，不做任何转换，不受源码编码影响。",
+      "标题最长 511 个字符（<code>GX_WINTITLE_MAX</code> 是含结尾 \\0 的 512），超出部分被截掉，不报错、也不影响后面的字符。",
+      "<b>显式 A / W 名字</b>：上面两组 <code>setwintitleA</code> / <code>setwintitleW</code> 都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个版本<b>行为完全一致</b>（A 版只是先按代码页把字节串转成宽字符），显式写死的好处是字符串类型变化时不会悄悄换实现。"
     ]
   },
   {
@@ -8757,7 +8829,7 @@ var DATA = [
     "ret": [],
     "remarks": [
       "这一页是一份能直接编译运行的完整程序。为什么要有 A / W 两个名字：原来的写法是「同一个函数名，编译器按字符串实参的类型挑实现」（C11 用 _Generic，C++ 用重载）。多数时候很方便，但有个死角：想固定用某一版时没有名字可用。比如手上是一个 const WCHAR* 变量，却想让它按窄字符路径走；或者反过来，想在定义 UNICODE 的项目里明确指定窄版。现在这类函数都额外提供了显式的 xxxA / xxxW，用户可以自己决定，不必依赖编译器的推导。",
-      "<b>两组函数名，两种调用方式</b>：<table class='t'><thead><tr><th>类别</th><th>函数</th><th>说明</th></tr></thead><tbody><tr class='head'><td>显式 A / W</td><td><code>outtextA</code> / <code>outtextW</code>、<code>outtextxyA</code> / <code>outtextxyW</code>、<code>textwidthA</code> / <code>textwidthW</code>、<code>textheightA</code> / <code>textheightW</code>、<code>setwindowtextA</code> / <code>setwindowtextW</code></td><td>原名本来就是这么定义的，A / W 就是全部。</td></tr><tr><td>宏 / 重载 + 显式 A / W</td><td><code>drawtext</code>、<code>inputbox</code>、<code>InputBox</code>、<code>messagebox</code>、<code>settextstyle</code>、<code>loadimage</code>、<code>saveimage</code></td><td>原来只有 <code>drawtext</code> 这样的统一名（按实参类型分派），现在另外提供了 <code>drawtextA</code> / <code>drawtextW</code> 等显式名。</td></tr></tbody></table>",
+      "<b>两组函数名，两种调用方式</b>：<table class='t'><thead><tr><th>类别</th><th>函数</th><th>说明</th></tr></thead><tbody><tr class='head'><td>显式 A / W</td><td><code>outtextA</code> / <code>outtextW</code>、<code>outtextxyA</code> / <code>outtextxyW</code>、<code>textwidthA</code> / <code>textwidthW</code>、<code>textheightA</code> / <code>textheightW</code>、<code>setwintitleA</code> / <code>setwintitleW</code></td><td>原名本来就是这么定义的，A / W 就是全部。</td></tr><tr><td>宏 / 重载 + 显式 A / W</td><td><code>drawtext</code>、<code>inputbox</code>、<code>InputBox</code>、<code>messagebox</code>、<code>settextstyle</code>、<code>loadimage</code>、<code>saveimage</code></td><td>原来只有 <code>drawtext</code> 这样的统一名（按实参类型分派），现在另外提供了 <code>drawtextA</code> / <code>drawtextW</code> 等显式名。</td></tr></tbody></table>",
       "<b>本轮补上的 SVG 四个</b>：<a href='loadsvg.htm'>loadsvg</a> / <a href='drawsvg.htm'>drawsvg</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> / <a href='savesvgfile.htm'>savesvgfile</a> 现在都有显式的 A / W 名。其中前三个<b>不带后缀时只有窄字符串一种</b>，C 下是数参数个数的宏，传宽字符串不会自动选 W 版——所以这几个尤其要写后缀，详见 <a href='A / W 版本总览.htm'>A / W 版本总览</a>。",
       "<b>A 版和 W 版的区别只在字符串</b>：<code>A</code> 版接受 <code>const char*</code>，按 <a href='settextcp.htm'>settextcp</a> 设定的代码页解码（默认 CP_ACP）；<code>W</code> 版接受 <code>const WCHAR*</code>，是 UTF-16，<b>不经任何转换</b>。其余参数、返回值、行为完全一致。这也是为什么 W 版用起来更省心 —— 字符串内容不受源码存成什么编码影响。",
       "<b>为什么左右分开画</b>：A 版与 W 版是两套实现，若某一版在转换上有 bug，只有并排对照才看得出。两边内容应当逐字相同；不一致就说明其中一版有问题。",
@@ -8767,7 +8839,7 @@ var DATA = [
       "<b>输入框与消息框按键触发</b>：<code>inputbox</code> 和 <code>messagebox</code> 是模态的，放在主循环里会每帧弹窗、卡死程序，所以按 <b>1 / 2</b> 弹 A / W 输入框、<b>3 / 4</b> 弹 A / W 消息框，<b>Esc</b> 退出。输入结果会画在屏幕上，可以对比两版返回的字符是否正常。",
       "<b>字体结构体同样两版都有</b>：<code>settextstyle(结构体)</code>、<a href='setfont.htm'>setfont</a> / <a href='getfont.htm'>getfont</a> / <a href='gettextstyle.htm'>gettextstyle</a> 既可以传 <code>LOGFONTA*</code> 也可以传 <code>LOGFONTW*</code>，另有 <code>setfontA</code> / <code>setfontW</code> 等显式名。库内部把当前字体存成 <code>LOGFONTW</code>，用 <code>CreateFontIndirectW</code> 建字体，所以 W 版是<b>无损</b>的那一条路 —— A 版的字体名要按 <a href='settextcp.htm'>settextcp</a> 的代码页转换，代码页表示不了就会丢信息。 本例左右两栏下方各演示一次：A 栏用 <code>getfontA</code> / <code>setfontA</code> 走 <code>LOGFONTA</code>，W 栏用 <code>getfontW</code> / <code>setfontW</code> 走 <code>LOGFONTW</code>，两栏设同样的字号，屏上应当一致。",
       "<b>没有 A / W 之分的那些</b>：参数里根本没有字符串的函数自然不分版；而 <a href='setpostshader.htm'>setpostshader</a>、<a href='getpostloc.htm'>getpostloc</a>、<a href='glgetproc.htm'>glgetproc</a> 以及 <a href='getglver.htm'>getglver</a> 一类返回 ASCII 信息串的函数<b>只有 A 版</b>，因为 GL 侧的名字与源码本身就是 ASCII。",
-      "逐项说明见各函数页：<a href='outtext.htm'>outtext</a>、<a href='outtextxy.htm'>outtextxy</a>、<a href='textwidth.htm'>textwidth</a>、<a href='textheight.htm'>textheight</a>、<a href='drawtext.htm'>drawtext</a>、<a href='settextstyle.htm'>settextstyle</a>、<a href='loadimage.htm'>loadimage</a>、<a href='saveimage.htm'>saveimage</a>、<a href='setwindowtext.htm'>setwindowtext</a>、<a href='inputbox.htm'>inputbox</a>、<a href='messagebox.htm'>messagebox</a>。",
+      "逐项说明见各函数页：<a href='outtext.htm'>outtext</a>、<a href='outtextxy.htm'>outtextxy</a>、<a href='textwidth.htm'>textwidth</a>、<a href='textheight.htm'>textheight</a>、<a href='drawtext.htm'>drawtext</a>、<a href='settextstyle.htm'>settextstyle</a>、<a href='loadimage.htm'>loadimage</a>、<a href='saveimage.htm'>saveimage</a>、<a href='setwintitle.htm'>setwintitle</a>、<a href='getwintitle.htm'>getwintitle</a>、<a href='inputbox.htm'>inputbox</a>、<a href='messagebox.htm'>messagebox</a>。",
       "所有 A / W 名字的完整清单见 <a href='A / W 版本总览.htm'>A / W 版本总览</a>。以及确实没有 W 版的那些（GL 入口点、诊断信息串）也在那一页列了出来。",
       "源码编码：本例的中文全部写成宽字符串 L'...'，是 UTF-16，不经任何字节转码，因此与源码存成什么编码无关。窄字符串那一路（A 版）仍按 <a href='settextcp.htm'>settextcp</a> 设定的代码页解码，源码按 GBK 保存即可让两边都正常。",
       "高 DPI：每个示例开头都有这三句，顺序固定，前两句都必须在 <a href='initgraph.htm'>initgraph</a> 之前 —— <a href='dpiaware.htm'>dpiaware</a>(true) 负责让 Windows 交出真实 DPI，少了它 <a href='fixhighdpi.htm'>fixhighdpi</a> 的系数恒为 1；<a href='fixhighdpi.htm'>fixhighdpi</a>() 再按 DPI 放大窗口；initgraph 建窗。在 125%、150% 这类缩放的显示器上，不调用时窗口会按 96 DPI 绘制再被系统整体拉伸，画面发虚。坐标全部写在逻辑单位里，因此开启与否不需要改动任何绘图代码。",
@@ -10355,7 +10427,7 @@ var DATA = [
       "    fixhighdpi();                               /* 必须在 initgraph 之前 */",
       "    initgraph(W, H);",
       "    settextcp(936);                               /* 本例有中文字符串 */",
-      "    setwindowtextA(\"easygl 20261003 - 渐变与模糊\");",
+      "    setwintitleA(\"easygl 20261003 - 渐变与模糊\");",
       "",
       "    setvsync(true);",
       "    if (!getvsync())",
@@ -11449,7 +11521,7 @@ var DATA = [
     "ret": [],
     "remarks": [
       "<b>两者的唯一区别在字符串怎么解码</b>：A 版拿到 <code>char*</code> 后按 <a href='settextcp.htm'>settextcp</a>() 设的代码页转成宽字符再交给 GDI+（默认 CP_ACP，中文 Windows 上是 936 即 GBK）；W 版拿到 <code>WCHAR*</code> 直接就是 UTF-16，<b>不经任何转换</b>。所以源文件存成什么编码，只影响 A 版 —— W 版无论怎么存都不会错。",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>全部 A / W 对</h3><table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class='head'><td><a href='outtext.htm'>outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href='outtextxy.htm'>outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href='textwidth.htm'>textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href='textheight.htm'>textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href='drawtext.htm'>drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href='settextstyle.htm'>settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href='loadimage.htm'>loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href='saveimage.htm'>saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href='inputbox.htm'>inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href='InputBox.htm'>InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href='messagebox.htm'>messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href='setwindowtext.htm'>setwindowtext</a></td><td><code>setwindowtextA / setwindowtextW</code></td><td>改窗口标题</td></tr><tr><td><a href='loadsvgfile.htm'>loadsvgfile</a></td><td><code>loadsvgfileA / loadsvgfileW</code></td><td>从文件载入 SVG</td></tr><tr><td><a href='loadsvgfromfile.htm'>loadsvgfromfile</a></td><td><code>loadsvgfromfileA / loadsvgfromfileW</code></td><td>从文件载入并指定尺寸</td></tr><tr><td><a href='savesvgfile.htm'>savesvgfile</a></td><td><code>savesvgfileA / savesvgfileW</code></td><td>把 SVG 源码写回文件</td></tr><tr><td><a href='loadsvg.htm'>loadsvg</a></td><td><code>loadsvgA / loadsvgW</code></td><td>从文本载入 SVG</td></tr><tr><td><a href='drawsvg.htm'>drawsvg</a></td><td><code>drawsvgA / drawsvgW</code></td><td>一步：载入文本并画出</td></tr><tr><td><a href='drawsvgfile.htm'>drawsvgfile</a></td><td><code>drawsvgfileA / drawsvgfileW</code></td><td>一步：载入文件并画出</td></tr><tr><td><a href='putsvg.htm'>putsvg</a></td><td><code>putsvgA / putsvgW</code></td><td>把已载入的 SVG 画出来</td></tr></tbody></table>",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>全部 A / W 对</h3><table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class='head'><td><a href='outtext.htm'>outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href='outtextxy.htm'>outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href='textwidth.htm'>textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href='textheight.htm'>textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href='drawtext.htm'>drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href='settextstyle.htm'>settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href='loadimage.htm'>loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href='saveimage.htm'>saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href='inputbox.htm'>inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href='InputBox.htm'>InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href='messagebox.htm'>messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href='setwintitle.htm'>setwintitle</a></td><td><code>setwintitleA / setwintitleW</code></td><td>改窗口标题（会被记住）</td></tr><tr><td><a href='getwintitle.htm'>getwintitle</a></td><td><code>getwintitleA / getwintitleW</code></td><td>读窗口标题</td></tr><tr><td><a href='loadsvgfile.htm'>loadsvgfile</a></td><td><code>loadsvgfileA / loadsvgfileW</code></td><td>从文件载入 SVG</td></tr><tr><td><a href='loadsvgfromfile.htm'>loadsvgfromfile</a></td><td><code>loadsvgfromfileA / loadsvgfromfileW</code></td><td>从文件载入并指定尺寸</td></tr><tr><td><a href='savesvgfile.htm'>savesvgfile</a></td><td><code>savesvgfileA / savesvgfileW</code></td><td>把 SVG 源码写回文件</td></tr><tr><td><a href='loadsvg.htm'>loadsvg</a></td><td><code>loadsvgA / loadsvgW</code></td><td>从文本载入 SVG</td></tr><tr><td><a href='drawsvg.htm'>drawsvg</a></td><td><code>drawsvgA / drawsvgW</code></td><td>一步：载入文本并画出</td></tr><tr><td><a href='drawsvgfile.htm'>drawsvgfile</a></td><td><code>drawsvgfileA / drawsvgfileW</code></td><td>一步：载入文件并画出</td></tr><tr><td><a href='putsvg.htm'>putsvg</a></td><td><code>putsvgA / putsvgW</code></td><td>把已载入的 SVG 画出来</td></tr></tbody></table>",
       "<h3 style='margin:14px 0 6px;color:#10307a;'>不写后缀什么时候还能用（为什么危险见<a href='使用教程.htm'>使用教程</a>）</h3>不写后缀时编译器按实参类型选版本，在<b>纯窄字符串且类型明确</b>的场景是对的，比如 <code>outtextxy(10, 10, 'abc')</code>。真正非写不可的是这三种情形：<ul style='margin:6px 0 6px 18px;'><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b>——不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>要<b>宽字符串</b>，或要把函数<b>当函数指针传递</b>、存进表里（不带后缀的宏形式没有单一地址可取）。</li></ul>除此之外，<b>建议一律写后缀</b>：代价只是多打一个字母。",
       "<h3 style='margin:14px 0 6px;color:#10307a;'>只有 A 版的函数</h3>下面这些<b>没有 W 版也不该有</b> —— 它们的字符串不是文本，而是给驱动或 GL 看的 ASCII 标识符：<table class='t'><thead><tr><th>函数</th><th>字符串内容</th><th>为什么没有 W 版</th></tr></thead><tbody><tr class='head'><td><a href='setpostshader.htm'>setpostshader</a></td><td>着色器源码</td><td>GLSL 源码必须是 ASCII，驱动不认宽字符</td></tr><tr><td><a href='getpostloc.htm'>getpostloc</a></td><td>uniform 名字</td><td>GL 的 ASCII 标识符</td></tr><tr><td><a href='glgetproc.htm'>glgetproc</a></td><td>扩展函数名</td><td>同上</td></tr><tr><td><a href='GetEasyGLVer.htm'>GetEasyGLVer</a> / <a href='GetEasyXVer.htm'>GetEasyXVer</a></td><td>版本串</td><td>返回 ASCII，不是 TCHAR 接口</td></tr><tr><td><a href='getadapterinfo.htm'>getadapterinfo</a> / <a href='getdisplaymode.htm'>getdisplaymode</a><br><a href='getglslver.htm'>getglslver</a> / <a href='getglver.htm'>getglver</a><br><a href='getrendererinfo.htm'>getrendererinfo</a> / <a href='getvendorinfo.htm'>getvendorinfo</a></td><td>诊断信息串</td><td>驱动返回的就是 ASCII</td></tr></tbody></table>",
       "<h3 style='margin:14px 0 6px;color:#10307a;'>字体结构体：两版都有</h3><code>setfont</code> / <code>getfont</code> / <code>gettextstyle</code> 以及 <code>settextstyle</code> 的单参形式，既可以传 <code>LOGFONTA*</code> 也可以传 <code>LOGFONTW*</code>：<table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>说明</th></tr></thead><tbody><tr class='head'><td><a href='setfont.htm'>setfont</a></td><td><code>setfontA / setfontW</code></td><td>按指针类型分派；C++ 下是重载，C11 下是宏</td></tr><tr><td><a href='getfont.htm'>getfont</a></td><td><code>getfontA / getfontW</code></td><td>取出当前字体，装进你给的那个结构体</td></tr><tr><td><a href='gettextstyle.htm'>gettextstyle</a></td><td><code>gettextstyleA / gettextstyleW</code></td><td>与 getfont 同义</td></tr><tr><td><code>settextstyle(结构体)</code></td><td><code>settextstyleA / settextstyleW</code></td><td>单参形式是 LOGFONT 形式，同样两版都收</td></tr></tbody></table><b>为什么要传 LOGFONTW*</b>：库内部把当前字体保存为 <code>LOGFONTW</code>，字体也用 <code>CreateFontIndirectW</code> 创建。传 <code>LOGFONTA*</code> 时，面上的字体名会按 <a href='settextcp.htm'>settextcp</a> 的代码页转成宽字符；如果那个代码页表示不了这个名字（比如 GBK 存不下某些字体名），转换就已经有损了。所以<b>能拿到宽名字就用 W 版</b> —— A 版能表示的 W 版都能表示，反过来不成立。",
