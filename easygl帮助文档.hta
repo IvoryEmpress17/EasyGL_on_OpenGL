@@ -4238,7 +4238,7 @@ var DATA = [
       "SVG 的 <code>opacity</code> 是<b>覆盖度</b>（0.5 表示半可见），而 <code>setalpha()</code> 要的是<b>透明度</b>（0 为实心），两者相反，库内部会在传入时把它反过来，无需手动换算。",
       "<code>&lt;image&gt;</code> 的半透明曾完全不生效：贴图时每个顶点都按<code>gxAlphaOf(WHITE)</code> 推送，只读取颜色的 alpha 字节而不读全局 alpha，因此 <code>setalpha()</code> 对贴图没有任何作用。现在半透明的图片改走顶点带覆盖度的绘制路径，该值才真正传得进去。",
       "填充、描边与文字在结束时把透明度<b>恢复成进入前的值</b>，而不是清成不透明——全局 alpha 会影响之后所有绘制，带 opacity 的文档以前会让 putsvg() 之后画的一切都变半透明。",
-      "渐变色标上的 <code>stop-opacity</code> 目前尚未支持（渐变着色器只传 RGB），整块的 <code>opacity</code> 与 <code>fill-opacity</code> / <code>stroke-opacity</code> 均正常。"
+      "<div class='note'>渐变色标上的 <code>stop-opacity</code> <b>已支持</b>——每站的透明度随同一个插值系数一起渐变，两端颜色相同、只有 opacity 不同的渐变能正常淡出。整块的 <code>opacity</code> 与 <code>fill-opacity</code> / <code>stroke-opacity</code> 同样正常。唯一例外：<b>文字用渐变填充</b>时只对各站 RGB 求平均得到实色、不随 opacity 淡出，文字需要淡出请写 <code>fill-opacity</code>。</div>"
     ]
   },
   {
@@ -5984,7 +5984,7 @@ var DATA = [
       "三个函数共用同一套停止点与同一支着色器：<b>形状 × 停止点</b>。停止点的 <code>pos</code> 不要求有序，内部会排序；超出 0..1 的会被钳到边界；两个停止点 <code>pos</code> 相同则按先后顺序取后者。",
       "只有 0..1 区间内才有渐变，区间外沿用两端的端点色（clamp），这与其它图形库的渐变语义一致。",
       "单色渐变（两端同色）就是纯色填充，没有额外开销。",
-      "<div class='warn'><b>透明度要用 <a href='setalpha.htm'>setalpha</a>() 设。</b>停止点里的 <code>color</code> 用 <a href='ARGB.htm'>ARGB</a> 也能写，但<b>其中的 alpha 分量不生效</b> —— 渐变是片元着色器算的，而 alpha 作为顶点属性在顶点着色器阶段就已经乘进去了，片元阶段读不到。所以半透明渐变要写成 <code>setalpha(120); gradlinear(...); setalpha(0);</code>，而<b>不是</b>把 alpha 塞进停止点。（<a href='gradrectangle.htm'>gradrectangle</a> 走顶点色，那里 <code>ARGB</code> 的 alpha 是生效的，两者不同。）</div>"
+      "<div class='note'><b>每站可以自带透明度。</b>停止点的 <code>color</code> 用 <a href='ARGB.htm'>ARGB</a> 写时，alpha 字节就当作<b>该色标的覆盖度</b>，随同一个插值系数一起渐变——所以能做出「一端实心、一端淡出」的效果。<code>RGB()</code> 的高字节是 0，而库读 0 为<b>不透明</b>，因此照老写法写的渐变行为不变。整块还想再淡一层就用 <a href='setalpha.htm'>setalpha</a>()，两者相乘。（<a href='gradrectangle.htm'>gradrectangle</a> 走顶点色，那里的 <code>ARGB</code> alpha 同样生效，语义一致。）</div>"
     ]
   },
   {
@@ -6045,7 +6045,7 @@ var DATA = [
       "三个函数共用同一套停止点与同一支着色器：<b>形状 × 停止点</b>。停止点的 <code>pos</code> 不要求有序，内部会排序；超出 0..1 的会被钳到边界；两个停止点 <code>pos</code> 相同则按先后顺序取后者。",
       "只有 0..1 区间内才有渐变，区间外沿用两端的端点色（clamp），这与其它图形库的渐变语义一致。",
       "单色渐变（两端同色）就是纯色填充，没有额外开销。",
-      "<div class='warn'><b>透明度要用 <a href='setalpha.htm'>setalpha</a>() 设。</b>停止点里的 <code>color</code> 用 <a href='ARGB.htm'>ARGB</a> 也能写，但<b>其中的 alpha 分量不生效</b> —— 渐变是片元着色器算的，而 alpha 作为顶点属性在顶点着色器阶段就已经乘进去了，片元阶段读不到。所以半透明渐变要写成 <code>setalpha(120); gradlinear(...); setalpha(0);</code>，而<b>不是</b>把 alpha 塞进停止点。（<a href='gradrectangle.htm'>gradrectangle</a> 走顶点色，那里 <code>ARGB</code> 的 alpha 是生效的，两者不同。）</div>"
+      "<div class='note'><b>每站可以自带透明度。</b>停止点的 <code>color</code> 用 <a href='ARGB.htm'>ARGB</a> 写时，alpha 字节就当作<b>该色标的覆盖度</b>，随同一个插值系数一起渐变——所以能做出「一端实心、一端淡出」的效果。<code>RGB()</code> 的高字节是 0，而库读 0 为<b>不透明</b>，因此照老写法写的渐变行为不变。整块还想再淡一层就用 <a href='setalpha.htm'>setalpha</a>()，两者相乘。（<a href='gradrectangle.htm'>gradrectangle</a> 走顶点色，那里的 <code>ARGB</code> alpha 同样生效，语义一致。）</div>"
     ]
   },
   {
@@ -6106,7 +6106,7 @@ var DATA = [
       "三个函数共用同一套停止点与同一支着色器：<b>形状 × 停止点</b>。停止点的 <code>pos</code> 不要求有序，内部会排序；超出 0..1 的会被钳到边界；两个停止点 <code>pos</code> 相同则按先后顺序取后者。",
       "只有 0..1 区间内才有渐变，区间外沿用两端的端点色（clamp），这与其它图形库的渐变语义一致。",
       "单色渐变（两端同色）就是纯色填充，没有额外开销。",
-      "<div class='warn'><b>透明度要用 <a href='setalpha.htm'>setalpha</a>() 设。</b>停止点里的 <code>color</code> 用 <a href='ARGB.htm'>ARGB</a> 也能写，但<b>其中的 alpha 分量不生效</b> —— 渐变是片元着色器算的，而 alpha 作为顶点属性在顶点着色器阶段就已经乘进去了，片元阶段读不到。所以半透明渐变要写成 <code>setalpha(120); gradlinear(...); setalpha(0);</code>，而<b>不是</b>把 alpha 塞进停止点。（<a href='gradrectangle.htm'>gradrectangle</a> 走顶点色，那里 <code>ARGB</code> 的 alpha 是生效的，两者不同。）</div>"
+      "<div class='note'><b>每站可以自带透明度。</b>停止点的 <code>color</code> 用 <a href='ARGB.htm'>ARGB</a> 写时，alpha 字节就当作<b>该色标的覆盖度</b>，随同一个插值系数一起渐变——所以能做出「一端实心、一端淡出」的效果。<code>RGB()</code> 的高字节是 0，而库读 0 为<b>不透明</b>，因此照老写法写的渐变行为不变。整块还想再淡一层就用 <a href='setalpha.htm'>setalpha</a>()，两者相乘。（<a href='gradrectangle.htm'>gradrectangle</a> 走顶点色，那里的 <code>ARGB</code> alpha 同样生效，语义一致。）</div>"
     ]
   },
   {
@@ -10247,7 +10247,7 @@ var DATA = [
       " * 要点：",
       " *   1. 三个渐变共用同一套停止点（GRADSTOP { color, pos }），所以 API 是",
       " *      “形状 × 停止点” 的正交组合，而不是三组各自独立的参数。",
-      " *   2. 渐变的透明度要用 setalpha() 设，写进停止点颜色里的 alpha 不生效。",
+      " *   2. 渐变的透明度要用 setalpha() 设，停止点颜色里的 alpha 字节即该色标的覆盖度，会跟着一起渐变。",
       " *   3. 辉光用 setblendmode(GX_BLEND_ADD) 配“淡到黑”的径向渐变；",
       " *      暗角用 GX_BLEND_MUL 配“中心亮、边缘黑”的径向渐变。",
       " *",
