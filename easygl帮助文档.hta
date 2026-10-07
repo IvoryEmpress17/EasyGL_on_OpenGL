@@ -127,22 +127,6 @@ table.t tr.head td{background:#f4f8fd;}
 <script language="javascript">
 var DATA = [
   {
-    "name": "LICENSE",
-    "cat": "基本说明",
-    "sig": [],
-    "brief": "本库使用的开源许可证：MIT。",
-    "params": [],
-    "ret": "",
-    "remarks": [
-      "easygl.h 以 <b>MIT 许可证</b>发布，版权归 <b>IvoryEmpress17</b> 所有（2026 年）。<b>IvoryEmpress17 即本库作者 TWXH 的 GitHub 账号</b>，许可证上署的是账号名，两者是同一个人。全文如下。",
-      "MIT 是限制最少的一类许可证。你可以<b>自由使用、复制、修改、合并、出版、发行、再授权和销售</b>本软件，<b>包括用于商业闭源项目</b>，唯一条件是<b>保留版权声明和本许可声明</b>。除此之外没有义务 —— 不必开源你自己的代码，也不必在产品界面上署名。",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>原文</h3><pre class='code'>MIT License\n\nCopyright (c) 2026 IvoryEmpress17\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.</pre>",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>怎么才算满足「保留声明」</h3>在分发你的程序时，把这份 LICENSE 文本一起带上即可 —— 例如随程序放一个 <code>LICENSE.txt</code>，或在「关于 / 致谢」里把它列出来。由于 easygl.h 是<a href='基本说明.htm'>纯头文件</a>、直接编进你的可执行文件里，<b>分发二进制就属于「发行」</b>，所以这一步是必要的。",
-      "<div class='warn'>软件按<b>「原样」</b>提供，<b>不含任何明示或暗示的担保</b>，包括但不限于适销性、特定用途适用性和不侵权的担保。无论因合同、侵权还是其他原因，作者都不对任何索赔、损害或其他责任负责。</div>",
-      "本许可证的效力及于 easygl.h 全部内容，包括其中自带的着色器与示例代码；文档页面里的<a href='示例程序（总览）.htm'>示例程序</a>同样适用。"
-    ]
-  },
-  {
     "name": "基本说明",
     "cat": "基本说明",
     "sig": [],
@@ -159,6 +143,22 @@ var DATA = [
       "<pre class='code'>#include \"easygl.h\"\n\nint main(void)\n{\n    initgraph(640, 480);\n    setfillcolor(RGB(255, 200, 0));\n    solidcircle(320, 240, 100);\n    gx_getch();          /* 读图形窗口的按键；不要写 getch()，详见“安装” */\n    closegraph();\n    return 0;\n}</pre>",
       "<div style='margin-top:24px;padding:13px 15px;background:#f5f8fd;border:1px solid #d8e2f2;overflow:hidden;'><img src='data:image/png;base64,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' alt='TWXH' style='float:left;width:64px;height:64px;margin-right:15px;border:1px solid #ccd8ec;'><div style='padding-top:9px;font-size:13px;color:#445;line-height:20px;'><b style='font-size:15px;color:#123;'>TWXH</b><br>easygl.h 作者<br>3574403974@qq.com</div><div style='clear:both;'></div></div>",
       "本库以 <a href='LICENSE.htm'>MIT 许可证</a>发布，可自由用于商业项目，唯一条件是保留版权与许可声明。"
+    ]
+  },
+  {
+    "name": "LICENSE",
+    "cat": "基本说明",
+    "sig": [],
+    "brief": "本库使用的开源许可证：MIT。",
+    "params": [],
+    "ret": "",
+    "remarks": [
+      "easygl.h 以 <b>MIT 许可证</b>发布，版权归 <b>IvoryEmpress17</b> 所有（2026 年）。<b>IvoryEmpress17 即本库作者 TWXH 的 GitHub 账号</b>，许可证上署的是账号名，两者是同一个人。全文如下。",
+      "MIT 是限制最少的一类许可证。你可以<b>自由使用、复制、修改、合并、出版、发行、再授权和销售</b>本软件，<b>包括用于商业闭源项目</b>，唯一条件是<b>保留版权声明和本许可声明</b>。除此之外没有义务 —— 不必开源你自己的代码，也不必在产品界面上署名。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>原文</h3><pre class='code'>MIT License\n\nCopyright (c) 2026 IvoryEmpress17\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.</pre>",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>怎么才算满足「保留声明」</h3>在分发你的程序时，把这份 LICENSE 文本一起带上即可 —— 例如随程序放一个 <code>LICENSE.txt</code>，或在「关于 / 致谢」里把它列出来。由于 easygl.h 是<a href='基本说明.htm'>纯头文件</a>、直接编进你的可执行文件里，<b>分发二进制就属于「发行」</b>，所以这一步是必要的。",
+      "<div class='warn'>软件按<b>「原样」</b>提供，<b>不含任何明示或暗示的担保</b>，包括但不限于适销性、特定用途适用性和不侵权的担保。无论因合同、侵权还是其他原因，作者都不对任何索赔、损害或其他责任负责。</div>",
+      "本许可证的效力及于 easygl.h 全部内容，包括其中自带的着色器与示例代码；文档页面里的<a href='示例程序（总览）.htm'>示例程序</a>同样适用。"
     ]
   },
   {
@@ -224,7 +224,8 @@ var DATA = [
       "三条要记住的：",
       "1. <b>动画循环里用 peekmessage</b>（不阻塞），别用 getmessage，否则画面会停住。",
       "2. <b>默认隐藏控制台</b>，printf 看不见。想保留就 initgraph(640, 480, EX_SHOWCONSOLE)。",
-      "3. <b>setcliprgn 之后记得 clearcliprgn</b>，否则后面画的都被限制在那块区域里。"
+      "3. <b>setcliprgn 之后记得 clearcliprgn</b>，否则后面画的都被限制在那块区域里。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>为什么推荐写后缀：不写是危险的</h3><div class='warn'>不带后缀的名字看着省事，实际上把「用哪一版」交给了编译器，而 C 下<b>根本没有类型可分派</b>。下面三种情况都会出问题：<ul style='margin:6px 0 6px 18px;'><li><b>宽字符串传过去不会自动选 W 版。</b>C11 下 <a href='loadsvg.htm'>loadsvg</a> / <a href='drawsvg.htm'>drawsvg</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> / <a href='savesvgfile.htm'>savesvgfile</a> 只是<b>数参数个数</b>的宏，拿到 <code>WCHAR*</code> 也照样塞给 <code>const char*</code>，编译能过、运行时读的是错的内存；</li><li><b>C++ 下宽字符串直接编译不过</b>：这些名字只有 <code>const char*</code> 重载，传 <code>WCHAR*</code> 没有可行重载；</li><li><b>字符串是哪来的、什么编码，只有你知道。</b>编译器只能看见类型，看不见「这段字节是 GBK 还是 UTF-8」。</li></ul>写上后缀则三者全部消失：<b>用什么版本由我说了算</b>，而且换了 <code>UNICODE</code> 宏、换了编译器都不会变。</div>"
     ]
   },
   {
@@ -3740,7 +3741,6 @@ var DATA = [
     ],
     "ret": "无",
     "remarks": [
-      "/* 注：本函数是少数几个有独立 A / W 名字的，可以直接写 xxxA 或 xxxW 调用。 */",
       "在<b>当前位置</b>（由 <a href='moveto.htm'>moveto</a> 设置，或上次输出后的位置）输出，输出后当前位置的 x 自动右移一个字符串的宽度。",
       "字符串为空或首字符为结束符时什么也不做。",
       "graphics.h 暂留函数。日常建议用 <a href='outtextxy.htm'>outtextxy</a> 明确指定坐标。",
@@ -3785,7 +3785,6 @@ var DATA = [
     ],
     "ret": "无",
     "remarks": [
-      "/* 注：本函数是少数几个有独立 A / W 名字的，可以直接写 xxxA 或 xxxW 调用。 */",
       "坐标为 <b>double</b>，支持小数（EasyX 为 int）。",
       "按首参之后的实参类型自动区分字符串与单字符重载。",
       "<b>关于中文与编码</b>：本函数按 <a href='settextcp.htm'>settextcp</a> 设定的代码页解码 char* 字符串，<b>不做编码猜测</b>。源文件存为 GBK 时直接用即可；存为 UTF-8 请先调用 <a href='settextcp.htm'>settextcp</a>(CP_UTF8)。写成宽字符串 <code>outtextxy(x, y, L'中文')</code> 则完全不受影响。",
@@ -4044,7 +4043,6 @@ var DATA = [
     ],
     "ret": "返回高度（像素）。",
     "remarks": [
-      "/* 注：本函数是少数几个有独立 A / W 名字的，可以直接写 xxxA 或 xxxW 调用。 */",
       "<b>显式 A / W 名字</b>：上面两组 xxxA / xxxW 从 20261003 起都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个字串版本<b>行为完全一致</b>（A 版先按 <a href='settextcp.htm'>settextcp</a> 设定的代码页转成宽字符串），显式写死的好处是：字符串字面量加上或去掉 L 前缀时，调用不会悄悄换实现。"
     ]
   },
@@ -4074,7 +4072,6 @@ var DATA = [
     ],
     "ret": "返回宽度（像素）。",
     "remarks": [
-      "/* 注：本函数是少数几个有独立 A / W 名字的，可以直接写 xxxA 或 xxxW 调用。 */",
       "<b>显式 A / W 名字</b>：上面两组 xxxA / xxxW 从 20261003 起都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个字串版本<b>行为完全一致</b>（A 版先按 <a href='settextcp.htm'>settextcp</a> 设定的代码页转成宽字符串），显式写死的好处是：字符串字面量加上或去掉 L 前缀时，调用不会悄悄换实现。"
     ]
   },
@@ -6883,6 +6880,28 @@ var DATA = [
     ]
   },
   {
+    "name": "原生 OpenGL 总览",
+    "cat": "原生 OpenGL 访问",
+    "sig": [],
+    "brief": "在 easygl 的窗口里直接调用 OpenGL：本库没有封装、你也确实需要的那部分。",
+    "params": [],
+    "ret": "",
+    "remarks": [
+      "本库把 2D 绘图做成了「你调函数，它发顶点」，因此绝大多数情况下你不需要碰 GL。但也有三类事情它没有封装，而且短期内也不打算封装：",
+      "<ol><li><b>本库用不到的 GL 功能</b>——模板缓冲、裁剪平面、雾、显示列表、光照、求值器。</li><li><b>3D</b>——本库是 2D 库，深度测试、透视投影、法线这些概念不在它的模型里。</li><li><b>扩展</b>——某个厂商的新特性，本库不可能预知。</li></ol>",
+      "对这三类，正确的做法不是等本库加函数，而是<b>你自己调</b>。这一组函数就是为此存在：它把 GL 上下文交给你用一会儿，用完还回来。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>GL 1.1 里本库没碰过的函数</h3>",
+      "<div class='note'><b>先分清两件事</b>，它们常被混为一谈，但性质完全不同：<ol><li><b>你的 GL/gl.h 声明到哪个版本</b>——<b>取决于你装了什么</b>，各人不同。只有系统默认头文件的通常停在 1.1；装了 GLEW / GLAD / <a href='Mesa.htm'>Mesa</a> 的可能一路到 4.6。它决定你要不要自己补 extern 声明。</li><li><b>opengl32.dll 导出了哪些函数</b>——<b>恒定只有 GL 1.1</b>。微软从未更新过这个 DLL 的导出表，换编译器、装任何第三方头文件都改不了。它决定你必须不必须在运行时取函数指针。</li></ol>下面这张表讨论的是 GL 1.1 这一版的成员，不涉及上面任何一层。GL 1.1 共 <b>336</b> 个 gl* 函数。本库只用到其中 <b>35</b> 个（清屏、混合、逻辑操作、纹理、像素存取、几个查询），剩下 <b>301</b> 个一个都没调用。它们大致是：",
+      "<table class='t' class='t'><tr><th>类别</th><th>代表</th><th>说明</th></tr><tr><td>矩阵与变换</td><td>glPushMatrix / glTranslatef / glRotatef / glScalef / glLoadMatrixf / glFrustum / glOrtho</td><td>本库的投影是自己的，不走 GL 矩阵栈；你要做 3D 就得自己用这组</td></tr><tr><td>深度与模板</td><td>glDepthRange / glStencilFunc / glStencilOp / glStencilMask / glClearStencil</td><td>2D 绘图没有深度概念；模板可用但你得自己开</td></tr><tr><td>几何状态</td><td>glCullFace / glFrontFace / glShadeModel / glPolygonMode / glPolygonOffset / glLineWidth / glPointSize / glLineStipple / glPolygonStipple</td><td>本库的线宽和填充有自己的实现，不走这几项</td></tr><tr><td>裁剪</td><td>glClipPlane</td><td>额外的用户定义裁剪面，2D 用不上</td></tr><tr><td>雾与提示</td><td>glFogf / glFogfv / glFogi / glFogiv / glHint</td><td>3D 场景常用；本库是 2D，没有雾</td></tr><tr><td>光照与材质</td><td>glLight* / glMaterial* / glColorMaterial / glNormal*</td><td>固定管线的光照；现代做法是自己在着色器里算</td></tr><tr><td>立即模式</td><td>glColor3f / glTexCoord2f / glRasterPos* / glRect*</td><td>本库用顶点数组而不是立即模式，所以一个都没用</td></tr><tr><td>像素搬运</td><td>glDrawPixels / glCopyPixels / glBitmap / glReadBuffer / glDrawBuffer / glPixelZoom / glPixelTransfer*</td><td>本库只用 glReadPixels 和 glTexSubImage2D 走自己的路径</td></tr><tr><td>显示列表</td><td>glNewList / glCallList / glGenLists / glDeleteLists</td><td>已废弃的机制，不建议新代码使用</td></tr><tr><td>求值器与 NURBS</td><td>glMap1* / glMap2* / glEvalCoord* / glEvalMesh*</td><td>贝塞尔曲面，本库用 CPU 生成顶点</td></tr><tr><td>选择与反馈</td><td>glRenderMode / glSelectBuffer / glFeedbackBuffer / glInitNames / glPushName</td><td>拾取机制，现在一般用颜色拾取代替</td></tr><tr><td>索引颜色与累积缓冲</td><td>glIndex* / glClearIndex / glClearAccum / glAccum</td><td>只能用于调色板模式，现行硬件基本不支持</td></tr></table>",
+      "注意「本库没调用」不等于「你不能调用」。这些函数都属于 GL 1.1，由 <b>opengl32.dll 直接导出</b>，所以<b>不需要取函数指针</b>——直接写即可。万一你的头文件漏声明了其中某一个（精简 SDK 会这样），那也只需要你自己补一行 extern，与 <a href='glgetproc.htm'>glgetproc</a> 无关。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>一帧的形状</h3>",
+      "<pre class='code'>if (glbegin()) {\n    /* 这里是你自己的 OpenGL */\n    glMatrixMode(GL_PROJECTION);\n    /* ... */\n    glend();                 /* 必须配对 */\n}</pre>",
+      "<div class='warn'><b><a href='glbegin.htm'>glbegin</a>() 和 <a href='glend.htm'>glend</a>() 必须成对出现，</b>而且中间<b>不能调用任何 easygl 绘图函数</b>——它们会把顶点塞进自己的批次，而批次已经在这一对的开头提交掉了，结果就是顺序错乱。</div>",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>必须先有上下文</h3>",
+      "所有这一组的函数都要求 <a href='isglready.htm'>isglready()</a> 为真，也就是 <a href='initgraph.htm'>initgraph</a> 已经跑过且 GL 初始化成功。在此之前 glbegin() 返回 false、<a href='glgetproc.htm'>glgetproc</a>() 返回 NULL，<a href='getglhdc.htm'>getglhdc</a> 返回 NULL。不会崩，只是什么都不做。"
+    ]
+  },
+  {
     "name": "getglhdc",
     "cat": "原生 OpenGL 访问",
     "sig": [
@@ -6964,28 +6983,6 @@ var DATA = [
       "<b>两条路径都走。</b>先问 wglGetProcAddress——它只回答 GL 1.1 <b>之后</b>的函数；取不到再回退到 opengl32.dll 上的 GetProcAddress，因为 GL 1.1 那一批正是这个 DLL 导出的，而 wglGetProcAddress 对它们返回 NULL。所以同一个函数名交给它，两条路里总有一条能成。",
       "<div class='warn'>有些驱动（llvmpipe 是典型）在遇到不认识的名字时，返回的不是 NULL 而是 <b>1、2、3 或 -1</b>。直接调用这种值就是跳到非法地址，程序当场崩。本库会过滤掉这些假地址，但你自己用 wglGetProcAddress 时要记得做同样的判断。</div>",
       "返回值<b>必须判空再用</b>：驱动不认识这个名字、或者 GL 还没起来，都会返回 NULL。"
-    ]
-  },
-  {
-    "name": "原生 OpenGL 总览",
-    "cat": "原生 OpenGL 访问",
-    "sig": [],
-    "brief": "在 easygl 的窗口里直接调用 OpenGL：本库没有封装、你也确实需要的那部分。",
-    "params": [],
-    "ret": "",
-    "remarks": [
-      "本库把 2D 绘图做成了「你调函数，它发顶点」，因此绝大多数情况下你不需要碰 GL。但也有三类事情它没有封装，而且短期内也不打算封装：",
-      "<ol><li><b>本库用不到的 GL 功能</b>——模板缓冲、裁剪平面、雾、显示列表、光照、求值器。</li><li><b>3D</b>——本库是 2D 库，深度测试、透视投影、法线这些概念不在它的模型里。</li><li><b>扩展</b>——某个厂商的新特性，本库不可能预知。</li></ol>",
-      "对这三类，正确的做法不是等本库加函数，而是<b>你自己调</b>。这一组函数就是为此存在：它把 GL 上下文交给你用一会儿，用完还回来。",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>GL 1.1 里本库没碰过的函数</h3>",
-      "<div class='note'><b>先分清两件事</b>，它们常被混为一谈，但性质完全不同：<ol><li><b>你的 GL/gl.h 声明到哪个版本</b>——<b>取决于你装了什么</b>，各人不同。只有系统默认头文件的通常停在 1.1；装了 GLEW / GLAD / <a href='Mesa.htm'>Mesa</a> 的可能一路到 4.6。它决定你要不要自己补 extern 声明。</li><li><b>opengl32.dll 导出了哪些函数</b>——<b>恒定只有 GL 1.1</b>。微软从未更新过这个 DLL 的导出表，换编译器、装任何第三方头文件都改不了。它决定你必须不必须在运行时取函数指针。</li></ol>下面这张表讨论的是 GL 1.1 这一版的成员，不涉及上面任何一层。GL 1.1 共 <b>336</b> 个 gl* 函数。本库只用到其中 <b>35</b> 个（清屏、混合、逻辑操作、纹理、像素存取、几个查询），剩下 <b>301</b> 个一个都没调用。它们大致是：",
-      "<table class='t' class='t'><tr><th>类别</th><th>代表</th><th>说明</th></tr><tr><td>矩阵与变换</td><td>glPushMatrix / glTranslatef / glRotatef / glScalef / glLoadMatrixf / glFrustum / glOrtho</td><td>本库的投影是自己的，不走 GL 矩阵栈；你要做 3D 就得自己用这组</td></tr><tr><td>深度与模板</td><td>glDepthRange / glStencilFunc / glStencilOp / glStencilMask / glClearStencil</td><td>2D 绘图没有深度概念；模板可用但你得自己开</td></tr><tr><td>几何状态</td><td>glCullFace / glFrontFace / glShadeModel / glPolygonMode / glPolygonOffset / glLineWidth / glPointSize / glLineStipple / glPolygonStipple</td><td>本库的线宽和填充有自己的实现，不走这几项</td></tr><tr><td>裁剪</td><td>glClipPlane</td><td>额外的用户定义裁剪面，2D 用不上</td></tr><tr><td>雾与提示</td><td>glFogf / glFogfv / glFogi / glFogiv / glHint</td><td>3D 场景常用；本库是 2D，没有雾</td></tr><tr><td>光照与材质</td><td>glLight* / glMaterial* / glColorMaterial / glNormal*</td><td>固定管线的光照；现代做法是自己在着色器里算</td></tr><tr><td>立即模式</td><td>glColor3f / glTexCoord2f / glRasterPos* / glRect*</td><td>本库用顶点数组而不是立即模式，所以一个都没用</td></tr><tr><td>像素搬运</td><td>glDrawPixels / glCopyPixels / glBitmap / glReadBuffer / glDrawBuffer / glPixelZoom / glPixelTransfer*</td><td>本库只用 glReadPixels 和 glTexSubImage2D 走自己的路径</td></tr><tr><td>显示列表</td><td>glNewList / glCallList / glGenLists / glDeleteLists</td><td>已废弃的机制，不建议新代码使用</td></tr><tr><td>求值器与 NURBS</td><td>glMap1* / glMap2* / glEvalCoord* / glEvalMesh*</td><td>贝塞尔曲面，本库用 CPU 生成顶点</td></tr><tr><td>选择与反馈</td><td>glRenderMode / glSelectBuffer / glFeedbackBuffer / glInitNames / glPushName</td><td>拾取机制，现在一般用颜色拾取代替</td></tr><tr><td>索引颜色与累积缓冲</td><td>glIndex* / glClearIndex / glClearAccum / glAccum</td><td>只能用于调色板模式，现行硬件基本不支持</td></tr></table>",
-      "注意「本库没调用」不等于「你不能调用」。这些函数都属于 GL 1.1，由 <b>opengl32.dll 直接导出</b>，所以<b>不需要取函数指针</b>——直接写即可。万一你的头文件漏声明了其中某一个（精简 SDK 会这样），那也只需要你自己补一行 extern，与 <a href='glgetproc.htm'>glgetproc</a> 无关。",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>一帧的形状</h3>",
-      "<pre class='code'>if (glbegin()) {\n    /* 这里是你自己的 OpenGL */\n    glMatrixMode(GL_PROJECTION);\n    /* ... */\n    glend();                 /* 必须配对 */\n}</pre>",
-      "<div class='warn'><b><a href='glbegin.htm'>glbegin</a>() 和 <a href='glend.htm'>glend</a>() 必须成对出现，</b>而且中间<b>不能调用任何 easygl 绘图函数</b>——它们会把顶点塞进自己的批次，而批次已经在这一对的开头提交掉了，结果就是顺序错乱。</div>",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>必须先有上下文</h3>",
-      "所有这一组的函数都要求 <a href='isglready.htm'>isglready()</a> 为真，也就是 <a href='initgraph.htm'>initgraph</a> 已经跑过且 GL 初始化成功。在此之前 glbegin() 返回 false、<a href='glgetproc.htm'>glgetproc</a>() 返回 NULL，<a href='getglhdc.htm'>getglhdc</a> 返回 NULL。不会崩，只是什么都不做。"
     ]
   },
   {
@@ -7268,7 +7265,6 @@ var DATA = [
     ],
     "ret": "无",
     "remarks": [
-      "/* 注：本函数是少数几个有独立 A / W 名字的，可以直接写 xxxA 或 xxxW 调用。 */",
       "<b>显式 A / W 名字</b>：上面两组 xxxA / xxxW 从 20261003 起都是公开名字，可以自己指定用哪一版，不必让编译器按实参类型去挑。两个字串版本<b>行为完全一致</b>（A 版先按 <a href='settextcp.htm'>settextcp</a> 设定的代码页转成宽字符串），显式写死的好处是：字符串字面量加上或去掉 L 前缀时，调用不会悄悄换实现。"
     ]
   },
@@ -7769,6 +7765,26 @@ var DATA = [
     ]
   },
   {
+    "name": "兼容性总览",
+    "cat": "兼容性",
+    "sig": [],
+    "brief": "在没有正常 OpenGL 驱动的环境里，easygl.h 会怎样、以及怎么让它跑起来。",
+    "params": [],
+    "ret": "",
+    "remarks": [
+      "easygl.h 用 OpenGL 实现绘图。OpenGL 本身只是一份<b>规范</b>，真正的实现写在显卡驱动里——Windows 自带的 opengl32.dll 只是一个很薄的加载层，只到 OpenGL 1.1；更高版本的功能由显卡厂商提供的 ICD（可安装客户端驱动）给出。",
+      "本库需要 <b>OpenGL 3.0 及以上</b>，因为画布是帧缓冲对象（FBO）承载的，而 glGenFramebuffers 到 3.0 才进入核心规范。所以只要系统里没有一个能给出 3.0 的实现，<a href='initgraph.htm'>initgraph</a> 就会卡在入口点加载那一步：要么弹 “Failed to load OpenGL entry points”，要么窗口一闪而过、什么都没有。",
+      "下面三种是最常见的“没有正常 OpenGL”的情形。它们的表现很像，但成因和解法完全不同，所以分开讲。",
+      "<table class='t'><thead><tr><th>环境</th><th>本质</th><th>能否用本库</th><th>怎么办</th></tr></thead><tbody><tr class='head'><td><a href='Microsoft 基本渲染驱动.htm'>Microsoft 基本渲染驱动</a></td><td>Windows 的兜底显示驱动，只给 OpenGL 1.1</td><td>不行</td><td>装厂商的完整驱动</td></tr><tr><td><a href='Mesa.htm'>Mesa</a></td><td>开源的 OpenGL 实现，可替代厂商驱动</td><td>可以</td><td>随程序或系统部署 <a href='Mesa.htm'>Mesa</a></td></tr><tr><td><a href='Wine.htm'>Wine</a></td><td>在 Linux / macOS 上运行 exe 的兼容层</td><td>通常可以</td><td>取决于宿主系统的驱动</td></tr></tbody></table>",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>先确认自己处在哪种环境</h3>",
+      "initgraph 默认会隐藏控制台，任何 printf 都看不见，所以排查时先把它打开：",
+      "<pre class='code'>initgraph(640, 480, EX_SHOWCONSOLE);   /* 保留控制台 */\nprintf(\"version  = %s\\n\", getglver());\nprintf(\"vendor   = %s\\n\", getvendorinfo());\nprintf(\"renderer = %s\\n\", getrendererinfo());\nprintf(\"major=%d minor=%d\\n\", getglmajor(), getglminor());</pre>",
+      "看 renderer 那一行就能判断：",
+      "<table class='t'><thead><tr><th>看到什么</th><th>说明</th></tr></thead><tbody><tr class='head'><td>显卡型号，如 NVIDIA GeForce ...</td><td>正常的厂商驱动，一切正常</td></tr><tr><td>Microsoft Basic Render Driver<br>GDI Generic</td><td>走了 Windows 兜底，只有 OpenGL 1.1，见下一页</td></tr><tr><td>llvmpipe / softpipe</td><td><a href='Mesa.htm'>Mesa</a> 的 CPU 软渲染，能跑但慢</td></tr><tr><td>D3D12 (...) / zink ...</td><td><a href='Mesa.htm'>Mesa</a> 的 GPU 后端，走的是 D3D12 或 Vulkan</td></tr></tbody></table>",
+      "如果 version 直接是 <code>n/a</code>，说明上下文压根没建起来，最常见的原因是 <a href='Mesa.htm'>Mesa</a> 部署不完整（见“Mesa”一页）。"
+    ]
+  },
+  {
     "name": "Mesa",
     "cat": "兼容性",
     "sig": [],
@@ -7853,23 +7869,20 @@ var DATA = [
     ]
   },
   {
-    "name": "兼容性总览",
-    "cat": "兼容性",
+    "name": "示例程序（总览）",
+    "cat": "示例程序",
     "sig": [],
-    "brief": "在没有正常 OpenGL 驱动的环境里，easygl.h 会怎样、以及怎么让它跑起来。",
+    "brief": "可直接编译运行的完整示例，覆盖绘图、动画、交互与图像处理。",
     "params": [],
     "ret": "",
     "remarks": [
-      "easygl.h 用 OpenGL 实现绘图。OpenGL 本身只是一份<b>规范</b>，真正的实现写在显卡驱动里——Windows 自带的 opengl32.dll 只是一个很薄的加载层，只到 OpenGL 1.1；更高版本的功能由显卡厂商提供的 ICD（可安装客户端驱动）给出。",
-      "本库需要 <b>OpenGL 3.0 及以上</b>，因为画布是帧缓冲对象（FBO）承载的，而 glGenFramebuffers 到 3.0 才进入核心规范。所以只要系统里没有一个能给出 3.0 的实现，<a href='initgraph.htm'>initgraph</a> 就会卡在入口点加载那一步：要么弹 “Failed to load OpenGL entry points”，要么窗口一闪而过、什么都没有。",
-      "下面三种是最常见的“没有正常 OpenGL”的情形。它们的表现很像，但成因和解法完全不同，所以分开讲。",
-      "<table class='t'><thead><tr><th>环境</th><th>本质</th><th>能否用本库</th><th>怎么办</th></tr></thead><tbody><tr class='head'><td><a href='Microsoft 基本渲染驱动.htm'>Microsoft 基本渲染驱动</a></td><td>Windows 的兜底显示驱动，只给 OpenGL 1.1</td><td>不行</td><td>装厂商的完整驱动</td></tr><tr><td><a href='Mesa.htm'>Mesa</a></td><td>开源的 OpenGL 实现，可替代厂商驱动</td><td>可以</td><td>随程序或系统部署 <a href='Mesa.htm'>Mesa</a></td></tr><tr><td><a href='Wine.htm'>Wine</a></td><td>在 Linux / macOS 上运行 exe 的兼容层</td><td>通常可以</td><td>取决于宿主系统的驱动</td></tr></tbody></table>",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>先确认自己处在哪种环境</h3>",
-      "initgraph 默认会隐藏控制台，任何 printf 都看不见，所以排查时先把它打开：",
-      "<pre class='code'>initgraph(640, 480, EX_SHOWCONSOLE);   /* 保留控制台 */\nprintf(\"version  = %s\\n\", getglver());\nprintf(\"vendor   = %s\\n\", getvendorinfo());\nprintf(\"renderer = %s\\n\", getrendererinfo());\nprintf(\"major=%d minor=%d\\n\", getglmajor(), getglminor());</pre>",
-      "看 renderer 那一行就能判断：",
-      "<table class='t'><thead><tr><th>看到什么</th><th>说明</th></tr></thead><tbody><tr class='head'><td>显卡型号，如 NVIDIA GeForce ...</td><td>正常的厂商驱动，一切正常</td></tr><tr><td>Microsoft Basic Render Driver<br>GDI Generic</td><td>走了 Windows 兜底，只有 OpenGL 1.1，见下一页</td></tr><tr><td>llvmpipe / softpipe</td><td><a href='Mesa.htm'>Mesa</a> 的 CPU 软渲染，能跑但慢</td></tr><tr><td>D3D12 (...) / zink ...</td><td><a href='Mesa.htm'>Mesa</a> 的 GPU 后端，走的是 D3D12 或 Vulkan</td></tr></tbody></table>",
-      "如果 version 直接是 <code>n/a</code>，说明上下文压根没建起来，最常见的原因是 <a href='Mesa.htm'>Mesa</a> 部署不完整（见“Mesa”一页）。"
+      "每个示例的程序开头都能看到这三句，顺序固定：<b>dpiaware(true)</b> 声明 DPI 感知，少了它 <a href='fixhighdpi.htm'>fixhighdpi</a> 的系数恒为 1；<b>fixhighdpi()</b> 按 DPI 放大窗口和坐标系；<b>initgraph</b> 建窗。前两句缺一不可，但各管一半：只做第一句，窗口清晰但界面在高分屏上小得看不清；只做第二句，系数恒为 1，等于没调。两者都必须在 initgraph 之前 —— 感知是进程级的，窗口开出来之后再声明就太晚了。详见 <a href='dpiaware.htm'>dpiaware</a> 与 <a href='fixhighdpi.htm'>fixhighdpi</a>。",
+      "本章所有示例代码均以 GBK（代码页 936）保存。复制代码后请确认编辑器保存为 GBK 再编译。原因：本库对 char* 字符串不做编码猜测，一律按 <a href='settextcp.htm'>settextcp</a> 设定的代码页解码，默认取系统 ANSI 代码页（中文 Windows 上即 GBK）。",
+      "若希望用 UTF-8 保存源码，有两种办法：一是把示例里的 settextcp(936) 改成 settextcp(CP_UTF8)；二是把字符串写成宽字符串 L'...'，完全不经过字节转码，无论源码什么编码都不会出错（推荐）。",
+      "含中文的示例已经在 initgraph 之后调用了 settextcp(936)；纯英文的示例没有中文字符串，因此不需要这一句。每一页末尾都会写明该页属于哪种情况。",
+      "帧节奏与等待按键：动画类示例用 <a href='setvsync.htm'>setvsync</a>(true) 把节奏交给显示器刷新率；非动画的示例需要暂停时统一用 <a href='gx_getch.htm'>gx_getch</a>() 而不是 getch() —— <a href='initgraph.htm'>initgraph</a> 默认隐藏控制台，被隐藏的控制台拿不到键盘焦点，标准 getch() 会永久阻塞。",
+      "列表按加入顺序排列，最新的是 <b>裁剪演示</b>，展示 20261004 新增的矩形裁剪：<a href='setcliprect.htm'>setcliprect</a> 设一个矩形区，之后所有绘制都被限制在框内，用来做滚动区域、局部刷新、取景框。",
+      "每个示例页的末尾都有三段统一说明，分别讲源码编码、高 DPI 与帧节奏，内容按该示例的实际情况取用，因此各页措辞一致。"
     ]
   },
   {
@@ -10614,23 +10627,6 @@ var DATA = [
     "kind": "example"
   },
   {
-    "name": "示例程序（总览）",
-    "cat": "示例程序",
-    "sig": [],
-    "brief": "可直接编译运行的完整示例，覆盖绘图、动画、交互与图像处理。",
-    "params": [],
-    "ret": "",
-    "remarks": [
-      "每个示例的程序开头都能看到这三句，顺序固定：<b>dpiaware(true)</b> 声明 DPI 感知，少了它 <a href='fixhighdpi.htm'>fixhighdpi</a> 的系数恒为 1；<b>fixhighdpi()</b> 按 DPI 放大窗口和坐标系；<b>initgraph</b> 建窗。前两句缺一不可，但各管一半：只做第一句，窗口清晰但界面在高分屏上小得看不清；只做第二句，系数恒为 1，等于没调。两者都必须在 initgraph 之前 —— 感知是进程级的，窗口开出来之后再声明就太晚了。详见 <a href='dpiaware.htm'>dpiaware</a> 与 <a href='fixhighdpi.htm'>fixhighdpi</a>。",
-      "本章所有示例代码均以 GBK（代码页 936）保存。复制代码后请确认编辑器保存为 GBK 再编译。原因：本库对 char* 字符串不做编码猜测，一律按 <a href='settextcp.htm'>settextcp</a> 设定的代码页解码，默认取系统 ANSI 代码页（中文 Windows 上即 GBK）。",
-      "若希望用 UTF-8 保存源码，有两种办法：一是把示例里的 settextcp(936) 改成 settextcp(CP_UTF8)；二是把字符串写成宽字符串 L'...'，完全不经过字节转码，无论源码什么编码都不会出错（推荐）。",
-      "含中文的示例已经在 initgraph 之后调用了 settextcp(936)；纯英文的示例没有中文字符串，因此不需要这一句。每一页末尾都会写明该页属于哪种情况。",
-      "帧节奏与等待按键：动画类示例用 <a href='setvsync.htm'>setvsync</a>(true) 把节奏交给显示器刷新率；非动画的示例需要暂停时统一用 <a href='gx_getch.htm'>gx_getch</a>() 而不是 getch() —— <a href='initgraph.htm'>initgraph</a> 默认隐藏控制台，被隐藏的控制台拿不到键盘焦点，标准 getch() 会永久阻塞。",
-      "列表按加入顺序排列，最新的是 <b>裁剪演示</b>，展示 20261004 新增的矩形裁剪：<a href='setcliprect.htm'>setcliprect</a> 设一个矩形区，之后所有绘制都被限制在框内，用来做滚动区域、局部刷新、取景框。",
-      "每个示例页的末尾都有三段统一说明，分别讲源码编码、高 DPI 与帧节奏，内容按该示例的实际情况取用，因此各页措辞一致。"
-    ]
-  },
-  {
     "name": "色彩模型 3D",
     "cat": "示例程序",
     "sig": [
@@ -11454,8 +11450,7 @@ var DATA = [
     "remarks": [
       "<b>两者的唯一区别在字符串怎么解码</b>：A 版拿到 <code>char*</code> 后按 <a href='settextcp.htm'>settextcp</a>() 设的代码页转成宽字符再交给 GDI+（默认 CP_ACP，中文 Windows 上是 936 即 GBK）；W 版拿到 <code>WCHAR*</code> 直接就是 UTF-16，<b>不经任何转换</b>。所以源文件存成什么编码，只影响 A 版 —— W 版无论怎么存都不会错。",
       "<h3 style='margin:14px 0 6px;color:#10307a;'>全部 A / W 对</h3><table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>作用</th></tr></thead><tbody><tr class='head'><td><a href='outtext.htm'>outtext</a></td><td><code>outtextA / outtextW</code></td><td>在当前位置输出字符串</td></tr><tr><td><a href='outtextxy.htm'>outtextxy</a></td><td><code>outtextxyA / outtextxyW</code></td><td>在指定位置输出字符串</td></tr><tr><td><a href='textwidth.htm'>textwidth</a></td><td><code>textwidthA / textwidthW</code></td><td>取字符串宽度</td></tr><tr><td><a href='textheight.htm'>textheight</a></td><td><code>textheightA / textheightW</code></td><td>取字符串高度</td></tr><tr><td><a href='drawtext.htm'>drawtext</a></td><td><code>drawtextA / drawtextW</code></td><td>矩形内排版 或 指定起点换行</td></tr><tr><td><a href='settextstyle.htm'>settextstyle</a></td><td><code>settextstyleA / settextstyleW</code></td><td>设置字体样式</td></tr><tr><td><a href='loadimage.htm'>loadimage</a></td><td><code>loadimageA / loadimageW</code></td><td>从文件载入图像</td></tr><tr><td><a href='saveimage.htm'>saveimage</a></td><td><code>saveimageA / saveimageW</code></td><td>保存图像到文件</td></tr><tr><td><a href='inputbox.htm'>inputbox</a></td><td><code>inputboxA / inputboxW</code></td><td>输入框（小写 i）</td></tr><tr><td><a href='InputBox.htm'>InputBox</a></td><td><code>InputBoxA / InputBoxW</code></td><td>输入框（大写 I，EasyX 拼写）</td></tr><tr><td><a href='messagebox.htm'>messagebox</a></td><td><code>messageboxA / messageboxW</code></td><td>消息框</td></tr><tr><td><a href='setwindowtext.htm'>setwindowtext</a></td><td><code>setwindowtextA / setwindowtextW</code></td><td>改窗口标题</td></tr><tr><td><a href='loadsvgfile.htm'>loadsvgfile</a></td><td><code>loadsvgfileA / loadsvgfileW</code></td><td>从文件载入 SVG</td></tr><tr><td><a href='loadsvgfromfile.htm'>loadsvgfromfile</a></td><td><code>loadsvgfromfileA / loadsvgfromfileW</code></td><td>从文件载入并指定尺寸</td></tr><tr><td><a href='savesvgfile.htm'>savesvgfile</a></td><td><code>savesvgfileA / savesvgfileW</code></td><td>把 SVG 源码写回文件</td></tr><tr><td><a href='loadsvg.htm'>loadsvg</a></td><td><code>loadsvgA / loadsvgW</code></td><td>从文本载入 SVG</td></tr><tr><td><a href='drawsvg.htm'>drawsvg</a></td><td><code>drawsvgA / drawsvgW</code></td><td>一步：载入文本并画出</td></tr><tr><td><a href='drawsvgfile.htm'>drawsvgfile</a></td><td><code>drawsvgfileA / drawsvgfileW</code></td><td>一步：载入文件并画出</td></tr><tr><td><a href='putsvg.htm'>putsvg</a></td><td><code>putsvgA / putsvgW</code></td><td>把已载入的 SVG 画出来</td></tr></tbody></table>",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>为什么推荐写后缀：不写是危险的</h3><div class='warn'>不带后缀的名字看着省事，实际上把「用哪一版」交给了编译器，而 C 下<b>根本没有类型可分派</b>。下面三种情况都会出问题：<ul style='margin:6px 0 6px 18px;'><li><b>宽字符串传过去不会自动选 W 版。</b>C11 下 <a href='loadsvg.htm'>loadsvg</a> / <a href='drawsvg.htm'>drawsvg</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> / <a href='drawsvgfile.htm'>drawsvgfile</a> 只是<b>数参数个数</b>的宏，拿到 <code>WCHAR*</code> 也照样塞给 <code>const char*</code>，编译能过、运行时读的是错的内存；</li><li><b>C++ 下宽字符串直接编译不过</b>：这些名字只有 <code>const char*</code> 重载，传 <code>WCHAR*</code> 没有可行重载；</li><li><b>字符串是哪来的、什么编码，只有你知道。</b>编译器只能看见类型，看不见「这段字节是 GBK 还是 UTF-8」。</li></ul>写上后缀则三者全部消失：<b>用什么版本由我说了算</b>，而且换了 <code>UNICODE</code> 宏、换了编译器都不会变。</div>",
-      "<h3 style='margin:14px 0 6px;color:#10307a;'>不写后缀什么时候还能用</h3>不写后缀时编译器按实参类型选版本，在<b>纯窄字符串且类型明确</b>的场景是对的，比如 <code>outtextxy(10, 10, 'abc')</code>。真正非写不可的是这三种情形：<ul style='margin:6px 0 6px 18px;'><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b>——不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>要<b>宽字符串</b>，或要把函数<b>当函数指针传递</b>、存进表里（不带后缀的宏形式没有单一地址可取）。</li></ul>除此之外，<b>建议一律写后缀</b>：代价只是多打一个字母。",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>不写后缀什么时候还能用（为什么危险见<a href='使用教程.htm'>使用教程</a>）</h3>不写后缀时编译器按实参类型选版本，在<b>纯窄字符串且类型明确</b>的场景是对的，比如 <code>outtextxy(10, 10, 'abc')</code>。真正非写不可的是这三种情形：<ul style='margin:6px 0 6px 18px;'><li>实参是 <code>void*</code>、<code>intptr_t</code> 之类类型不明的值，编译器没法判断；</li><li>想让一段代码<b>不受 <code>UNICODE</code> 宏影响</b>——不带后缀的 <code>LPCTSTR</code> 形式会随项目是否定义 UNICODE 变，写死后缀则恒定；</li><li>要<b>宽字符串</b>，或要把函数<b>当函数指针传递</b>、存进表里（不带后缀的宏形式没有单一地址可取）。</li></ul>除此之外，<b>建议一律写后缀</b>：代价只是多打一个字母。",
       "<h3 style='margin:14px 0 6px;color:#10307a;'>只有 A 版的函数</h3>下面这些<b>没有 W 版也不该有</b> —— 它们的字符串不是文本，而是给驱动或 GL 看的 ASCII 标识符：<table class='t'><thead><tr><th>函数</th><th>字符串内容</th><th>为什么没有 W 版</th></tr></thead><tbody><tr class='head'><td><a href='setpostshader.htm'>setpostshader</a></td><td>着色器源码</td><td>GLSL 源码必须是 ASCII，驱动不认宽字符</td></tr><tr><td><a href='getpostloc.htm'>getpostloc</a></td><td>uniform 名字</td><td>GL 的 ASCII 标识符</td></tr><tr><td><a href='glgetproc.htm'>glgetproc</a></td><td>扩展函数名</td><td>同上</td></tr><tr><td><a href='GetEasyGLVer.htm'>GetEasyGLVer</a> / <a href='GetEasyXVer.htm'>GetEasyXVer</a></td><td>版本串</td><td>返回 ASCII，不是 TCHAR 接口</td></tr><tr><td><a href='getadapterinfo.htm'>getadapterinfo</a> / <a href='getdisplaymode.htm'>getdisplaymode</a><br><a href='getglslver.htm'>getglslver</a> / <a href='getglver.htm'>getglver</a><br><a href='getrendererinfo.htm'>getrendererinfo</a> / <a href='getvendorinfo.htm'>getvendorinfo</a></td><td>诊断信息串</td><td>驱动返回的就是 ASCII</td></tr></tbody></table>",
       "<h3 style='margin:14px 0 6px;color:#10307a;'>字体结构体：两版都有</h3><code>setfont</code> / <code>getfont</code> / <code>gettextstyle</code> 以及 <code>settextstyle</code> 的单参形式，既可以传 <code>LOGFONTA*</code> 也可以传 <code>LOGFONTW*</code>：<table class='t'><thead><tr><th>不带后缀</th><th>显式 A / W</th><th>说明</th></tr></thead><tbody><tr class='head'><td><a href='setfont.htm'>setfont</a></td><td><code>setfontA / setfontW</code></td><td>按指针类型分派；C++ 下是重载，C11 下是宏</td></tr><tr><td><a href='getfont.htm'>getfont</a></td><td><code>getfontA / getfontW</code></td><td>取出当前字体，装进你给的那个结构体</td></tr><tr><td><a href='gettextstyle.htm'>gettextstyle</a></td><td><code>gettextstyleA / gettextstyleW</code></td><td>与 getfont 同义</td></tr><tr><td><code>settextstyle(结构体)</code></td><td><code>settextstyleA / settextstyleW</code></td><td>单参形式是 LOGFONT 形式，同样两版都收</td></tr></tbody></table><b>为什么要传 LOGFONTW*</b>：库内部把当前字体保存为 <code>LOGFONTW</code>，字体也用 <code>CreateFontIndirectW</code> 创建。传 <code>LOGFONTA*</code> 时，面上的字体名会按 <a href='settextcp.htm'>settextcp</a> 的代码页转成宽字符；如果那个代码页表示不了这个名字（比如 GBK 存不下某些字体名），转换就已经有损了。所以<b>能拿到宽名字就用 W 版</b> —— A 版能表示的 W 版都能表示，反过来不成立。",
       "<b>C++ 与 C11 的差别</b>：C++ 下 A / W 是真正的重载，<code>textwidth('a')</code> 和 <code>textwidth(L'a')</code> 直接选出不同函数；C11 没有重载，不带后缀的名字是宏，用 <code>_Generic</code> 按实参类型分派，<b>显式 A / W 名字在两种语言下都存在且可直接调用</b>。这就是本页建议的做法 —— 换来的是'用哪个版本由我说了算'。",
@@ -11464,7 +11459,7 @@ var DATA = [
     ]
   }
 ]
-var CATS = ["基本说明", "系统支持与安装", "使用教程", "基本概念", "绘图设备相关函数", "颜色模型", "图形颜色及样式设置相关函数", "图形绘制相关函数", "文字输出相关函数", "图像处理相关函数", "消息处理相关函数", "描边相关函数", "渐变与模糊", "后处理着色器相关函数", "批量绘制", "3D 网格相关函数", "原生 OpenGL 访问", "窗口与系统", "性能与帧率", "信息与诊断", "关于 OpenGL", "兼容性", "示例程序"];
+var CATS = ["基本说明", "系统支持与安装", "使用教程", "基本概念", "绘图设备相关函数", "颜色模型", "图形颜色及样式设置相关函数", "图形绘制相关函数", "文字输出相关函数", "图像处理相关函数", "消息处理相关函数", "描边相关函数", "渐变与模糊", "后处理着色器相关函数", "批量绘制", "3D 网格相关函数", "原生 OpenGL 访问", "窗口与系统", "性能与帧率", "信息与诊断", "关于 OpenGL", "兼容性", "示例程序", "A / W 版本"];
 var IC = {"bookc": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgP///8DAwICAgAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANBCLpQxauEGQaljjR7+4PNVAiD4ICOB0lVpyrsNGTl/DHODUaszrsiXAsYDMmIgVNsmCwQBJoI5lk7rZIE627LSAAAO2VQIBQsr9HA6YSWRlRrJhfUfirer1gSAQA7", "booko": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwIAAgPj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANUCFra7iaMacgcooxgQJxEoU2Z0TWfIVoX50mhIzKoRLGY5kZ2dRUWF8RELJ6AtMfjM6CJJsnXxSeAbjrMAdW6s2kt1eZVwfs2gRMhOcBuu0/KOCABADuf4UjntAnHxLKNwG63ayWAfE7n2CsRADs=", "cfg": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAAgAD4+ACAgPj4AP////j4+MDAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARhEEiAqrUzn5LESMUWJsABcsJJFKyZIcXanYkrBcjJrhsydQKPijV6xQyJQTBlkySe0AqUNCHGiAdfFQVasaalXAIhQIiuzXHnQ+RRJTDUJ1ecxLPlp/lNOfhNKS18GYQTEQA7", "tut": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AICAAP///8DAwICAgAAAACH5BAEAAAAALAAAAAAQABAAQANcCApFQSUas1QxAotTBPnFsWCEsHUfJI7CcKRpWDXe5zWUYkBCt9WqiqHzKsVWioNyyVQqAoyU4AHJzS4k0FLnMZl2RhmAdPnagpbhSYpOK4E3JMNw2EXu4openwAAO0Av3IkVACoVdXsAFDP4uSHN7/NPgCcRADs=", "page": "data:image/gif;base64,R0lGODlhEAAQAKL/AMDAwAAA+Pj4AP///8DAwICAgAAAAAAAACH5BAEAAAAALAAAAAAQABAAQANJCArV7iuWMYK1lBg5xA3UoHFCF3bjMgllKQ5FxHQfKG5qWWe4YvzA4I9zQsVkk+IgSFQKUopCSwmdmU7PnhXLkxC+4LBWRgYkAAA7STExh1SeC5WkRI+nbiFALpupsbRaxBZFAAA7", "ext": "data:image/gif;base64,R0lGODlhEAAQALP/AMDAwAAA+AAAgACAgACAAPj4AP///8DAwICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAAALAAAAAAQABAAQARfEMhJ60QnhIGKMZ5xJJfIIWhKToegIeDnjdSBZsOgHRQmBrDQwYCSZAivWIxWGSWe0KfFluJNYUMkASmwAmxZmIxqRQwyts8OKkEgkwZNQLQCuOByek0gwBz+gHUWgxEAOw=="};
 var CATIC = {"基本说明": "page", "系统支持与安装": "cfg", "使用教程": "tut", "基本概念": "page", "绘图设备相关函数": "page", "颜色模型": "page", "图形颜色及样式设置相关函数": "page", "图形绘制相关函数": "page", "文字输出相关函数": "page", "图像处理相关函数": "page", "消息处理相关函数": "page", "3D 网格相关函数": "page", "其它函数": "page", "easygl 扩展函数": "page", "原生 OpenGL 访问": "page", "关于 OpenGL": "ext", "兼容性": "ext", "示例程序": "tut"};
 /* 页面条目用什么图标：按所属分类查表，查不到就用“普通页面” */
