@@ -46,6 +46,14 @@
  *   - gxScratch(-1, ...) was written and never called, so the two
  *     GetImageBuffer() round-trip buffers were held until the process
  *     ended.  gxDestroyGL() releases them.
+ *   - blurimage() went blocky past a radius of 8.  It kept every pass at
+ *     full resolution and reached further by sampling every step-th
+ *     texel, and a tap sitting on a texel centre reads that one texel -
+ *     so the kernel was a comb, not a bell: one bright pixel became a
+ *     grid of dots, a hard edge a flight of stairs.  It now halves the
+ *     picture first and blurs at that size with taps one texel apart,
+ *     then enlarges, which costs fewer samples, gets cheaper as the
+ *     radius grows, and has no seam where the level changes.
  *
  * Revision 20261006 (two code pages, two crashes, two layout bugs)
  *
@@ -6775,6 +6783,18 @@ static const char* GX_GRAD_FS =
 
 #define GX_BLUR_MAX_TAPS   49      /* centre + 24 to each side */
 
+/* The largest radius one pass still covers WITHOUT gaps.  A pass walks
+ * +-hw texels one texel at a time, so every texel inside the kernel is
+ * read and the result is smooth; hw = ceil(1.5 * r) with sigma = r / 2
+ * means r = 16 wants hw = 24 - exactly the 24 taps to each side the
+ * weight array holds - and that is still +-3 sigma. */
+#define GX_BLUR_FULL_R     16.0
+
+/* How deep the reduction chain may go.  Four halvings, i.e. working at a
+ * sixteenth of the source, which with GX_BLUR_FULL_R covers a radius of
+ * 256 source pixels at full quality. */
+#define GX_BLUR_MAX_LEVELS 4
+
 static const char* GX_BLUR_FS =
     "#version 120\n"
     "uniform sampler2D uTex;\n"
@@ -6814,7 +6834,20 @@ static GLint  g_gx_gradProj = -1, g_gx_gradStops = -1, g_gx_gradStopN = -1,
 static GLuint g_gx_blurProg = 0;
 static GLint  g_gx_blurProj = -1, g_gx_blurStep = -1,
               g_gx_blurW = -1, g_gx_blurN = -1;
+
+/* Scratch targets for blurimage().
+ *
+ * g_gx_blurTmp / g_gx_blurTmp2 hold the horizontal and the vertical half
+ * of the separable pass, at whatever size the chain has reduced to.
+ *
+ * g_gx_blurChain[] is the reduction chain: level 0 is half the source,
+ * level 1 a quarter, and so on.  All of them are cached and only
+ * reallocated when the size changes, because blurimage() is meant to be
+ * usable every frame and building a texture per call is not.  They are
+ * released by gxDestroyGL() with the rest of the context. */
 static IMAGE  g_gx_blurTmp;
+static IMAGE  g_gx_blurTmp2;
+static IMAGE  g_gx_blurChain[GX_BLUR_MAX_LEVELS];
 
 /* Build the two programs on first use.  Both reuse GX_VS, so the vertex
  * layout (aPos / aColor / aUV at 0 / 1 / 2) is the one the whole library
@@ -7006,20 +7039,57 @@ static GX_UNUSED void gradconic(double l, double t, double r, double b,
     gxGradPaint(l, t, r, b, 3, cx, cy, a0 / 6.283185307179586, 0.0, stops, n);
 }
 
+/* An IMAGE of exactly w x h, reallocating only when the size changes.
+ * Returns NULL when the allocation failed. */
+static IMAGE* gxTmpImg(IMAGE* img, int w, int h) {
+    if (!gxImageOk(img) || img->width != w || img->height != h) {
+        gxImageDestroy(img);
+        gxImageAlloc(img, w, h);
+    }
+    return gxImageOk(img) ? img : NULL;
+}
+
+/* One full target pass of the blur program.
+ *
+ * n taps of weight w, the first of them (sx, sy) of the TARGET's own size
+ * away from the centre - one texel when the two sizes match.  n = 1 with
+ * weight 1 is a plain copy, which is all the reduce and the enlarge steps
+ * need: the work there is done by the sampler, not by the kernel. */
+static void gxBlurPass(IMAGE* dst, IMAGE* src, float sx, float sy,
+                       int n, const float* w) {
+    glBindFramebuffer(GL_FRAMEBUFFER, dst->fbo);
+    glViewport(0, 0, dst->width, dst->height);
+    glBindTexture(GL_TEXTURE_2D, src->tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glUniform1i(g_gx_blurN, n);
+    glUniform1fv(g_gx_blurW, n, w);
+    glUniform2f(g_gx_blurStep, sx, sy);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
 /* Gaussian blur of src into dst, radius in pixels.
  *
  * Two passes of a separable kernel (horizontal, then vertical) through a
  * scratch target, so the cost is O(n * taps) rather than O(n * taps^2).
- * A wide radius is also strained: above 8 px the taps walk the source in
- * steps, which costs a little quality and saves a lot of texture fetches.
+ *
+ * A wide radius is reached by halving the picture first, not by spacing
+ * the taps out: a pass whose taps are one texel apart is a bell, while
+ * one that steps over texels is a comb.  The reduction is undone on the
+ * way out, so the blur is still radius source pixels wide.  See the
+ * comment on "levels" below for what the old approach looked like.
  *
  * dst is resized to match src when it does not already.  src and dst must
  * be different images. */
 static GX_UNUSED void blurimage(IMAGE* dst, const IMAGE* src, double radius) {
     static const float ident[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    static const float one[1] = { 1.f };
     float w[GX_BLUR_MAX_TAPS];
-    double rs, sigma, sum;
-    int sw, sh, step, hw, i;
+    double rs, sigma, sum, scale;
+    int sw, sh, cw, ch, hw, i, lv, levels;
+    IMAGE* cur;
+    IMAGE* hi;
+    IMAGE* vi;
 
     if (!g_gx_glReady || !dst || !src || dst == src) return;
     if (!gxImageOk(src) || src->width < 1 || src->height < 1) return;
@@ -7030,49 +7100,36 @@ static GX_UNUSED void blurimage(IMAGE* dst, const IMAGE* src, double radius) {
         Resize(dst, sw, sh);
     if (!gxImageOk(dst)) return;
 
-    if (!(radius >= 0.5)) {
-        /* No blur asked for: one tap of weight 1 makes the two passes an
-         * exact copy, so there is no separate path to keep in step. */
-        hw = 1;
-        w[0] = 1.f;
-        w[1] = 0.f;
-        step = 1;
-    } else {
-        step = (radius > 8.0) ? (int)ceil(radius / 8.0) : 1;
-        if (step < 1) step = 1;
-        rs = radius / (double)step;
-        if (rs < 0.5) rs = 0.5;
-        /* sigma = rs / 2 and a half width of 1.5 * rs is +-3 sigma, which
-         * is where a Gaussian is already down to about 1%. */
-        sigma = rs / 2.0;
-        hw = (int)ceil(rs * 1.5);
-        if (hw < 1) hw = 1;
-        if (hw > (GX_BLUR_MAX_TAPS - 1) / 2) hw = (GX_BLUR_MAX_TAPS - 1) / 2;
-        sum = 0.0;
-        for (i = 0; i <= hw; i++) {
-            double d = (double)i;
-            double v = exp(-(d * d) / (2.0 * sigma * sigma));
-            w[i] = (float)v;
-            sum += (i == 0) ? v : 2.0 * v;
-        }
-        if (sum <= 0.0) { w[0] = 1.f; hw = 1; }
-        else for (i = 0; i <= hw; i++) w[i] = (float)(w[i] / sum);
+    /* How many halvings bring the radius down to what ONE pass covers.
+     *
+     * This is why a big radius stopped looking like a blur.  The old code
+     * kept the pass at full resolution and stretched it by sampling every
+     * step-th texel instead, and a tap that lands on a texel centre reads
+     * exactly that one texel - bilinear has nothing to blend.  The kernel
+     * became a comb: a single bright pixel turned into a grid of dots with
+     * step-1 untouched pixels between them, and a hard edge into a flight
+     * of stairs step pixels wide.  Shrinking the picture first is what
+     * makes a tap stand for a whole neighbourhood again - a texel down
+     * here IS several texels up there, so consecutive taps are adjacent
+     * and the kernel is a bell again.  Same sample count, far more
+     * picture, and it gets cheaper as the radius grows instead of dearer.
+     *
+     * The scale the caller asked for is preserved either way: the kernel
+     * is built for radius / scale at this level, and the enlarge puts it
+     * back, so the blur is radius source pixels wide whatever the chain
+     * did.  That also means there is no seam where levels goes up - the
+     * old code jumped at radius 8, 16, 24 and 32 because step did. */
+    levels = 0;
+    if (radius >= 0.5) {
+        while (radius / (double)(1 << levels) > GX_BLUR_FULL_R
+               && levels < GX_BLUR_MAX_LEVELS) levels++;
     }
 
     gxFlush();
     if (!gxBlurBuild()) return;
 
-    if (!gxImageOk(&g_gx_blurTmp) || g_gx_blurTmp.width != sw ||
-        g_gx_blurTmp.height != sh) {
-        gxImageDestroy(&g_gx_blurTmp);
-        gxImageAlloc(&g_gx_blurTmp, sw, sh);
-    }
-    if (!gxImageOk(&g_gx_blurTmp)) return;
-
     glUseProgram(g_gx_blurProg);
     glUniformMatrix4fv(g_gx_blurProj, 1, GL_FALSE, ident);
-    glUniform1i(g_gx_blurN, hw + 1);
-    glUniform1fv(g_gx_blurW, hw + 1, w);
 
     glActiveTexture(GL_TEXTURE0);
     glBindBuffer(GL_ARRAY_BUFFER, g_gx_blitVbo);
@@ -7088,22 +7145,72 @@ static GX_UNUSED void blurimage(IMAGE* dst, const IMAGE* src, double radius) {
     glDisable(GL_BLEND);
     glDisable(GL_COLOR_LOGIC_OP);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_blurTmp.fbo);
-    glViewport(0, 0, sw, sh);
-    glBindTexture(GL_TEXTURE_2D, src->tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glUniform2f(g_gx_blurStep, (float)step / (float)sw, 0.f);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    cw = sw;
+    ch = sh;
+    cur = (IMAGE*)src;              /* only ever read from */
 
-    glBindFramebuffer(GL_FRAMEBUFFER, dst->fbo);
-    glViewport(0, 0, sw, sh);
-    glBindTexture(GL_TEXTURE_2D, g_gx_blurTmp.tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glUniform2f(g_gx_blurStep, 0.f, (float)step / (float)sh);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    /* Reduce.  One tap, half the size: a destination texel centre lands on
+     * the corner where four source texels meet, so bilinear hands back
+     * their average - a 2x2 box, which is the filter that keeps the next
+     * level from aliasing the speckle back in.  Halving one step at a time
+     * is what keeps that true; a single pass straight to a quarter would
+     * skip texels and alias. */
+    for (lv = 0; lv < levels; lv++) {
+        int nw = (cw > 1) ? (cw + 1) / 2 : 1;
+        int nh = (ch > 1) ? (ch + 1) / 2 : 1;
+        IMAGE* t = gxTmpImg(&g_gx_blurChain[lv], nw, nh);
+        if (!t) goto done;
+        gxBlurPass(t, cur, 0.f, 0.f, 1, one);
+        cur = t;
+        cw = nw;
+        ch = nh;
+    }
 
+    /* How many source pixels one texel down here stands for.  Using the
+     * size actually reached rather than 1 << levels keeps small images
+     * honest: a 3 pixel wide picture cannot really halve four times. */
+    scale = (double)cw / (double)sw;
+    rs = radius * scale;
+
+    if (!(rs >= 0.5)) {
+        /* No blur asked for, or nothing left of it: one tap of weight 1 is
+         * an exact copy at equal sizes, so there is no separate path to
+         * keep in step. */
+        gxBlurPass(dst, cur, 0.f, 0.f, 1, one);
+        goto done;
+    }
+    if (rs > GX_BLUR_FULL_R) rs = GX_BLUR_FULL_R;   /* more than 256 asked */
+
+    /* sigma = rs / 2 and a half width of 1.5 * rs is +-3 sigma, which
+     * is where a Gaussian is already down to about 1%.  Every texel in
+     * between is read: the pass steps one texel at a time, always. */
+    sigma = rs / 2.0;
+    hw = (int)ceil(rs * 1.5);
+    if (hw < 1) hw = 1;
+    if (hw > (GX_BLUR_MAX_TAPS - 1) / 2) hw = (GX_BLUR_MAX_TAPS - 1) / 2;
+    sum = 0.0;
+    for (i = 0; i <= hw; i++) {
+        double d = (double)i;
+        double v = exp(-(d * d) / (2.0 * sigma * sigma));
+        w[i] = (float)v;
+        sum += (i == 0) ? v : 2.0 * v;
+    }
+    if (sum <= 0.0) { w[0] = 1.f; hw = 1; }
+    else for (i = 0; i <= hw; i++) w[i] = (float)(w[i] / sum);
+
+    hi = gxTmpImg(&g_gx_blurTmp, cw, ch);
+    vi = gxTmpImg(&g_gx_blurTmp2, cw, ch);
+    if (!hi || !vi) goto done;
+
+    gxBlurPass(hi, cur, 1.f / (float)cw, 0.f, hw + 1, w);
+    gxBlurPass(vi, hi,  0.f, 1.f / (float)ch, hw + 1, w);
+
+    /* Enlarge.  Bilinear, which on a picture that has just been blurred
+     * down here is a smooth ramp: everything small enough to show the
+     * grid was removed by the blur itself. */
+    gxBlurPass(dst, vi, 0.f, 0.f, 1, one);
+
+done:
     glDisableVertexAttribArray(0);
     glDisableVertexAttribArray(1);
     glDisableVertexAttribArray(2);
@@ -8799,7 +8906,11 @@ static void gxDestroyGL(void) {
     if (g_gx_gradProg) glDeleteProgram(g_gx_gradProg);
     if (g_gx_gradVbo)  glDeleteBuffers(1, &g_gx_gradVbo);
     if (g_gx_blurProg) glDeleteProgram(g_gx_blurProg);
+    /* The whole reduction chain, not just the first scratch target: every
+     * level is a texture in the context that is going away. */
     gxImageDestroy(&g_gx_blurTmp);
+    gxImageDestroy(&g_gx_blurTmp2);
+    for (i = 0; i < GX_BLUR_MAX_LEVELS; i++) gxImageDestroy(&g_gx_blurChain[i]);
     g_gx_gradProg = g_gx_gradVbo = g_gx_blurProg = 0;
     g_gx_vbo = g_gx_blitVbo = g_gx_fbo = g_gx_canvasTex = g_gx_atlasTex = g_gx_prog = 0;
     memset(&g_gx_canvasTarget, 0, sizeof(g_gx_canvasTarget));
