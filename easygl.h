@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261006
+#define EASYGL_H 20261008
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -32,6 +32,20 @@
  *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
+ *
+ * Revision 20261008 (two things only a teardown can release)
+ *
+ *   - The <image> cache was skipped by every shutdown path.  An entry
+ *     holds a strdup'd key and an IMAGE whose texture lives in the GL
+ *     context, so after closegraph() / initgraph() it named handles that
+ *     no longer existed and putsvg() drew the cached entry as nothing.
+ *     gxsImgClearAll() empties it from gxDestroyGL(), the one place both
+ *     paths pass through while the handles are still good.  gxsImgDrop()
+ *     now destroys the image it drops as well, so a failed load cannot
+ *     leave a texture behind.
+ *   - gxScratch(-1, ...) was written and never called, so the two
+ *     GetImageBuffer() round-trip buffers were held until the process
+ *     ended.  gxDestroyGL() releases them.
  *
  * Revision 20261006 (two code pages, two crashes, two layout bugs)
  *
@@ -903,8 +917,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261006
-#define EASYGL_VERSION  "20261006"
+#define EASYGL_VER      20261008
+#define EASYGL_VERSION  "20261008"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -8733,9 +8747,34 @@ static void gxPresent(void) {
     gxApplyClip();
 }
 
+/* Two things released by gxDestroyGL() are defined later in this file, so
+ * they are named here.
+ *
+ * gxsImgClearAll() lives in the SVG half, which is compiled only under
+ * C11 / C++ and comes further down; the cache it empties holds GPU
+ * textures, so it has to be dropped from here, while the context that owns
+ * them is still alive.
+ *
+ * gxScratch(-1, ...) is the release branch of the scratch-buffer helper
+ * further down.  The branch was written but never called, so the two pixel
+ * round-trip buffers - one per GetImageBuffer() size the program ever
+ * asked for, up to a whole canvas - stayed allocated for the life of the
+ * process. */
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
+static void gxsImgClearAll(void);
+#endif
+static unsigned char* gxScratch(int slot, size_t bytes);
+
 static void gxDestroyGL(void) {
     int i;
     gxImgBufDropAll();
+    /* Both are CPU-side or texture-side state that belongs to the context
+     * being torn down; neither needs GL to be up, and gxScratch() in
+     * particular has to run before the early return below. */
+    gxScratch(-1, 0);
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
+    gxsImgClearAll();
+#endif
     if (!g_gx_glReady) return;
     gxMsaaDestroy();          /* before g_gx_fbo goes away */
     GxVtxVec_clear(&g_gx_vbuf);
@@ -14872,7 +14911,14 @@ static struct GXSImgEnt* gxsImgEnt(const char* key, int* found)
     if (g_gxsImgN < GXS_IMG_MAX) {
         i = g_gxsImgN++;
     } else {
+        /* Evicting used to free the key and leave the image behind.  The
+         * entry's IMAGE is a texture plus a framebuffer, and the memmove
+         * below overwrites the only copy of those handles, so every
+         * source past the 32nd leaked one - a document with a hundred
+         * <image> tags stranded sixty-eight of them for the life of the
+         * process.  Release it before the shift, not after. */
         free(g_gxsImg[0].key);
+        gxImageDestroy(&g_gxsImg[0].img);
         memmove(&g_gxsImg[0], &g_gxsImg[1],
                 (size_t)(GXS_IMG_MAX - 1) * sizeof(g_gxsImg[0]));
         i = GXS_IMG_MAX - 1;
@@ -14889,11 +14935,40 @@ static void gxsImgDrop(IMAGE* im)
     for (i = 0; i < g_gxsImgN; i++) {
         if (&g_gxsImg[i].img != im) continue;
         free(g_gxsImg[i].key);
+        gxImageDestroy(&g_gxsImg[i].img);
         memmove(&g_gxsImg[i], &g_gxsImg[i + 1],
                 (size_t)(g_gxsImgN - i - 1) * sizeof(g_gxsImg[0]));
         g_gxsImgN--;
         return;
     }
+}
+
+/* Drop the whole cache.  Called from gxDestroyGL().
+ *
+ * An entry owns two things: the key, copied with strdup, and an IMAGE that
+ * is a texture living in the GL context.  closegraph() takes that context
+ * with it and initgraph() builds a fresh one, and nothing told the cache -
+ * g_gxsImgN still read full and ent->img still held handles that no longer
+ * named anything.  The next putsvg() of the same document then found its
+ * entry "cached" and drew from dead textures, so the picture silently
+ * vanished until the entry happened to be evicted by a 33rd source.  This
+ * is the same hazard svgs.h documents for a baked SvgSkin, and it is
+ * handled the same way: release while the handles are still valid, from
+ * the one place both closegraph() and a re-initgraph() pass through.
+ *
+ * The cache is otherwise bounded - GXS_IMG_MAX entries, oldest evicted -
+ * so nothing here is about growth over a long run; it is about the
+ * handles going stale and about the keys, which are heap memory no other
+ * code frees. */
+static void gxsImgClearAll(void)
+{
+    int i;
+    for (i = 0; i < g_gxsImgN; i++) {
+        free(g_gxsImg[i].key);
+        gxImageDestroy(&g_gxsImg[i].img);
+    }
+    memset(g_gxsImg, 0, sizeof(g_gxsImg));
+    g_gxsImgN = 0;
 }
 
 static int gxsB64Val(int c)
