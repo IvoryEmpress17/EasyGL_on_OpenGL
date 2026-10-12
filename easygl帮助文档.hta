@@ -3,9 +3,9 @@
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=gb18030">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<title>easygl.h 帮助文档 - 20261008</title>
+<title>easygl.h 帮助文档 - 20261012</title>
 <HTA:APPLICATION
-  APPLICATIONNAME="easygl.h 帮助文档 - 20261008"
+  APPLICATIONNAME="easygl.h 帮助文档 - 20261012"
   ID="easyglHelp"
   VERSION="1.0"
   SINGLEINSTANCE="yes"
@@ -5124,7 +5124,9 @@ var DATA = [
       "void rotatesvg(double x, double y, double w, double h, const SVGIMG* e, double rad);",
       "void rotatesvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e, double rad);",
       "void rotatesvg(double x, double y, double w, double h, const SVGIMG* e, double rad, double cx, double cy);",
-      "void rotatesvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e, double rad, double cx, double cy);"
+      "void rotatesvg(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e, double rad, double cx, double cy);",
+      "int rotatesvg(SVGIMG* pImg, const SVGIMG* pSrcImg, double rad);",
+      "int rotatesvg(SVGIMG* pImg, const SVGIMG* pSrcImg, double rad, double cx, double cy);"
     ],
     "brief": "把一个已加载的 SVG 文档旋转后画出来。",
     "params": [
@@ -5157,6 +5159,14 @@ var DATA = [
         "旋转角度，<b>弧度</b>。正数<b>顺时针</b>，与 <a href='rotateimage.htm'>rotateimage</a> 一致——屏幕的 y 轴朝下。"
       ],
       [
+        "pImg",
+        "（文档版）接收结果的 <a href='SVGIMG.htm'>SVGIMG</a>。允许和 pSrcImg 是同一个，即原地转。成功时它持有转好的文档，失败时被清空成一个合法的空文档。"
+      ],
+      [
+        "pSrcImg",
+        "（文档版）要被旋转的源文档。它本身不会被改动。"
+      ],
+      [
         "cx",
         "旋转中心 x，<b>viewBox 单位</b>，也就是图形自己写坐标时用的那套单位。不传时取 viewBox 中心。"
       ],
@@ -5165,11 +5175,16 @@ var DATA = [
         "旋转中心 y，viewBox 单位。不传时取 viewBox 中心。"
       ]
     ],
-    "ret": "无",
+    "ret": "画到屏幕那四个重载无返回值。文档版返回 int：成功 1，失败 0（源文档是空的，或角度是 NaN）——和 <a href='loadsvg.htm'>loadsvg</a> 一个规矩。",
     "remarks": [
       "它就是 SVG 版的 <a href='rotateimage.htm'>rotateimage</a>：先把文档转过来，再按 <a href='putsvg.htm'>putsvg</a> 的规矩放进矩形，所以矩形指的始终是<b>未旋转时文档本该填满的那个框</b>——图形在框里面转，不会随着转角变大变小。这一点和 rotateimage 的 autosize 不同，正是画一圈朝向各异但大小一致的贴图时想要的。",
       "旋转中心用 <b>viewBox 单位</b>而不是像素，就是为了让「绕哪个点转」和图形本身用同一句话来说：想让一只蜜蜂绕身体中心转，就填它身体的那个坐标，不必先算一遍缩放。",
-      "<div class='warn'>旋转是在<b>适配矩形之前</b>完成的，所以转出去的内容<b>不会</b>被裁掉——给一个刚好装下原图的矩形，转 45 度时图形会伸到框外，这是对的，框只是告诉它画多大。<br><br>但文档<b>自带的 clipPath 会跟着一起转</b>：裁剪框是个矩形，转过之后就不再是了，库只能取它的轴对齐包围盒，于是要么裁掉本该留下的，要么放进本该裁掉的。所以要转着画的文档，别用 clipPath；确实需要时，先 <a href='putsvg.htm'>putsvg</a> 画进一张 <a href='IMAGE.htm'>IMAGE</a>，再用 <a href='rotateimage.htm'>rotateimage</a> 转那张图——这样裁剪发生在未旋转的时候。</div>",
+      "<div class='warn'>旋转是在<b>适配矩形之前</b>完成的，所以转出去的内容<b>不会</b>被裁掉——给一个刚好装下原图的矩形，转 45 度时图形会伸到框外，这是对的，框只是告诉它画多大。<br><br>带 <code>clipPath</code> 的文档可以<b>直接转</b>，不用再绕路。裁剪框是 viewBox 里的一个矩形，跟着一起转过之后就不再是轴对齐的了，而本库能裁剪的只有轴对齐的框，早先只能拿四个角的包围盒顶替，于是该留下的被裁掉、该裁掉的被放进。现在这类文档会先在离屏图上<b>不旋转地画一遍</b>（此时裁剪是精确的），再用 <a href='rotateimage.htm'>rotateimage</a> 转那张图，最后贴回应有的位置——裁剪发生在旋转之前，正是文档本来的意思。<br><br>代价是这一次调用会先光栅化：离屏图按目标设备的分辨率渲染（高 DPI 下不会先缩小再放大发虚），只有碰到 <code>clipPath</code> 且转角不是 90 度的整数倍时才走这条路，其余文档仍然是逐次解析的矢量绘制，放大照样锐利。位置与尺寸按文档的 viewBox 精确计算，与屏幕缩放无关，误差只剩最后取整的半个像素。文档<b>内部</b>的 <code>transform=\"rotate(...)\"</code> 不受影响，只有 <code>rotatesvg</code> 的这一个转角走这里。</div>",
+      "<h3 style='margin:14px 0 6px;color:#10307a;'>转好了存起来：文档版的 rotatesvg</h3>上面四个重载都是「画的时候转一下」，每次画都要重算一遍。如果你的用法是<b>同一份文档要按几十个朝向反复画</b>——一圈朝向各异的贴图、一个会转的指针、一套方向图标——那就该用文档版：<code>rotatesvg(&amp;out, &amp;src, rad)</code> 把转角<b>存进文档里</b>，之后每次 <a href='putsvg.htm'>putsvg</a>(&amp;out) 画出来的就已经是转好的，不用再传角度。",
+      "它存的是<b>矩阵</b>而不是角度，于是两件事都成立：一是对已经转过的文档再转一次会精确叠加（先转 0.5 再转 0.25，和一次转 0.75 逐位相同；绕不同中心时顺序也不会搞反）；二是「真的转了」和「其实没转」分得开——转 0 度、转一整圈、或者只有平移没有旋转，都不会被当成一次旋转，因而不会白白走上面的离屏路径。",
+      "存矩阵而不是把旋转写进 SVG 文本，是为了<b>保住矢量</b>：转角是绘制时才施加的，所以任意尺寸都和没转过的文档一样锐利，不像先烘成像素那样放大就发虚。带 <code>clipPath</code> 的文档也仍然由 <a href='putsvg.htm'>putsvg</a> 在绘制时决定是否走离屏路径——那件事只有在知道要画多大时才判断得准，提前烘死就判断不了了。",
+      "内存上它是自洽的：<code>pImg</code> 和 <code>pSrcImg</code> <b>可以是同一个</b>（原地转），因为新文档需要的一切都先从旧文档里复制出来，才释放旧的；失败时 <code>pImg</code> 被清成一个合法的空文档，绝不会留下半截坏数据被当成上一次的好结果。转完的文档照样用 <a href='freesvg.htm'>freesvg</a> 释放，没有额外的清理步骤。",
+      "<pre class='code'>#include \"easygl.h\"\n\nint main(void)\n{\n    SVGIMG src, turned[16];\n    int i;\n\n    initgraph(640, 480);\n    loadsvg(&amp;src, \"&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'&gt;\"\n            \"&lt;path d='M4 20 L36 20 L20 6 Z' fill='#e8a33d'/&gt;&lt;/svg&gt;\");\n\n    /* 16 个朝向，一次转好存起来 */\n    for (i = 0; i &lt; 16; i++)\n        rotatesvg(&amp;turned[i], &amp;src, i * 6.28318530717958648 / 16);\n\n    BeginBatchDraw();\n    for (;;) {\n        int head = (int)(GetTickCount() / 40) % 16;\n        cleardevice();\n        /* 画的时候不用再传角度：文档自己知道朝向 */\n        putsvg(300, 200, 80, 80, &amp;turned[head]);\n        FlushBatchDraw();\n        if (gx_getch() == 27) break;\n    }\n    EndBatchDraw();\n\n    for (i = 0; i &lt; 16; i++) freesvg(&amp;turned[i]);\n    freesvg(&amp;src);\n    closegraph();\n    return 0;\n}</pre>",
       "每一次调用都是重新解析源码再画，和 putsvg 一样，放大依然锐利。要画很多次就先画进一个 <a href='IMAGE.htm'>IMAGE</a> 再 <a href='putimage.htm'>putimage</a> 贴。",
       "空文档（没 load 成功、或者已经 <a href='freesvg.htm'>freesvg</a>）什么都不画，也不报错。绘制同样服从当前设备的裁剪框、原点、缩放与透明度。"
     ]
@@ -7522,8 +7537,8 @@ var DATA = [
     "params": [],
     "ret": "返回版本字符串。",
     "remarks": [
-      "返回的版本字符串形如 <code>'20261008'</code>，即 <code>EASYGL_VERSION</code> 宏的内容。注意它是<b>字符串</b>而不是数字，格式是年、月、日各两位直接拼接。",
-      "头文件里同时提供 <code>EASYGL_VER</code>（整数 20261008）与 <code>EASYGL_VERSION</code>（字符串 '20261008'）两个宏，编译期就能取到版本，不必调用函数。包含保护宏 <code>EASYGL_H</code> 本身也携带版本号。",
+      "返回的版本字符串形如 <code>'20261012'</code>，即 <code>EASYGL_VERSION</code> 宏的内容。注意它是<b>字符串</b>而不是数字，格式是年、月、日各两位直接拼接。",
+      "头文件里同时提供 <code>EASYGL_VER</code>（整数 20261012）与 <code>EASYGL_VERSION</code>（字符串 '20261012'）两个宏，编译期就能取到版本，不必调用函数。包含保护宏 <code>EASYGL_H</code> 本身也携带版本号。",
       "不需要先调用 <a href='initgraph.htm'>initgraph</a>，任何时候都可以取。",
       "<b>兼容写法：</b>本库用宏把 <code><a href='GetEasyXVer.htm'>GetEasyXVer</a></code> 定义成 <code>GetEasyGLVer</code>，所以从 EasyX 迁过来的代码里写 <code>GetEasyXVer()</code> 同样有效，两个名字返回完全相同的值。反过来，纯 easygl 工程建议直接用 <a href='GetEasyGLVer.htm'>GetEasyGLVer</a>。"
     ]

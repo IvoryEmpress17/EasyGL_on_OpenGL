@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261008
+#define EASYGL_H 20261012
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -33,7 +33,83 @@
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
  *
- * Revision 20261008 (two things only a teardown can release)
+ * Revision 20261012 (an arc that drew the long way round)
+ *
+ *   - An SVG arc swept 360 degrees minus the angle it was given.  The turn
+ *     from the start vector to the end vector was measured as
+ *     atan2(uy * vx - ux * vy, ...) - the cross product the wrong way round,
+ *     so the sign of the turn came out flipped - and the sweep flag then
+ *     "corrected" a turn that was already correct by adding a whole turn to
+ *     it.  Every arc drew the long way round the ellipse: a shallow arc of
+ *     radius 60 across six units of a 110 unit viewBox came out as an almost
+ *     closed ring of radius 60.  A document flattened into arcs - a logo, a
+ *     seal, any outline run through a font to path converter - therefore
+ *     drew as a heap of overlapping circles instead of as the picture.  The
+ *     cross term is ux * vy - uy * vx.
+ *
+ * Revision 20261010 (a turn the document keeps)
+ *
+ *   - rotatesvg(pImg, pSrcImg, rad [, cx, cy]) turns the document
+ *     itself instead of turning it once while drawing.  The turn is
+ *     kept in the SVGIMG as a 2x3 matrix in viewBox units and is
+ *     applied by putsvg(), so a ring of headings can be built once
+ *     and each one drawn with nothing but putsvg() - at any size,
+ *     and still as vector art, since nothing is rasterised.
+ *
+ *     A matrix rather than the angle: two turns compose exactly,
+ *     and the identity is distinguishable from a real turn, which
+ *     is what lets a document with a clipPath take the safe path
+ *     only when the turn is real - a rectangle that is merely
+ *     pushed sideways is still a rectangle.
+ *
+ *     pImg == pSrcImg is allowed.  Everything the new document
+ *     needs is copied out of the old one before the old one is
+ *     released, which is the order loadsvg() follows for the same
+ *     reason.  A failure leaves a valid EMPTY document, never a
+ *     half written one.
+ *
+ * Also in 20261010 (a turned copy pasted with NEAREST sampling)
+ *
+ *   - the same turned copy, smoothed, still came out uneven: it is a
+ *     texture of round(|cos|*rw + |sin|*rh) PIXELS asked to cover an
+ *     exact bw LOGICAL units, and those two round differently, so the
+ *     paste is never quite 1:1 - 141 pixels over 140 units, say.
+ *     Sampled NEAREST, that one pixel of slack does not soften the
+ *     copy, it replicates a column here and drops one there, and a
+ *     smooth edge comes out crawling.  The paste is now forced to
+ *     LINEAR whatever setimagefilter() says, which spreads the same
+ *     slack evenly.  The program's own setting is left alone.
+ *
+ * Also in 20261010 (anti aliasing that stopped at the first turned copy)
+ *
+ *   - setaasamples() smoothed the canvas but not a rotated SVG that
+ *     carries a clipPath, and the reason is that such a document is
+ *     not drawn as geometry on the canvas at all: it is drawn flat
+ *     into an offscreen copy, turned, and put down as pixels.  By the
+ *     time it reaches the canvas there is no geometry left for MSAA
+ *     to work on, so the copy carries its own hard edges and canvas
+ *     MSAA cannot reach back into it.  The copy is now drawn into a
+ *     multisampled scratch buffer of its own and resolved into the
+ *     image before that image is turned.  It costs one small
+ *     renderbuffer, reused across every turned draw and freed with
+ *     the context; with setaasamples() off nothing changes at all.
+ *
+ * Also in 20261010 (a resolve that copied only part of the canvas)
+ *
+ *   - setaasamples() drew fine until something turned a clipping box
+ *     on.  glBlitFramebuffer() is a drawing command: the scissor
+ *     test, the logic op and blending all apply to it.  gxMsaaResolve
+ *     () runs BEFORE gxPresent() clears those three, and gxReadFbo()
+ *     can reach it from anywhere, so whatever the last draw left
+ *     behind was still live - and a live clip rect turns the resolve
+ *     into a partial one.  The pixels outside the box are never
+ *     folded over, so the canvas shows a slice of this frame on top
+ *     of the whole of the last one: rotating an SVG that carries a
+ *     clipPath left exactly that box behind.  The resolve now saves
+ *     the three, clears them, blits, and puts them back - the
+ *     caller's state is untouched, the blit is always whole.
+ *
+ * Also in 20261010 (two things only a teardown can release)
  *
  *   - The <image> cache was skipped by every shutdown path.  An entry
  *     holds a strdup'd key and an IMAGE whose texture lives in the GL
@@ -46,6 +122,26 @@
  *   - gxScratch(-1, ...) was written and never called, so the two
  *     GetImageBuffer() round-trip buffers were held until the process
  *     ended.  gxDestroyGL() releases them.
+ *   - rotatesvg() clipped wrong on a document with a clipPath.  The clip
+ *     is a rectangle in viewBox units and the turn happens before the fit,
+ *     so after the turn it is no longer axis aligned - and an axis aligned
+ *     box is the only thing setcliprgn() can hold.  The bounding box stands
+ *     in for it, which keeps what should have been cut away.  Such a
+ *     document is now drawn flat into an offscreen image (where the clip is
+ *     exact), the image is turned with rotateimage(), and the result is put
+ *     where the turned document belongs.  Same rule the old note gave by
+ *     hand, done inside the library.
+ *
+ *     Two things decide how well that copy lands, and both were wrong at
+ *     first.  It is built at the resolution it will actually occupy, not
+ *     one logical unit per pixel - a copy made at logical resolution is
+ *     magnified by the DPI factor on the way back out, and every soft edge
+ *     of the raster, the clip boundary among them, is stretched with it.
+ *     And the placement works in the LOGICAL extent of the fitted
+ *     document, never in the pixel count of the copy: those two differ by
+ *     up to half a pixel at 125% or 150%, and a rotation multiplies that
+ *     by up to |cos| + |sin| - so a pixel of the art used to land outside
+ *     where it belonged.
  *   - blurimage() went blocky past a radius of 8.  It kept every pass at
  *     full resolution and reached further by sampling every step-th
  *     texel, and a tap sitting on a texel centre reads that one texel -
@@ -925,8 +1021,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261008
-#define EASYGL_VERSION  "20261008"
+#define EASYGL_VER      20261012
+#define EASYGL_VERSION  "20261012"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -3151,17 +3247,34 @@ static void gxMsaaCreate(void) {
 
 /* Fold the samples into the plain texture the rest of the library reads. */
 static void gxMsaaResolve(void) {
+    GLboolean hadScissor, hadLogicOp, hadBlend;
     if (!g_gx_msaaFbo || g_gx_canvasTarget.fbo != g_gx_msaaFbo) return;
     if (g_gx_msaaW != g_gx_canvasTarget.w || g_gx_msaaH != g_gx_canvasTarget.h) {
         gxMsaaDestroy();                 /* canvas was resized: rebuild */
         gxMsaaCreate();
         if (!g_gx_msaaFbo) return;
     }
+    /* glBlitFramebuffer() is a DRAWING command: the scissor test, the logic
+     * op and blending all apply to it.  gxPresent() clears those three only
+     * AFTER this call, and gxReadFbo() can reach it from anywhere, so what
+     * the last draw left behind is still live here.  A live clip rect turns
+     * the resolve into a partial one - the pixels outside it are never
+     * folded over, so the canvas shows a slice of this frame on top of the
+     * whole of the last one.  Save, clear, blit, restore. */
+    hadScissor = glIsEnabled(GL_SCISSOR_TEST);
+    hadLogicOp = glIsEnabled(GL_COLOR_LOGIC_OP);
+    hadBlend   = glIsEnabled(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_COLOR_LOGIC_OP);
+    glDisable(GL_BLEND);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, g_gx_msaaFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gx_fbo);
     glBlitFramebuffer(0, 0, g_gx_msaaW, g_gx_msaaH, 0, 0, g_gx_msaaW, g_gx_msaaH,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, g_gx_msaaFbo);
+    if (hadBlend)   glEnable(GL_BLEND);
+    if (hadLogicOp) glEnable(GL_COLOR_LOGIC_OP);
+    if (hadScissor) glEnable(GL_SCISSOR_TEST);
 }
 
 /* Every glBindFramebuffer() that is followed by a read goes through this. */
@@ -3180,6 +3293,95 @@ GX_INLINE void setaasamples(int n) {
     gxMsaaCreate();
 }
 GX_INLINE int getaasamples(void) { return g_gx_aaSamples; }
+
+/* ---- the same for a scratch copy ------------------------------------
+ *
+ * A turned document that clips itself cannot be drawn as geometry: it is
+ * drawn flat into an offscreen IMAGE, and that IMAGE is turned instead
+ * (see gxsRotClipSafe()).  The copy is a plain texture, and anti aliasing
+ * happens where the geometry is rasterized - so with MSAA on, art drawn
+ * unturned came out smooth and the very same art turned came out hard
+ * edged.  Nothing drawn later can undo it: by the time the copy is put on
+ * the canvas it is already pixels.
+ *
+ * So the scratch copy is given a multisampled attachment at the same sample
+ * count as the canvas, and the samples are folded into the copy's texture
+ * before it is turned.  One renderbuffer, kept and resized on demand. */
+static GLuint g_gx_scrMsaaFbo = 0, g_gx_scrMsaaRb = 0;
+static int    g_gx_scrMsaaW = 0, g_gx_scrMsaaH = 0, g_gx_scrMsaaSamples = 0;
+
+static void gxScrMsaaFree(void) {
+    if (g_gx_scrMsaaRb)  { glDeleteRenderbuffers(1, &g_gx_scrMsaaRb);  g_gx_scrMsaaRb = 0; }
+    if (g_gx_scrMsaaFbo) { glDeleteFramebuffers(1, &g_gx_scrMsaaFbo); g_gx_scrMsaaFbo = 0; }
+    g_gx_scrMsaaW = g_gx_scrMsaaH = g_gx_scrMsaaSamples = 0;
+}
+
+/* A multisampled framebuffer of exactly w x h, or 0 when the copy is to be
+ * drawn without anti aliasing: MSAA off, GL not up, the extension missing,
+ * a size the driver refuses, or a copy large enough that the samples would
+ * cost more memory than the edges are worth.  0 is not an error - the
+ * caller draws into the plain texture and gets what it used to get. */
+static GLuint gxScrMsaaGet(int w, int h) {
+    int n = g_gx_aaSamples, aw, ah;
+    if (!g_gx_glReady || n < 2 || w < 1 || h < 1) return 0;
+    if (!glRenderbufferStorageMultisample || !glBlitFramebuffer) return 0;
+    /* Round the allocation up to a multiple of 64.  Re-specifying a
+     * renderbuffer is the expensive part, and a program that turns a few
+     * dozen sprites of slightly different sizes would otherwise do it on
+     * every single one.  Only w x h of it is ever cleared or blitted. */
+    aw = (w + 63) & ~63;
+    ah = (h + 63) & ~63;
+    /* 2048 x 2048 at 4 samples is 64 MB of renderbuffer, and this is one
+     * scratch copy.  Past that, keep the memory and take the hard edges. */
+    if ((double)aw * (double)ah > 2048.0 * 2048.0) return 0;
+    if (g_gx_scrMsaaFbo && w <= g_gx_scrMsaaW && h <= g_gx_scrMsaaH &&
+        g_gx_scrMsaaSamples == n)
+        return g_gx_scrMsaaFbo;                 /* already big enough      */
+    gxScrMsaaFree();
+    glGenFramebuffers(1, &g_gx_scrMsaaFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_scrMsaaFbo);
+    glGenRenderbuffers(1, &g_gx_scrMsaaRb);
+    glBindRenderbuffer(GL_RENDERBUFFER, g_gx_scrMsaaRb);
+    /* Same walk down as the canvas: 4 -> 2, first count the driver takes. */
+    for (; n >= 2; n /= 2) {
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, (GLsizei)n, GL_RGBA8,
+                                         (GLsizei)aw, (GLsizei)ah);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                  GL_RENDERBUFFER, g_gx_scrMsaaRb);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+            break;
+    }
+    if (n < 2) {
+        gxScrMsaaFree();                        /* driver refuses: stay off */
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
+        return 0;
+    }
+    g_gx_scrMsaaW = aw; g_gx_scrMsaaH = ah; g_gx_scrMsaaSamples = n;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
+    return g_gx_scrMsaaFbo;
+}
+
+/* Fold the scratch samples into a plain framebuffer.  A blit is a drawing
+ * command, so the three states that gate it are cleared and put back -
+ * a clip left over from the document being drawn would resolve only part
+ * of the copy. */
+static void gxScrMsaaResolve(GLuint dst, int w, int h) {
+    GLboolean hadScissor, hadLogicOp, hadBlend;
+    if (!g_gx_scrMsaaFbo || !dst || w < 1 || h < 1) return;
+    hadScissor = glIsEnabled(GL_SCISSOR_TEST);
+    hadLogicOp = glIsEnabled(GL_COLOR_LOGIC_OP);
+    hadBlend   = glIsEnabled(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_COLOR_LOGIC_OP);
+    glDisable(GL_BLEND);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_gx_scrMsaaFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (hadBlend)   glEnable(GL_BLEND);
+    if (hadLogicOp) glEnable(GL_COLOR_LOGIC_OP);
+    if (hadScissor) glEnable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gx_target ? g_gx_target->fbo : 0);
+}
 
 /* RENDER_AUTO: show what has been drawn so far.  A time based throttle keeps
  * a tight loop from burning one SwapBuffers() per primitive, and an open
@@ -8884,6 +9086,7 @@ static void gxDestroyGL(void) {
 #endif
     if (!g_gx_glReady) return;
     gxMsaaDestroy();          /* before g_gx_fbo goes away */
+    gxScrMsaaFree();          /* the scratch copy's multisampled buffer    */
     GxVtxVec_clear(&g_gx_vbuf);
     GxCmdVec_clear(&g_gx_cmds);
     g_gx_cmdStart = 0;
@@ -11145,6 +11348,22 @@ typedef struct SVGIMG {
     int    width;    /* intrinsic width in px, from width= or the viewBox  */
     int    height;   /* intrinsic height in px, from height= or viewBox    */
     double vbW, vbH; /* the viewBox size, kept for reference               */
+
+    /* A turn baked into the document by rotatesvg(&e, &src, rad [...]),
+     * as a 2x3 matrix in viewBox units, applied before the viewBox is
+     * fitted to the rectangle - so putsvg() draws the document already
+     * facing that way, at any size, with no rad argument anywhere.
+     *
+     * It is a matrix and not the rad it was made from so that rotating a
+     * document that is already turned composes exactly, and so that the
+     * renderer can tell the difference between a real turn and the
+     * identity.  Storing it in the document rather than rewriting the
+     * text is what keeps it honest: a rotated clipPath would have to be
+     * re-clipped from an axis aligned box, and putsvg() knows how to do
+     * that only when it is told the turn is a turn. */
+    int    xfOn;     /* 1 = xf[] carries a transform                      */
+    double xf[6];    /* a b c d e f, as in SVG matrix(a b c d e f)        */
+
     unsigned int magic;  /* SVGIMG_MAGIC once the struct is usable        */
 } SVGIMG;
 
@@ -11220,6 +11439,11 @@ typedef struct GXSRot {
     int    on;
     double rad;
     double cx, cy;
+    /* The same thing as a matrix, which is the form a turn baked into a
+     * document arrives in.  mOn picks which of the two to read; when it
+     * is set, rad/cx/cy are derived from m[] before anything uses them. */
+    int    mOn;
+    double m[6];
 } GXSRot;
 
 /* C++ resolves by overload; those static inlines sit at the bottom of
@@ -11266,6 +11490,9 @@ static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h
  * from the overloads. */
 static GX_UNUSED void gxsRotCore(IMAGE* img, double x, double y, double w, double h,
                                  const SVGIMG* e, double rad, double cx, double cy);
+/* Turns a document into another document.  Both languages reach this one. */
+static GX_UNUSED int  gxsRotBake(SVGIMG* dst, const SVGIMG* src,
+                                 double rad, double cx, double cy);
 #ifndef __cplusplus
 static GX_UNUSED void gxs_put_1(const SVGIMG* e);
 static GX_UNUSED void gxs_put_2(IMAGE* img, const SVGIMG* e);
@@ -11289,6 +11516,8 @@ static GX_UNUSED void gxs_putW_3(double x, double y, const SVGIMG* e);
 static GX_UNUSED void gxs_putW_4(IMAGE* img, double x, double y, const SVGIMG* e);
 static GX_UNUSED void gxs_putW_5(double x, double y, double w, double h, const SVGIMG* e);
 static GX_UNUSED void gxs_putW_6(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e);
+static GX_UNUSED int  gxs_rot_3(SVGIMG* d, const SVGIMG* s, double rad);
+static GX_UNUSED int  gxs_rot_5(SVGIMG* d, const SVGIMG* s, double rad, double cx, double cy);
 static GX_UNUSED void gxs_rot_6(double x, double y, double w, double h, const SVGIMG* e, double rad);
 static GX_UNUSED void gxs_rot_7(IMAGE* img, double x, double y, double w, double h, const SVGIMG* e, double rad);
 static GX_UNUSED void gxs_rot_8(double x, double y, double w, double h, const SVGIMG* e,
@@ -11946,6 +12175,14 @@ static GX_UNUSED void rotatesvg(double x, double y, double w, double h,
 static GX_UNUSED void rotatesvg(IMAGE* img, double x, double y, double w, double h,
                                 const SVGIMG* e, double rad, double cx, double cy)
 { gxsRotCore(img, x, y, w, h, e, rad, cx, cy); }
+/* The document-to-document spellings: turn one document into another.
+ * These return int, as loadsvg() does, so a caller can see that the
+ * source was empty.  C reaches the same two through the counting macro. */
+static GX_UNUSED int rotatesvg(SVGIMG* pImg, const SVGIMG* pSrcImg, double rad)
+{ return gxsRotBake(pImg, pSrcImg, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+static GX_UNUSED int rotatesvg(SVGIMG* pImg, const SVGIMG* pSrcImg,
+                               double rad, double cx, double cy)
+{ return gxsRotBake(pImg, pSrcImg, rad, cx, cy); }
 static GX_UNUSED void drawsvg(const char* svg)
 { gxs_draw_1(svg); }
 static GX_UNUSED void drawsvg(IMAGE* img, const char* svg)
@@ -13515,7 +13752,21 @@ static void gxsArc(GXSSub* s, double x1, double y1, double rx, double ry,
     ux = (x1p - cxp) / rx; uy = (y1p - cyp) / ry;
     vx = (-x1p - cxp) / rx; vy = (-y1p - cyp) / ry;
     a1 = atan2(uy, ux);
-    ad = atan2(uy * vx - ux * vy, ux * vx + uy * vy);
+
+    /* How far the parameterisation below has to run to get from the start
+     * vector to the end vector: atan2(cross, dot) of u into v, i.e.
+     * atan2(ux * vy - uy * vx, ux * vx + uy * vy).
+     *
+     * The cross term has to be ux * vy - uy * vx.  Written the other way
+     * round it is the same turn with its sign flipped, and the two lines
+     * under this one then "correct" a turn that was already correct: the
+     * sweep flag asks for a positive turn, meets a small negative one and
+     * adds a whole turn to it.  Every arc then swept 360 degrees minus the
+     * angle it was given, so an arc of radius 60 spanning six units of a
+     * 110 unit viewBox came out as an almost closed ring of radius 60, and
+     * a document built out of arcs - a logo, a seal, any rounded outline
+     * flattened to a path - drew as a heap of overlapping circles. */
+    ad = atan2(ux * vy - uy * vx, ux * vx + uy * vy);
     if (!fs && ad > 0) ad -= 2 * GX_SVG_PI;
     else if (fs && ad < 0) ad += 2 * GX_SVG_PI;
 
@@ -16015,6 +16266,274 @@ static GX_UNUSED int gxsWriteFileW(const WCHAR* path, const char* text, size_t n
 #endif
 }
 
+/* Does this document clip anything?
+ *
+ * A plain string search on purpose: this is only the trigger for a slower
+ * path, so a false positive costs a little speed and nothing else, while
+ * missing a real clip would silently draw the wrong picture.  Both spellings
+ * are looked for because a document may carry the element, the attribute
+ * that points at it, or (usually) both. */
+static GX_UNUSED int gxsSrcUsesClip(const char* svg)
+{
+    if (!svg) return 0;
+    if (strstr(svg, "clip-path")) return 1;
+    if (strstr(svg, "clipPath"))  return 1;
+    return 0;
+}
+
+/* Paste one image with LINEAR sampling, whatever setimagefilter() says.
+ *
+ * The turned copy is a texture of round(|cos|*rw + |sin|*rh) pixels asked
+ * to cover bw logical units, and those two round differently - by up to a
+ * whole pixel, because one is a count of pixels and the other is an exact
+ * extent in units.  So the paste is never quite 1:1.  Sampled NEAREST,
+ * that slack does not soften the copy: it is nearest-neighbour at a scale
+ * of say 141/140, which replicates one column here and drops one there,
+ * and a smooth edge comes out uneven and crawling.  LINEAR spreads the
+ * very same slack evenly over the whole copy, which is what "smooth" is
+ * supposed to look like.
+ *
+ * g_gx_curFilter is the value commands are TAGGED with, so switching it
+ * needs the open batch closed on both sides - otherwise the primitives
+ * queued before this one inherit the filter set for it.  The program's own
+ * setimagefilter() setting is not touched. */
+static void gxPutImageSmooth(int x, int y, const IMAGE* img) {
+    int prev;
+    if (!img || !gxImageOk(img)) return;
+    prev = g_gx_curFilter;
+    gxEndCmd();
+    g_gx_curFilter = 1;
+    gxPutImage3(x, y, img);
+    gxEndCmd();
+    g_gx_curFilter = prev;
+}
+
+/* rotatesvg() of a document that clips itself, done the safe way.
+ *
+ * The ordinary path turns the document BEFORE it is fitted, which is the
+ * only reading of "rotate the art" that keeps a ring of headings the same
+ * size - but the clip goes with it.  A <clipPath><rect></clipPath> is axis
+ * aligned in viewBox units, and turning it makes it a rotated rectangle,
+ * which this library cannot clip to: setcliprgn() only knows axis aligned
+ * boxes and a region, so gxsClipBegin() has to settle for the bounding box
+ * of the four corners.  Everything that box adds over the turned rectangle
+ * is then kept when it should have been cut, and a document that clips to
+ * a thin strip comes out as a fat block.
+ *
+ * So: render the document UNROTATED into an offscreen image, where the clip
+ * is axis aligned and therefore exact, turn that image, and put it where the
+ * turned document belongs.  Clipping happens before the turn, which is the
+ * order the document meant.
+ *
+ * Returns 1 when it did the whole job, 0 to let the caller draw normally
+ * (no clip, no real rotation, or the offscreen image could not be made). */
+static GX_UNUSED int gxsRotClipSafe(IMAGE* img, double x, double y, double w, double h,
+                                    const char* svg, const GXSRot* rot, int flav)
+{
+    GXSSize sz;
+    double sc, s2, ox, oy, cs, sn, rcx, rcy, cxp, cyp, ex, ey, px, py;
+    double Lw, Lh, kx, ky, bw, bh;   /* logical extent; see the placement   */
+    double dps;                  /* device pixels per logical unit          */
+    int rw, rh, tx, ty;
+    GLuint msaa, realFbo;        /* multisampled stand-in for the copy      */
+    IMAGE flat, turned;
+    IMAGE* save;
+
+    if (!rot || !rot->on) return 0;
+    cs = cos(rot->rad);
+    sn = sin(rot->rad);
+    /* A rectangle turned by a multiple of a right angle is still axis
+     * aligned, so for those the ordinary path clips exactly and stays
+     * vector sharp - keep it.  Everything else needs the copy. */
+    if (fabs(sn) < 1e-12 || fabs(cs) < 1e-12) return 0;
+
+    gxsScanRoot(svg, &sz);
+    if (!(sz.vbW > 0) || !(sz.vbH > 0)) return 0;
+    if (w <= 0) w = sz.vbW;
+    if (h <= 0) h = sz.vbH;
+    sc = w / sz.vbW;
+    s2 = h / sz.vbH;
+    if (s2 < sc) sc = s2;                     /* preserveAspectRatio: meet */
+    if (!(sc > 0.0)) return 0;
+    ox = x + (w - sz.vbW * sc) * 0.5;
+    oy = y + (h - sz.vbH * sc) * 0.5;
+
+    /* How many DEVICE pixels one logical unit covers where this is going.
+     *
+     * The offscreen copy has to be built at that resolution, not at one
+     * logical unit per pixel.  Built at logical resolution and then blitted,
+     * it is magnified by exactly this factor on a high DPI canvas: every
+     * soft edge of the raster - the antialiased boundary of the clip among
+     * them - is stretched with it, and one pixel of fringe at 100% becomes
+     * two at 200%.  Rendering the copy at the size it will actually occupy
+     * keeps the blit 1:1, so the only softness left is the one pixel the
+     * rasterizer would have produced anyway.
+     *
+     * An IMAGE target is 1:1 by definition, so that case is just 1.  While a
+     * working image is selected the canvas transform is parked in
+     * g_gx_canvasScaleX / Y and the live pair describes the image. */
+    dps = 1.0;
+    if (!img) {
+        dps = g_gx_workImg
+            ? (double)((g_gx_canvasScaleX + g_gx_canvasScaleY) * 0.5f)
+            : (double)((g_gx_scaleX + g_gx_scaleY) * 0.5f);
+    }
+    if (!(dps > 0.05)) dps = 1.0;
+    if (dps > 4.0)     dps = 4.0;
+
+    rw = (int)(sz.vbW * sc * dps + 0.5);
+    rh = (int)(sz.vbH * sc * dps + 0.5);
+    if (rw < 1) rw = 1;
+    if (rh < 1) rh = 1;
+    /* A sane ceiling: this is a scratch copy, and a document asked to cover
+     * a whole 4K window at 200% would otherwise take 100 MB for one frame. */
+    if (rw > 4096) rw = 4096;
+    if (rh > 4096) rh = 4096;
+
+    memset(&flat, 0, sizeof(flat));
+    memset(&turned, 0, sizeof(turned));
+    Resize(&flat, rw, rh);
+    if (!gxImageOk(&flat)) return 0;
+
+    /* The copy is drawn as GEOMETRY, so this is where anti aliasing has to
+     * happen - once it is turned and put on the canvas it is only pixels
+     * and no amount of canvas MSAA can reach back into it.  With MSAA off
+     * this is 0 and the copy is drawn into its own texture exactly as it
+     * always was. */
+    msaa    = gxScrMsaaGet(rw, rh);
+    realFbo = flat.fbo;
+    if (msaa) flat.fbo = msaa;
+
+    /* Resize() hands back OPAQUE black; the copy has to be transparent
+     * wherever the document drew nothing, or the turned image would paste a
+     * black diamond over everything behind it. */
+    gxClearFbo(flat.fbo, rw, rh, BLACK, 0.f);
+
+    /* rot = NULL: the copy is drawn flat, which is the whole point.
+     * It fills rw x rh pixels, i.e. the whole texture, at 1:1. */
+    gxsRenderCore(&flat, 0, 0, (double)rw, (double)rh, svg, NULL, flav);
+
+    /* Put the copy's own framebuffer back BEFORE anything that can free it:
+     * the scratch buffer is one shared, cached object, and a freeimage()
+     * that deleted it would strand every later turned draw. */
+    if (msaa) {
+        flat.fbo = realFbo;
+        gxScrMsaaResolve(realFbo, rw, rh);
+    }
+    if (!gxImageOk(&flat)) { freeimage(&flat); return 0; }
+
+    /* About the middle of its own extent, autosize so the result is the
+     * bounding box of the turned copy - nothing is cropped. */
+    gx_rotimg6(&turned, &flat, rot->rad, 0, true, true);
+    if (!gxImageOk(&turned)) { freeimage(&flat); freeimage(&turned); return 0; }
+
+    /* Where the turned copy goes.
+     *
+     * Two sizes are in play and they are NOT the same number:
+     *
+     *   Lw x Lh  how much SPACE the fitted document covers, in logical
+     *            units.  Exact: sc is a double and so is this.
+     *   rw x rh  how many PIXELS the offscreen copy was built with.  An
+     *            integer, because a texture is made of a whole number of
+     *            them.
+     *
+     * The first drafts quietly used rw for both - reading the pixel count
+     * as if it were the logical extent - and that is where the stray pixels
+     * at the edge came from.  rw is round(Lw * dps), so at 125% or 150% it
+     * is off by up to half a pixel, and the copy then stands for Lw +- 0.4
+     * logical units.  That error is not a small shift; it is an excess on
+     * the whole extent, and rotating it multiplies it by up to
+     * |cos| + |sin| - at 45 degrees, by 1.41 - so up to a logical pixel of
+     * the art lands outside where it belongs.
+     *
+     * So the geometry is done in Lw / Lh and the pixel count only says how
+     * finely that space was sampled.  kx / ky are the two conversion
+     * factors; they are 1 / dps to within a fraction of a percent, and
+     * using the exact quotient instead of 1 / dps is what keeps the DPI
+     * rounding out of the placement.
+     *
+     * rotateimage() turns about the middle of the image, which is the
+     * middle of the viewBox; the document turns about (cx, cy), which need
+     * not be.  The two differ by (I - R)(middle - centre), so the centre of
+     * the turned art is placed and the image is hung around it - which is
+     * also why the residual is symmetric: it cannot push everything one way.
+     * With no centre given ex = ey = 0 and the terms drop out. */
+    Lw = sz.vbW * sc;
+    Lh = sz.vbH * sc;
+    kx = Lw / (double)rw;
+    ky = Lh / (double)rh;
+
+    rcx = (rot->cx == GXS_ROT_NONE) ? (sz.vbX + sz.vbW * 0.5) : rot->cx;
+    rcy = (rot->cy == GXS_ROT_NONE) ? (sz.vbY + sz.vbH * 0.5) : rot->cy;
+    cxp = (rcx - sz.vbX) * (double)rw / sz.vbW;      /* in COPY PIXELS     */
+    cyp = (rcy - sz.vbY) * (double)rh / sz.vbH;
+    ex  = rw * 0.5 - cxp;
+    ey  = rh * 0.5 - cyp;
+
+    /* Bounding box of the turned copy, in logical units: the exact figure,
+     * not the pixel count of the image that will hold it. */
+    bw = fabs(cs) * Lw + fabs(sn) * Lh;
+    bh = fabs(sn) * Lw + fabs(cs) * Lh;
+    if (bw < 1.0) bw = 1.0;
+    if (bh < 1.0) bh = 1.0;
+
+    px = ox + cxp * kx + (ex * kx * cs - ey * ky * sn) - bw * 0.5;
+    py = oy + cyp * ky + (ex * kx * sn + ey * ky * cs) - bh * 0.5;
+
+    tx = (int)floor(px + 0.5);
+    ty = (int)floor(py + 0.5);
+
+    /* The copy is dps times finer than a logical unit, so say how much space
+     * it covers - putimage() reads the whole texture then, instead of
+     * reading only its first logW pixels and cropping the rest.  Taken from
+     * the exact bounding box rather than from the pixel count, for the same
+     * reason as above. */
+    turned.logW = (int)(bw + 0.5);
+    turned.logH = (int)(bh + 0.5);
+    if (turned.logW < 1) turned.logW = 1;
+    if (turned.logH < 1) turned.logH = 1;
+
+    save = NULL;
+    if (img) { save = GetWorkingImage(); gxSetWorkingImage(img); }
+    gxPutImageSmooth(tx, ty, &turned);
+    if (img) gxSetWorkingImage(save);
+
+    freeimage(&turned);
+    freeimage(&flat);
+    return 1;
+}
+
+/* Read a 2x3 transform as "turn by this much about this point", which is
+ * the shape the rest of the renderer wants.  Returns 0 - and leaves out
+ * untouched - when the matrix carries no turn at all: the identity, or a
+ * bare translation, which is what rotating a document by a whole turn
+ * about one point and then back about another comes to.  There is nothing
+ * to take the safe path for then, because a rectangle that is only pushed
+ * sideways is still a rectangle; the caller folds the matrix straight
+ * into the root transform instead.
+ *
+ * Everything this is asked about was built with gxsMatRot(), so the
+ * linear part is a rotation and the fixed point exists and is the centre.
+ * Solving (I - R) p = t for p is that point, and it is exact. */
+static GX_UNUSED int gxsMatToRot(const double m[6], GXSRot* out)
+{
+    double ang, c, s, one_c, det;
+
+    if (!m || !out) return 0;
+    ang = atan2(m[1], m[0]);                  /* gxsMatRot put cos,sin here */
+    if (!(ang > 1e-9) && !(ang < -1e-9)) return 0;
+    c = cos(ang); s = sin(ang);
+    one_c = 1.0 - c;
+    det = 2.0 * one_c;                        /* (1-c)^2 + s^2 */
+    if (!(det > 1e-12)) return 0;
+    out->on  = 1;
+    out->mOn = 0;
+    out->rad = ang;
+    out->cx  = ( one_c * m[4] - s * m[5]) / det;
+    out->cy  = (      s * m[4] + one_c * m[5]) / det;
+    return 1;
+}
+
 static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, double h,
                                     const char* svg, const GXSRot* rot, int flav)
 {
@@ -16027,8 +16546,32 @@ static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, do
     int     txFlav = flav;
     IMAGE*  savedImg  = NULL;
     LOGFONTW savedFont;          /* put back after the document is drawn */
+    GXSRot   red;                /* a baked matrix, reduced              */
+    int      xlateOnly = 0;      /* baked matrix with no turn in it      */
+    const GXSRot* useRot = rot;
 
     if (!svg || !*svg) return;
+
+    /* A turn that arrived as a matrix - baked into the document - is read
+     * as an angle and a centre here, so that every test below it can stay
+     * in the shape it already knows. */
+    if (rot && rot->on && rot->mOn) {
+        if (gxsMatToRot(rot->m, &red)) {
+            useRot = &red;
+        } else {
+            useRot = NULL;
+            xlateOnly = 1;
+        }
+    }
+
+    /* A turned document that clips itself cannot be drawn the ordinary way:
+     * the clip would have to be taken after the turn, and an axis aligned
+     * box is all this library has.  Draw it flat, turn the copy, put the
+     * copy - see gxsRotClipSafe().  Only then; everything else stays on the
+     * vector path. */
+    if (useRot && useRot->on && gxsSrcUsesClip(svg)) {
+        if (gxsRotClipSafe(img, x, y, w, h, svg, useRot, flav)) return;
+    }
 
     memset(&cx, 0, sizeof(cx));
     cx.txFlav = txFlav;
@@ -16076,12 +16619,19 @@ static GX_UNUSED void gxsRenderCore(IMAGE* img, double x, double y, double w, do
     /* rotatesvg(): turn the document about a point of its own before it is
      * fitted, so the centre the caller names is a viewBox coordinate and the
      * destination rectangle keeps meaning the same thing unrotated or not. */
-    if (rot && rot->on) {
-        double rcx = rot->cx, rcy = rot->cy;
+    if (useRot && useRot->on) {
+        double rcx = useRot->cx, rcy = useRot->cy;
         GXSMat rm;
         if (rcx == GXS_ROT_NONE) rcx = cx.vbX + cx.vbW * 0.5;
         if (rcy == GXS_ROT_NONE) rcy = cx.vbY + cx.vbH * 0.5;
-        rm = gxsMatRot(rot->rad, rcx, rcy);
+        rm = gxsMatRot(useRot->rad, rcx, rcy);
+        root = gxsMatMul(&root, &rm);
+    } else if (xlateOnly) {
+        /* No turn in it, so the clip stayed axis aligned and the vector
+         * path is both possible and exact. */
+        GXSMat rm;
+        rm.a = rot->m[0]; rm.b = rot->m[1]; rm.c = rot->m[2];
+        rm.d = rot->m[3]; rm.e = rot->m[4]; rm.f = rot->m[5];
         root = gxsMatMul(&root, &rm);
     }
 
@@ -16337,7 +16887,97 @@ static GX_UNUSED void freesvg(SVGIMG* e)
     e->height = 0;
     e->vbW = 0;
     e->vbH = 0;
+    e->xfOn = 0;
+    {
+        int i;
+        for (i = 0; i < 6; i++) e->xf[i] = 0.0;
+    }
     /* magic stays: this is now a valid, empty document */
+}
+
+/* ---- baked rotation ------------------------------------------------- */
+
+/* rotatesvg(pImg, pSrcImg, rad [, cx, cy]): turn the document ITSELF and
+ * keep the result, instead of turning it once while drawing.
+ *
+ * The turn is stored in the document as a 2x3 matrix in viewBox units and
+ * applied when it is drawn, which is what keeps two properties the other
+ * two ways of doing this both lose:
+ *
+ *   - It stays vector art.  putsvg() draws it at whatever size it is
+ *     asked for and it is as sharp as the unturned document at that size.
+ *     Baking pixels instead would have to pick a size now, and every
+ *     other size afterwards would be a stretch of that one.
+ *   - A document that clips itself is still handled: the renderer takes
+ *     the safe path, which can only be decided at draw time when the
+ *     destination size is known.
+ *
+ * Cost, then, is the same as an unturned putsvg(): it is a document with
+ * six more numbers in it.  What it buys is being able to build a ring of
+ * headings once and draw each of them with nothing but putsvg().
+ *
+ * Returns 1 on success, 0 if pSrcImg is empty or rad is not a number -
+ * the same convention loadsvg() follows.  On failure pImg is left holding
+ * a VALID EMPTY document, not a half written one, so a failed bake is
+ * never mistaken for the previous good one.
+ *
+ * pImg == pSrcImg is allowed: this document is turned in place.  Every
+ * value the new one needs is read out of the old one, and the copy of the
+ * source text is made, before the old one is released - which is the
+ * order gxsLoadSrc2() follows for the same reason. */
+static GX_UNUSED int gxsRotBake(SVGIMG* dst, const SVGIMG* src,
+                                double rad, double cx, double cy)
+{
+    GXSSize sz;
+    GXSMat  m, bm;
+    SVGIMG  tmp;
+    char*   copy;
+    int     w, h, son = 0, i;
+    double  vbW, vbH, sm[6];
+
+    if (!dst) return 0;
+    if (!gxsDocOk(src)) { goto bad; }
+    if (rad != rad) goto bad;                       /* NaN: no such turn   */
+
+    /* Read everything out of the source first: it may BE dst. */
+    copy = gxsStrDup(src->src);
+    if (!copy) goto bad;
+    w = src->width; h = src->height;
+    vbW = src->vbW; vbH = src->vbH;
+    son = src->xfOn;
+    for (i = 0; i < 6; i++) sm[i] = src->xf[i];
+
+    gxsScanRoot(src->src, &sz);
+    if (cx == GXS_ROT_NONE) cx = sz.vbX + sz.vbW * 0.5;
+    if (cy == GXS_ROT_NONE) cy = sz.vbY + sz.vbH * 0.5;
+
+    m = gxsMatRot(rad, cx, cy);
+    if (son) {
+        /* The document was already turned; this turn comes on top, so it
+         * is applied after the one that is there. */
+        bm.a = sm[0]; bm.b = sm[1]; bm.c = sm[2];
+        bm.d = sm[3]; bm.e = sm[4]; bm.f = sm[5];
+        m = gxsMatMul(&m, &bm);
+    }
+
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.src    = copy;
+    tmp.width  = w;
+    tmp.height = h;
+    tmp.vbW    = vbW;
+    tmp.vbH    = vbH;
+    tmp.xfOn   = 1;
+    tmp.xf[0]  = m.a; tmp.xf[1] = m.b; tmp.xf[2] = m.c;
+    tmp.xf[3]  = m.d; tmp.xf[4] = m.e; tmp.xf[5] = m.f;
+    tmp.magic  = SVGIMG_MAGIC;
+
+    freesvg(dst);                       /* safe now: nothing points into it */
+    *dst = tmp;
+    return 1;
+
+bad:
+    freesvg(dst);                       /* leave a valid empty document     */
+    return 0;
 }
 
 /* ---- put ------------------------------------------------------------ */
@@ -16347,7 +16987,18 @@ static GX_UNUSED void freesvg(SVGIMG* e)
 static GX_UNUSED void gxsPut6(IMAGE* img, double x, double y, double w, double h,
                               const SVGIMG* e, int flav)
 {
+    GXSRot r;
     if (!gxsDocOk(e)) return;
+    if (e->xfOn) {
+        int i;
+        r.on = 1;
+        r.mOn = 1;
+        r.rad = 0.0;
+        r.cx = r.cy = GXS_ROT_NONE;
+        for (i = 0; i < 6; i++) r.m[i] = e->xf[i];
+        gxsRenderCore(img, x, y, w, h, e->src, &r, flav);
+        return;
+    }
     gxsRenderCore(img, x, y, w, h, e->src, NULL, flav);
 }
 
@@ -16367,6 +17018,33 @@ static GX_UNUSED void gxsRotCore(IMAGE* img, double x, double y, double w, doubl
 {
     GXSRot r;
     if (!gxsDocOk(e)) return;
+    r.mOn = 0;
+    if (e->xfOn) {
+        /* The document is already turned and this turn is on top of it:
+         * one matrix, applied after the baked one, not a second centre
+         * that the renderer would have to guess the order of. */
+        GXSSize sz;
+        GXSMat rm, mm;
+        double rcx = cx, rcy = cy;
+        gxsScanRoot(e->src, &sz);
+        if (rcx == GXS_ROT_NONE) rcx = sz.vbX + sz.vbW * 0.5;
+        if (rcy == GXS_ROT_NONE) rcy = sz.vbY + sz.vbH * 0.5;
+        rm = gxsMatRot(rad, rcx, rcy);
+        {
+            GXSMat bm;
+            bm.a = e->xf[0]; bm.b = e->xf[1]; bm.c = e->xf[2];
+            bm.d = e->xf[3]; bm.e = e->xf[4]; bm.f = e->xf[5];
+            mm = gxsMatMul(&rm, &bm);      /* the baked turn, then this one */
+        }
+        r.on = 1;
+        r.mOn = 1;
+        r.rad = 0.0;
+        r.cx = r.cy = GXS_ROT_NONE;
+        r.m[0] = mm.a; r.m[1] = mm.b; r.m[2] = mm.c;
+        r.m[3] = mm.d; r.m[4] = mm.e; r.m[5] = mm.f;
+        gxsRenderCore(img, x, y, w, h, e->src, &r, GXS_TX_AUTO);
+        return;
+    }
     r.on = 1;
     r.rad = rad;
     r.cx = cx;
@@ -16439,6 +17117,11 @@ static GX_UNUSED void gxs_putW_6(IMAGE* img, double x, double y, double w, doubl
 { gxsPut6(img, x, y, w, h, e, GXS_TX_W); }
 static GX_UNUSED void gxs_rot_6(double x, double y, double w, double h, const SVGIMG* e, double rad)
 { gxsRotCore(NULL, x, y, w, h, e, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+/* The document-to-document spellings: turn one into another. */
+static GX_UNUSED int gxs_rot_3(SVGIMG* d, const SVGIMG* s, double rad)
+{ return gxsRotBake(d, s, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
+static GX_UNUSED int gxs_rot_5(SVGIMG* d, const SVGIMG* s, double rad, double cx, double cy)
+{ return gxsRotBake(d, s, rad, cx, cy); }
 static GX_UNUSED void gxs_rot_7(IMAGE* img, double x, double y, double w, double h,
                                 const SVGIMG* e, double rad)
 { gxsRotCore(img, x, y, w, h, e, rad, GXS_ROT_NONE, GXS_ROT_NONE); }
@@ -17615,6 +18298,7 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
 
