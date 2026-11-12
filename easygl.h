@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261012
+#define EASYGL_H 20261112
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -32,6 +32,27 @@
  *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
+ *
+ * Revision 20261112 (a cap that landed at 36 fps)
+ *
+ *   - settargetfps(60) drew at about 36 fps on a machine whose clock
+ *     ticks at 15.625 ms.  Every frame measured "used" from the END of
+ *     its own previous sleep, so that sleep was invisible to the next
+ *     frame, and asked Sleep() for the remaining (want - used) ms.  Any
+ *     request of 1..15 ms is one whole clock tick: with about 12 ms of
+ *     drawing every frame became 12 + 15.625 ms and the error could
+ *     never be paid back; a remainder of 16 ms slept two ticks and
+ *     halved the rate outright.
+ *
+ *     The cap is now a QPC deadline in integer ticks, advanced by one
+ *     period per frame, so a long sleep becomes a debt that later frames
+ *     repay by not sleeping - the average is the requested rate even on
+ *     a coarse clock.  The 1 ms clock is requested from winmm.dll
+ *     (resolved by name, no -lwinmm) and the coarse Sleep leaves 1.5 ms
+ *     for a bounded QPC spin, which is what makes the frames evenly
+ *     spaced.  timeBeginPeriod(1) / timeEndPeriod(1) are paired on every
+ *     path - closegraph(), a rebuilt window, a failed load and atexit() -
+ *     and no heap memory is taken.
  *
  * Revision 20261012 (an arc that drew the long way round)
  *
@@ -1021,8 +1042,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261012
-#define EASYGL_VERSION  "20261012"
+#define EASYGL_VER      20261112
+#define EASYGL_VERSION  "20261112"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -1997,6 +2018,7 @@ static void gxPresent(void);             /* defined in section 17 */
 static void gxFlush(void);               /* defined in section 6  */
 static void gxApplyWindowState(void);    /* defined in section 17 */
 static void gxFpsTick(void);             /* defined in section 17a */
+static void gxFpsShutdown(void);         /* defined in section 17a */
 static void gxRestoreFilter(void);       /* defined in section 16c */
 static void gxRestoreDpiFix(void);       /* defined in section 10c */
 
@@ -9076,6 +9098,7 @@ static unsigned char* gxScratch(int slot, size_t bytes);
 
 static void gxDestroyGL(void) {
     int i;
+    gxFpsShutdown();          /* pair the 1 ms clock on every teardown */
     gxImgBufDropAll();
     /* Both are CPU-side or texture-side state that belongs to the context
      * being torn down; neither needs GL to be up, and gxScratch() in
@@ -10388,66 +10411,213 @@ GX_INLINE void mirrorimage(IMAGE* dst, const IMAGE* src) {
 /*======================================================================
  * 17a. Frame timing (easygl extensions)
  *====================================================================*/
-/* EasyX has no frame counter: programs time themselves.  These three are
- * deliberately tiny - a couple of QueryPerformanceCounter() calls per
- * presented frame - and settargetfps() is the useful one, because with
- * vsync off an unthrottled loop burns a whole core doing nothing.
+/* EasyX has no frame counter: programs time themselves.  getfps() /
+ * getframetime() report a smoothed average; settargetfps() caps the rate.
  *
- * getfps() / getframetime() report a smoothed average, not the last frame:
- * an instantaneous value jitters too much to be read off a HUD. */
-static LARGE_INTEGER g_gx_fpsFreq, g_gx_fpsLast, g_gx_fpsMark;
-static int    g_gx_fpsFrames = 0;
-static double g_gx_fpsValue = 0.0, g_gx_fpsMs = 0.0;
-static double g_gx_targetFps = 0.0;   /* 0 = unlimited */
-static bool   g_gx_fpsInit = false;
+ * The cap is a DEADLINE, not a per-frame nap.  Every frame is dated from
+ * the previous frame's deadline (QueryPerformanceCounter ticks, integer
+ * arithmetic), so a sleep that ran long becomes a debt that the following
+ * frames repay by not sleeping.  The average is the requested rate even
+ * when the wait itself is coarse; with the 1 ms clock requested below the
+ * individual frames are evenly spaced as well.
+ *
+ * Why the old code sat at 36 fps for a 60 fps request: it measured
+ * "used" from the END of its own last sleep, so that sleep was invisible
+ * to the next frame, and slept (want - used) with Sleep().  Windows'
+ * default clock ticks at 15.625 ms, so any request of 1..15 ms is one
+ * whole tick.  With about 12 ms of drawing, every frame became
+ * 12 + 15.625 ms - 36 fps - and a remainder of 16 ms slept two ticks.
+ *
+ * Strict C11 / MinGW GCC 4.9.2: no <threads.h>, no timespec_get(), no
+ * STL, no heap allocation.  Every static is zero initialised; the only
+ * resource is winmm.dll, loaded on demand and released by closegraph(),
+ * by a rebuilt window, by a failed load and by atexit().  timeBeginPeriod
+ * (1) and timeEndPeriod(1) are always paired, in that order.
+ */
+static LARGE_INTEGER g_gx_fpsFreq;           /* QPC ticks per second       */
+static LONGLONG g_gx_fpsMark     = 0;        /* start of the average window */
+static LONGLONG g_gx_fpsDeadline = 0;        /* next allowed present       */
+static LONGLONG g_gx_fpsPeriod   = 0;        /* ticks per frame, 0 = off   */
+static int      g_gx_fpsFrames   = 0;
+static double   g_gx_fpsValue = 0.0, g_gx_fpsMs = 0.0;
+static double   g_gx_targetFps = 0.0;        /* 0 = unlimited              */
+static bool     g_gx_fpsTried = false;       /* QPF was attempted once     */
 
-static void gxFpsInit(void) {
-    if (g_gx_fpsInit) return;
-    QueryPerformanceFrequency(&g_gx_fpsFreq);
-    QueryPerformanceCounter(&g_gx_fpsLast);
-    g_gx_fpsMark = g_gx_fpsLast;
-    g_gx_fpsInit = true;
+/* ---- the 1 ms clock, resolved at run time (no -lwinmm) ---------------- */
+/* MMRESULT is UINT, and TIMERR_NOERROR is 0.  Declaring the prototypes
+ * here keeps <mmsystem.h> (and a new link-time dependency) out. */
+typedef UINT (WINAPI *GX_FN_TIMEBEGINPERIOD)(UINT);
+typedef UINT (WINAPI *GX_FN_TIMEENDPERIOD)(UINT);
+#define GX_TIMERR_NOERROR 0u
+
+#if defined(__cplusplus)
+static_assert(sizeof(GX_FN_TIMEBEGINPERIOD) == sizeof(FARPROC),
+              "winmm function pointer size");
+#else
+_Static_assert(sizeof(GX_FN_TIMEBEGINPERIOD) == sizeof(FARPROC),
+               "winmm function pointer size");
+#endif
+
+static HMODULE g_gx_winmm = NULL;
+static GX_FN_TIMEBEGINPERIOD g_gx_timeBeginPeriod = NULL;
+static GX_FN_TIMEENDPERIOD   g_gx_timeEndPeriod = NULL;
+static bool g_gx_fpsPeriodOn    = false;
+static bool g_gx_fpsPeriodTried = false;   /* one attempt per window life   */
+static bool g_gx_fpsLoadFailed  = false;   /* winmm unusable in this process */
+static bool g_gx_fpsAtExitReg   = false;
+
+/* Idempotent.  Called from gxDestroyGL(), from settargetfps(0) and from
+ * atexit(); a rebuilt window simply re-acquires on its next frame. */
+static void gxFpsShutdown(void) {
+    if (g_gx_fpsPeriodOn) {
+        if (g_gx_timeEndPeriod) {
+            UINT r = g_gx_timeEndPeriod(1u);   /* the one and only end */
+            (void)r;
+        }
+        g_gx_fpsPeriodOn = false;
+    }
+    if (g_gx_winmm) {
+        FreeLibrary(g_gx_winmm);
+        g_gx_winmm = NULL;
+    }
+    g_gx_timeBeginPeriod = NULL;
+    g_gx_timeEndPeriod = NULL;
+    g_gx_fpsPeriodTried = false;
 }
 
-/* Called once per presented frame: keep the counters, then - if a target
- * was set - sleep away the rest of the frame budget. */
+static void gxFpsAtExit(void) { gxFpsShutdown(); }
+
+static bool gxFpsHighResBegin(void) {
+    FARPROC p;
+    if (g_gx_fpsPeriodOn) return true;
+    if (g_gx_fpsPeriodTried || g_gx_fpsLoadFailed) return false;
+    g_gx_fpsPeriodTried = true;
+    g_gx_winmm = LoadLibraryA("winmm.dll");
+    if (!g_gx_winmm) { g_gx_fpsLoadFailed = true; return false; }
+    p = GetProcAddress(g_gx_winmm, "timeBeginPeriod");
+    if (p) memcpy(&g_gx_timeBeginPeriod, &p, sizeof(g_gx_timeBeginPeriod));
+    p = GetProcAddress(g_gx_winmm, "timeEndPeriod");
+    if (p) memcpy(&g_gx_timeEndPeriod, &p, sizeof(g_gx_timeEndPeriod));
+    /* Strict ISO C does not allow an object pointer to be cast to a
+     * function pointer: copy the representation instead.  Both are the
+     * size FARPROC above is asserted to be. */
+    if (!g_gx_timeBeginPeriod || !g_gx_timeEndPeriod) {
+        g_gx_fpsLoadFailed = true;
+        gxFpsShutdown();
+        return false;
+    }
+    if (g_gx_timeBeginPeriod(1u) != GX_TIMERR_NOERROR) {
+        g_gx_fpsLoadFailed = true;
+        gxFpsShutdown();       /* release the DLL on the failure path too */
+        return false;
+    }
+    g_gx_fpsPeriodOn = true;
+    if (!g_gx_fpsAtExitReg && atexit(gxFpsAtExit) == 0)
+        g_gx_fpsAtExitReg = true;
+    return true;
+}
+
+static bool gxFpsClockInit(void) {
+    LARGE_INTEGER f, t;
+    if (g_gx_fpsTried) return g_gx_fpsFreq.QuadPart > 0;
+    g_gx_fpsTried = true;
+    if (!QueryPerformanceFrequency(&f) || f.QuadPart <= 0) return false;
+    g_gx_fpsFreq = f;
+    if (!QueryPerformanceCounter(&t)) {   /* QPC really can fail */
+        g_gx_fpsFreq.QuadPart = 0;
+        return false;
+    }
+    g_gx_fpsMark = t.QuadPart;
+    g_gx_fpsDeadline = t.QuadPart;
+    return true;
+}
+
+/* Wait until QPC reaches 'due'.  The coarse part is truncated and leaves
+ * 1.5 ms, so a quantised Sleep can never carry us far past the deadline;
+ * the last <2 ms is a bounded yield/spin on QPC, where no system clock
+ * tick can stretch it. */
+static void gxFpsWaitUntil(LONGLONG due) {
+    LARGE_INTEGER now;
+    for (;;) {
+        LONGLONG left;
+        double ms;
+        if (!QueryPerformanceCounter(&now)) return;   /* safe degradation */
+        left = due - now.QuadPart;
+        if (left <= 0) return;
+        ms = (double)left * 1000.0 / (double)g_gx_fpsFreq.QuadPart;
+        if (ms > 2.0) {
+            double req = ms - 1.5;
+            DWORD n;
+            if (req > 100.0) req = 100.0;   /* never one sleep > 100 ms */
+            n = (DWORD)req;                  /* truncation: stay under due */
+            if (n > 0u) { Sleep(n); continue; }
+        }
+        if (ms > 1.0) Sleep(0);              /* yield, <= ~2 ms per frame */
+    }
+}
+
+/* Called once per presented frame, after SwapBuffers(). */
 static void gxFpsTick(void) {
     LARGE_INTEGER now;
     double el;
-    if (!g_gx_fpsInit) gxFpsInit();
-    if (g_gx_fpsFreq.QuadPart <= 0) return;
-    QueryPerformanceCounter(&now);
+    if (!gxFpsClockInit()) return;        /* no QPC: draw uncapped, safely */
+    if (!QueryPerformanceCounter(&now)) return;
+    /* Smoothed statistics: the window includes the time spent waiting. */
     g_gx_fpsFrames++;
-    /* Average over ~0.25 s so the number is stable but still responsive. */
-    el = (double)(now.QuadPart - g_gx_fpsMark.QuadPart) / (double)g_gx_fpsFreq.QuadPart;
+    el = (double)(now.QuadPart - g_gx_fpsMark)
+         / (double)g_gx_fpsFreq.QuadPart;
     if (el >= 0.25) {
         g_gx_fpsValue = (double)g_gx_fpsFrames / el;
         g_gx_fpsMs    = el * 1000.0 / (double)g_gx_fpsFrames;
-        g_gx_fpsMark  = now;
+        g_gx_fpsMark  = now.QuadPart;
         g_gx_fpsFrames = 0;
     }
-    if (g_gx_targetFps > 0.0) {
-        double want = 1.0 / g_gx_targetFps;
-        double used = (double)(now.QuadPart - g_gx_fpsLast.QuadPart)
-                      / (double)g_gx_fpsFreq.QuadPart;
-        if (used < want) {
-            DWORD ms = (DWORD)((want - used) * 1000.0);
-            if (ms > 0) Sleep(ms);
+    if (g_gx_fpsPeriod <= 0) return;
+    if (!g_gx_fpsPeriodOn && !g_gx_fpsPeriodTried && !g_gx_fpsLoadFailed)
+        (void)gxFpsHighResBegin();
+    {
+        LONGLONG due = g_gx_fpsDeadline;
+        LONGLONG late = now.QuadPart - due;
+        if (late >= 0) {
+            /* Late: keep the debt, but a stall longer than one whole
+             * frame (breakpoint, minimised window, window rebuild) is
+             * re-aligned instead of being chased with a burst of frames. */
+            g_gx_fpsDeadline = (late > g_gx_fpsPeriod)
+                             ? now.QuadPart + g_gx_fpsPeriod
+                             : due + g_gx_fpsPeriod;
+        } else {
+            gxFpsWaitUntil(due);
+            g_gx_fpsDeadline = due + g_gx_fpsPeriod;
         }
     }
-    g_gx_fpsLast = now;
-    QueryPerformanceCounter(&g_gx_fpsLast);   /* the sleep is not counted */
 }
 
 GX_INLINE double getfps(void)       { return g_gx_fpsValue; }
 GX_INLINE double getframetime(void) { return g_gx_fpsMs; }
 
 /* Cap the frame rate in software.  fps <= 0 removes the cap.  With vsync
- * on this is redundant (the display already sets the pace) and harmless:
- * the target is only ever slept towards, never waited past. */
+ * on the display already sets the pace; a late frame is never slept
+ * towards here, so the cap can only add delay, never take any away. */
 GX_INLINE void settargetfps(double fps) {
-    g_gx_targetFps = (fps > 0.0 && fps < 10000.0) ? fps : 0.0;
-    gxFpsInit();
+    double v = (fps > 0.0 && fps < 10000.0) ? fps : 0.0;
+    g_gx_targetFps = v;
+    if (!gxFpsClockInit()) { g_gx_fpsPeriod = 0; return; }
+    if (v <= 0.0) {
+        g_gx_fpsPeriod = 0;
+        gxFpsShutdown();       /* the 1 ms clock is no longer ours to keep */
+        return;
+    }
+    {
+        double ticks = (double)g_gx_fpsFreq.QuadPart / v;
+        LARGE_INTEGER now;
+        if (ticks < 1.0) ticks = 1.0;
+        if (ticks > 9.0e18) ticks = 9.0e18;   /* defensive clamp */
+        g_gx_fpsPeriod = (LONGLONG)(ticks + 0.5);
+        if (!QueryPerformanceCounter(&now)) { g_gx_fpsPeriod = 0; return; }
+        g_gx_fpsDeadline = now.QuadPart + g_gx_fpsPeriod;
+        g_gx_fpsPeriodTried = false;   /* one fresh attempt after a change */
+        (void)gxFpsHighResBegin();
+    }
 }
 GX_INLINE double gettargetfps(void) { return g_gx_targetFps; }
 
@@ -18298,6 +18468,7 @@ GX_INLINE void* glgetproc(const char* name) {
 }
 
 #endif /* EASYGL_H */
+
 
 
 
