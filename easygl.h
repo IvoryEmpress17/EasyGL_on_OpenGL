@@ -1,5 +1,5 @@
 #ifndef EASYGL_H
-#define EASYGL_H 20261112
+#define EASYGL_H 20261114
 
 /* =====================================================================
  * easygl.h - EasyX compatible drawing library implemented on OpenGL.
@@ -32,6 +32,25 @@
  *
  * Single translation unit: every helper is static, so include this file in
  * exactly one .c file (same rule as the original easygl.h).
+ *
+ * Revision 20261114 (a clean pass from the static analyser)
+ *
+ *   - Four conditions asked the same question twice, or asked it too
+ *     late.  gxSetWinTitleW() and gxWinTitleInto() read s[i] /
+ *     g_gx_wndTitle[i] before checking i against the buffer cap;
+ *     the bounds now lead the &&, so a short cap is answered without
+ *     touching the element at the cap.  gxsColour() had "p > b &&
+ *     p - b > 0" - the subtraction repeats what the comparison
+ *     already proved - and gxsAttr() had "!*s || *s != '='" even
+ *     though a NUL is already not '='.  Both spare terms are gone.
+ *
+ *   - The 20261112 frame-cap fix is kept verbatim: the QPC deadline,
+ *     the winmm 1 ms clock and every paired timeBeginPeriod /
+ *     timeEndPeriod are untouched by this pass.
+ *
+ *   - No call site changes and no behaviour changes: for every input
+ *     the rewritten conditions hold on exactly the same bytes.  The
+ *     version is carried by EASYGL_H, EASYGL_VER and EASYGL_VERSION.
  *
  * Revision 20261112 (a cap that landed at 36 fps)
  *
@@ -1042,8 +1061,8 @@
  * byte, a setalpha() level, a window opacity - is a transparency.
  */
 
-#define EASYGL_VER      20261112
-#define EASYGL_VERSION  "20261112"
+#define EASYGL_VER      20261114
+#define EASYGL_VERSION  "20261114"
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -10127,7 +10146,7 @@ static void getviewport(int* left, int* top, int* right, int* bottom,
 static void gxSetWinTitleW(const WCHAR* s) {
     int i = 0;
     if (!s) s = L"";
-    while (s[i] && i < GX_WINTITLE_MAX - 1) { g_gx_wndTitle[i] = s[i]; i++; }
+    while (i < GX_WINTITLE_MAX - 1 && s[i]) { g_gx_wndTitle[i] = s[i]; i++; }
     g_gx_wndTitle[i] = 0;
     if (g_gx_hwnd) SetWindowTextW(g_gx_hwnd, g_gx_wndTitle);
 }
@@ -10149,7 +10168,7 @@ static int gxWinTitleInto(WCHAR* tmp, int cap) {
     tmp[0] = 0;
     n = g_gx_hwnd ? GetWindowTextW(g_gx_hwnd, tmp, cap) : 0;
     if (n > 0 && tmp[0]) return n;
-    while (g_gx_wndTitle[i] && i < cap - 1) { tmp[i] = g_gx_wndTitle[i]; i++; }
+    while (i < cap - 1 && g_gx_wndTitle[i]) { tmp[i] = g_gx_wndTitle[i]; i++; }
     tmp[i] = 0;
     return i;
 }
@@ -13370,7 +13389,7 @@ static int gxsColor(const char* s, COLORREF* out, int* isNone, int* gradId, GXSC
             const char* b = p;
             double d;
             if (!gxsNum(&p, &d)) break;
-            if (b < s + n && p > b && p - b > 0 && *(p - 1) == 0) break;
+            if (b < s + n && p > b && *(p - 1) == 0) break;
             { const char* q = b; while (q < p && *q) { if (*q == '%') pct[i] = 1; q++; } }
             v[i] = pct[i] ? d * 2.55 : d;
             got++;
@@ -13686,7 +13705,7 @@ static void gxsParseAttrs(char* s, GXSTag* t)
         if (*s == '>') return;
         ns = s;
         while (*s && !gxsIsSpace(*s) && *s != '=') s++;
-        if (!*s || *s != '=') { while (*s && *s != '>' && !gxsIsSpace(*s)) s++; continue; }
+        if (*s != '=') { while (*s && *s != '>' && !gxsIsSpace(*s)) s++; continue; }
         *s++ = 0;
         while (*s && gxsIsSpace(*s)) s++;
         if (*s != '"' && *s != '\'') { while (*s && !gxsIsSpace(*s) && *s != '>') s++; continue; }
